@@ -1,0 +1,12 @@
+{
+    "extensions": {
+        "c": []
+    },
+    "keywords": [
+        "double",
+        "float"
+    ],
+    "languages": [
+        "C"
+    ]
+}

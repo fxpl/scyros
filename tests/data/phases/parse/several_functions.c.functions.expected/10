@@ -1,0 +1,8 @@
+double tan(double x) {
+    if (x == INFINITY) {
+        return 0;
+    }
+    else {
+        return sin(x) / cos(x);
+    }
+}

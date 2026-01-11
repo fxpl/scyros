@@ -1,0 +1,3 @@
+def findFirstNegative(xs: Seq[Double]): Option[Double] = {
+        xs.find(_ < 0)
+    }

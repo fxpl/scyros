@@ -1,0 +1,37 @@
+public static void main(String[] args) {
+        BasicFloatOperations operations = new BasicFloatOperations();
+        List<Float> numbers = Arrays.asList(10.5f, 2.0f, 0.0f);
+
+        for (float number : numbers) {
+            try {
+                System.out.println("Addition: " + operations.add(number, 5.5f));
+                System.out.println("Subtraction: " + operations.subtract(number, 1.5f));
+                System.out.println("Multiplication: " + operations.multiply(number, 3.0f));
+                System.out.println("Division: " + operations.divide(number, 2.0f));
+            } catch (ArithmeticException e) {
+                System.out.println("Error: " + e.getMessage());
+            }
+        }
+
+        float testValue = numbers.isEmpty() ? 0.1f : 3.5f;
+        switch (Float.compare(testValue, 3.5f)) {
+            case 0:
+                String message = switch (Float.compare(testValue, 3.5f)) {
+                    case 0 -> "Equal to 3.5";
+                    case 1 -> "Greater than 3.5";
+                    case -1 -> "Less than 3.5";
+                    default -> "Unexpected comparison result";
+                };
+                System.out.println(message);
+                System.out.println("The value is exactly 3.5");
+                break;
+            case 1:
+                System.out.println("The value is greater than 3.5");
+                break;
+            case -1:
+                System.out.println("The value is less than 3.5");
+                break;
+            default:
+                System.out.println("Unexpected comparison result");
+        }
+    }

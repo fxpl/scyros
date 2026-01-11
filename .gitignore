@@ -1,0 +1,16 @@
+### General ###
+target/
+.DS_Store
+__MACOSX
+data/
+.gitattributes
+
+### IDE ###
+.vscode/
+
+### Skyscraper ###
+ghtokens.csv
+!tests/data
+
+*.zip
+*.tar.gz

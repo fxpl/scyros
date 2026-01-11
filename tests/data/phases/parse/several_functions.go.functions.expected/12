@@ -1,0 +1,56 @@
+func main() {
+	
+	fmt.Println("Sum of floats:", sumFloats(1.1, 2.2, 3.3))
+
+	
+	x, y := polarToCartesian(1, Pi/4)
+	fmt.Printf("Polar to Cartesian: (x, y) = (%.2f, %.2f)\n", x, y)
+
+	
+	c := complex(3, 4)
+	fmt.Printf("Magnitude of complex number: %.2f\n", complexMagnitude(c))
+
+	
+	fmt.Printf("Deferred division: %.2f\n", deferredDivision(10, 0))
+
+	
+	fmt.Printf("Approximate sqrt(2): %.5f\n", approximateSqrt(2, 1))
+
+	
+	precisionDemo()
+
+	
+	trigMap := trigonometricMap()
+	for k, v := range trigMap {
+		fmt.Printf("%s = %.5f\n", k, v)
+	}
+
+	
+	sineWave := make(chan float64)
+	go generateSineWave(1, 1, 10, sineWave)
+	fmt.Println("Sine wave samples:")
+	for sample := range sineWave {
+		fmt.Printf("%.5f ", sample)
+	}
+	fmt.Println()
+
+	
+	fmt.Println("Classify float:", classifyFloat(math.NaN()))
+
+	
+	values := []float64{0.1, 0.2, 0.3, 0.4, 0.5}
+	if v, found := findFirstAboveThreshold(0.35, values); found {
+		fmt.Printf("First value above threshold: %.2f\n", v)
+	} else {
+		fmt.Println("No value above threshold found")
+	}
+
+	
+	selectFromChannels()
+
+	
+	fmt.Printf("Safe division: %.2f\n", safeDivision(10, 0))
+
+	
+	fmt.Printf("Floating-point architecture: %s\n", runtime.GOARCH)
+}

@@ -1,0 +1,14 @@
+{
+    "languages": [
+        {
+            "name": "java",
+            "extensions" : [
+                "java"
+            ],
+            "keywords" : []
+        }
+    ],
+    "keywords": [
+        "float"
+    ]
+}

@@ -1,0 +1,5 @@
+func polarToCartesian(r, theta float64) (x, y float64) {
+	x = r * math.Cos(theta)
+	y = r * math.Sin(theta)
+	return
+}

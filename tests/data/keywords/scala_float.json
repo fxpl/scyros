@@ -1,0 +1,22 @@
+{
+    "languages": [
+        {
+            "name": "java",
+            "extensions" : [
+                "java"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "scala",
+            "extensions" : [
+                "scala"
+            ],
+            "keywords" : []
+        }
+    ],
+    "keywords": [
+        "1.0f",
+        "double"
+    ]
+}

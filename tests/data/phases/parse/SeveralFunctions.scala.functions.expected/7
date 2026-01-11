@@ -1,0 +1,3 @@
+def transcendentalOps(x: Double): Double = {
+        exp(x) + cos(x) - tanh(x)
+    }

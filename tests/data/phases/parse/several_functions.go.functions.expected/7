@@ -1,0 +1,6 @@
+func generateSineWave(freq, amplitude float64, samples int, out chan<- float64) {
+	for i := 0; i < samples; i++ {
+		out <- amplitude * math.Sin(2*Pi*freq*float64(i)/float64(samples))
+	}
+	close(out)
+}

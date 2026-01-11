@@ -1,0 +1,6 @@
+id,name,language,loc,words,tests/data/keywords/java_float.json,tests/data/keywords/scala_float.json
+871212690,target/tests/java_scala_float_double/0/871212690-38d21aa3c08051a53fb5a1c88d1c97cde8432b36/francesco-scrapper-recent-id-2-38d21aa/main2.scala,scala,3,9,0,1
+871212690,target/tests/java_scala_float_double/0/871212690-38d21aa3c08051a53fb5a1c88d1c97cde8432b36/francesco-scrapper-recent-id-2-38d21aa/main.scala,scala,3,10,0,1
+871212690,target/tests/java_scala_float_double/0/871212690-38d21aa3c08051a53fb5a1c88d1c97cde8432b36/francesco-scrapper-recent-id-2-38d21aa/Main4.java,java,1,1,0,1
+871212690,target/tests/java_scala_float_double/0/871212690-38d21aa3c08051a53fb5a1c88d1c97cde8432b36/francesco-scrapper-recent-id-2-38d21aa/Main.java,java,6,16,1,1
+871212690,target/tests/java_scala_float_double/0/871212690-38d21aa3c08051a53fb5a1c88d1c97cde8432b36/francesco-scrapper-recent-id-2-38d21aa/Main3.java,java,1,1,1,0

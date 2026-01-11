@@ -1,0 +1,44 @@
+int main() {
+    try {
+        
+        float a = true ? 1.23f : 0.0f; 
+        double b = 4.56;
+        long double c = 7.89L;
+
+        
+        double circumference = 2 * PI * b;
+
+        
+        double bSquared = square(b);
+
+        
+        float aCubed = MathUtils::cube(a);
+
+        
+        MathUtils::MathFunc sqrtFunc = MathUtils::sqrtLambda;
+        double sqrtB = sqrtFunc(b);
+
+        
+        double roundedValue = roundToNearest(circumference, RoundingMode::UP);
+
+        
+        double totalSum = sum(a, b, c);
+
+        
+        FloatPrinter printer;
+        printer.print(a);
+
+        
+        FloatIntUnion fiUnion;
+        fiUnion.f = a;
+        std::cout << "Union int representation of float: " << fiUnion.i << std::endl;
+
+        
+        checkInfinity(std::numeric_limits<float>::infinity());
+
+    } catch (const std::exception& e) {
+        std::cerr << "Exception: " << e.what() << std::endl;
+    }
+
+    return 0;
+}

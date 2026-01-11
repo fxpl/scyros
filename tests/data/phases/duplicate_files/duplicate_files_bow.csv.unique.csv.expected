@@ -1,0 +1,4 @@
+name,extension,count
+tests/data/phases/duplicate_files/files/c_float.json,json,2
+tests/data/phases/duplicate_files/files/empty.java,java,2
+tests/data/phases/duplicate_files/files/foo.java,java,2

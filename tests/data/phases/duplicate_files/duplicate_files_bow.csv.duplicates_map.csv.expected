@@ -1,0 +1,7 @@
+name,original
+tests/data/phases/duplicate_files/files/empty.c,tests/data/phases/duplicate_files/files/empty.java
+tests/data/phases/duplicate_files/files/c_float.json,tests/data/phases/duplicate_files/files/c_float.json
+tests/data/phases/duplicate_files/files/c_float.copy,tests/data/phases/duplicate_files/files/c_float.json
+tests/data/phases/duplicate_files/files/foo_clone.java,tests/data/phases/duplicate_files/files/foo.java
+tests/data/phases/duplicate_files/files/empty.java,tests/data/phases/duplicate_files/files/empty.java
+tests/data/phases/duplicate_files/files/foo.java,tests/data/phases/duplicate_files/files/foo.java

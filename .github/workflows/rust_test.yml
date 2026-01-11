@@ -1,0 +1,43 @@
+name: Builds and runs the tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install LLVM/Clang
+      run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev libclang-dev
+    - name: Build
+      run: cargo build --verbose
+    - name: Create token
+      run: echo -e "token\n$GH_TOKEN" > ghtokens.csv
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    - name: Run tests
+      env:
+        RUST_BACKTRACE: 1
+      run: cargo test --verbose
+    - name: Run Clippy
+      run: |
+          cargo clippy --message-format=json | jq -r '
+          . as $raw | try fromjson? // $raw |
+          select(.reason == "compiler-message") |
+          .message | select(.level == "warning") |
+          "::warning file=\(.spans[0].file_name),line=\(.spans[0].line_start),col=\(.spans[0].column_start)::\(.rendered)"
+          ' || true
+    - name: Run fmt
+      run: cargo fmt -- --check || echo "::warning::Code is not formatted correctly. Run 'cargo fmt' to fix it."

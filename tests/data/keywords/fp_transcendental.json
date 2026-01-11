@@ -1,0 +1,476 @@
+{
+    "languages": [
+        {
+            "name": "ada",
+            "extensions" : [
+                "ada",
+                "adb",
+                "ads"
+            ],
+            "keywords" : [] 
+        }, 
+        {
+            "name": "angelscript",
+            "extensions" : [
+                "as"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "arduino",
+            "extensions" : [
+                "ino"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "ats",
+            "extensions" : [
+                "dats",
+                "hats",
+                "sats"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "ballerina",
+            "extensions" : [
+                "bal"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "beef",
+            "extensions" : [
+                "bf"
+            ],
+            "keywords" : [
+                "e_f",
+                "e_d",
+                "pi_f",
+                "pi_d"
+            ]
+        },
+        {
+            "name": "boo",
+            "extensions" : [
+                "boo"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c",
+            "extensions" : [
+                "c",
+                "w"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c_header",
+            "extensions" : [
+                "h",
+                "inc"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c#",
+            "extensions" : [
+                "cs",
+                "cake",
+                "cshtml",
+                "csx"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c++",
+            "extensions" : [
+                "cpp",
+                "c++",
+                "cp",
+                "cc",
+                "cxx",
+                "inl"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c++_header",
+            "extensions" : [
+                "hpp",
+                "hh",
+                "hxx",
+                "h++",
+                "ipp",
+                "tpp",
+                "tcc"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "chapel",
+            "extensions" : [
+                "chpl"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "clean",
+            "extensions" : [
+                "icl",
+                "dcl"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "crystal",
+            "extensions" : [
+                "cr"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "curry",
+            "extensions" : [
+                "curry"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "cweb",
+            "extensions" : [],
+            "keywords" : []
+        },
+        {
+            "name": "d",
+            "extensions" : [
+                "d",
+                "di"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "ec",
+            "extensions" : [
+                "ec",
+                "eh"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "eiffel",
+            "extensions" : [
+                "e"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "elm",
+            "extensions" : [
+                "elm"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "f#",
+            "extensions" : [
+                "fs",
+                "fsi",
+                "fsx"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "f*",
+            "extensions" : [
+                "fst"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "fantom",
+            "extensions" : [
+                "fan"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "fortran",
+            "extensions" : [
+                "f",
+                "for",
+                "fpp",
+                "f77",
+                "f90",
+                "f95",
+                "f08",
+                "f03"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "freebasic",
+            "extensions" : [
+                "bas",
+                "bi"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "frege",
+            "extensions" : [
+                "fr"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "futhark",
+            "extensions" : [
+                "fut"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "gleam",
+            "extensions" : [
+                "gleam"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "go",
+            "extensions" : [
+                "go"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "haxe",
+            "extensions" : [
+                "hx",
+                "hxsl"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "haskell",
+            "extensions" : [
+                "lhs",
+                "hs",
+                "hsc"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "java",
+            "extensions" : [
+                "java"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "kotlin",
+            "extensions" : [
+                "kt",
+                "kts",
+                "ktm"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "modula-2",
+            "extensions" : [
+                "mod"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "modula-3",
+            "extensions" : [
+                "i3",
+                "m3",
+                "ig",
+                "mg"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "nemerle",
+            "extensions" : [
+                "n"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "nim",
+            "extensions" : [
+                "nim"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "standard ml",
+            "extensions" : [
+                "ML",
+                "fun",
+                "sig",
+                "sml"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "oberon",
+            "extensions" : [
+                "ob2"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "ocaml",
+            "extensions" : [
+                "ml",
+                "eliom",
+                "eliomi",
+                "ml4",
+                "mli",
+                "mll",
+                "mly"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "opa",
+            "extensions" : [
+                "opa"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "pascal",
+            "extensions" : [
+                "pas",
+                "dpr",
+                "lpr",
+                "pp",
+                "dfm"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "reason",
+            "extensions" : [
+                "re",
+                "rei"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "purescript",
+            "extensions" : [
+                "purs"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "rust",
+            "extensions" : [
+                "rs"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "scala",
+            "extensions" : [
+                "scala"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "swift",
+            "extensions" : [
+                "swift"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "typescript",
+            "extensions" : [
+                "ts"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "vala",
+            "extensions" : [
+                "vala",
+                "vapi"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "uno",
+            "extensions" : [
+                "uno"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "volt",
+            "extensions" : [
+                "volt"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "xtend",
+            "extensions" : [
+                "xtend"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "zig",
+            "extensions" : [
+                "zig"
+            ],
+            "keywords" : []
+        }
+    ],
+    "keywords": [
+        "sqrt",
+        "log2",
+        "log10",
+        "log1p",
+        "ln2",
+        "ln10",
+        "sqrt2",
+        "exp2",
+        "expm1",
+        "sin",
+        "cos",
+        "tan",
+        "cot",
+        "asin",
+        "arcsin",
+        "acos",
+        "arccos",
+        "atan",
+        "atan2",
+        "arctan",
+        "cbrt",
+        "rootn",
+        "acosh",
+        "cosh",
+        "asinh",
+        "sinh",
+        "atanh",
+        "tanh",
+        "frexp",
+        "ldexp",
+        "erf",
+        "erfc",
+        "hypot"
+    ]
+}

@@ -1,0 +1,10 @@
+def sumUntilEpsilon(start: Double, epsilon: Double): Double = {
+        var sum = 0.0
+        var term = start
+         
+        do {
+            sum += term
+            term /= 2.0
+        } while (abs(term) > epsilon)
+        sum
+    }

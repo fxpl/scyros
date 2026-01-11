@@ -1,0 +1,59 @@
+{
+    "languages": [
+        {
+            "name": "c",
+            "extensions" : [
+                "c",
+                "w"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c_header",
+            "extensions" : [
+                "h",
+                "inc"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c#",
+            "extensions" : [
+                "cs",
+                "cake",
+                "cshtml",
+                "csx"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c++",
+            "extensions" : [
+                "cpp",
+                "c++",
+                "cp",
+                "cc",
+                "cxx",
+                "inl"
+            ],
+            "keywords" : []
+        },
+        {
+            "name": "c++_header",
+            "extensions" : [
+                "hpp",
+                "hh",
+                "hxx",
+                "h++",
+                "ipp",
+                "tpp",
+                "tcc"
+            ],
+            "keywords" : []
+        }
+    ],
+    "keywords": [
+        "math\\.h",
+        "cmath"
+    ]
+}
