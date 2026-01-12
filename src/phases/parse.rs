@@ -681,7 +681,9 @@ fn extract_functions(
         if grammar.function_nodes.contains(node.kind()) {
             let has_error = node.has_error();
 
-            if (has_error && fail_policy == "skip-function") || (language == "java" && find_fields(&node, "body").is_empty()) {
+            if (has_error && fail_policy == "skip-function")
+                || (language == "java" && find_fields(&node, "body").is_empty())
+            {
                 continue;
             } else {
                 // Fetch the code of the function and remove comments from it

@@ -57,7 +57,7 @@ name = "skyscraper"
 path = "src/bin/main.rs"
 
 [dev-dependencies.cargo-husky]
-version = "1"
-default-features = false # Disable features which are enabled by default
+version = "1.5.0"
+default-features = false
 features = ["precommit-hook", "run-cargo-check", "run-cargo-fmt", "run-cargo-clippy"]
 

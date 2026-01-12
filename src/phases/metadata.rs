@@ -328,9 +328,8 @@ pub fn run(
                         cache.get(&id).unwrap().clone()
                     } else {
                         match gh.request(&format!("https://api.github.com/repos/{}", full_name)) {
-                            Ok(json) => {
-                                ProjectMetadata::parse_json(&json, ())?.to_csv((id, full_name.to_string()))
-                            }
+                            Ok(json) => ProjectMetadata::parse_json(&json, ())?
+                                .to_csv((id, full_name.to_string())),
                             Err(e) => ProjectMetadata::default().to_csv((id, e.to_string())),
                         }
                     };

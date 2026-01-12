@@ -133,7 +133,7 @@ pub fn cli() -> Command {
 ///
 /// The input must be a valid CSV file where the first column is the id of the project and the second column is the full name of the project.
 /// Other columns are ignored. Such a file can be obtained by running the random-id-sampling program. Ids are chosen in a random order from the file.
-/// 
+///
 /// The output has the following columns:
 /// * id: the id of the project.
 /// * name: the full name of the project.
@@ -469,15 +469,15 @@ impl FromGitHub for PRMetadata {
 }
 
 /// Scrape all pages of a GitHub API endpoint.
-/// 
+///
 /// # Arguments
-/// 
+///
 /// * `gh` - The GitHub client to use for making requests.
 /// * `request` - A function that takes the number of items per page and the page number, and returns the URL of the GitHub API endpoint.
 /// * `func` - The function processing each item in the response.
-/// 
+///
 /// # Returns
-/// 
+///
 /// A vector containing the results of applying `func` to each item in the response, or an error if
 /// an error occurred during the requests.
 fn scrape_pages<T>(
@@ -598,12 +598,10 @@ impl FromGitHub for PRComment {
             } else {
                 PRMetadata::parse_date_time(json, "submitted_at")?
             }
+        } else if field_is_null(json, "created_at")? {
+            0
         } else {
-            if field_is_null(json, "created_at")? {
-                0
-            } else {
-                PRMetadata::parse_date_time(json, "created_at")?
-            }
+            PRMetadata::parse_date_time(json, "created_at")?
         };
         let body = if field_is_null(json, "body")? {
             "".to_string()
@@ -614,7 +612,7 @@ impl FromGitHub for PRComment {
         Ok(Self {
             id: id as i64,
             user,
-            user_id: user_id,
+            user_id,
             comment_type: complement,
             created_at: created_at as u64,
             body,
