@@ -1,4 +1,4 @@
-name: Builds and runs the tests
+name: CI
 
 on:
   push:

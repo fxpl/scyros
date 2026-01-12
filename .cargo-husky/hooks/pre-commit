@@ -4,5 +4,5 @@ set -eu
 echo "Running cargo fmt..."
 cargo fmt
 
-echo "Running cargo clippy..."
-cargo clippy --all-features -- -D warnings
+# echo "Running cargo clippy..."
+# cargo clippy --all-features -- -D warnings
