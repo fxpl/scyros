@@ -1,8 +1,16 @@
 [package]
 name = "skyscraper"
+version = "0.1.0"
+description = "A framework to design sound, reproducible and scalable mining repositories studies on GitHub."
 authors = ["Andrea Gilot <andrea.gilot@it.uu.se>"]
-edition = "2018"
+edition = "2021"
+repository = "https://github.com/fxpl/skyscraper"
 rust-version = "1.85"
+readme = "README.md"
+include = ["src/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "README.md", "LICENSE", "tests/**"]
+keywords = ["data-mining", "github", "code-analysis", "repository-mining"]
+categories = ["command-line-utilities", "science"]
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
