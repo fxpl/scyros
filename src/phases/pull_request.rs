@@ -704,6 +704,7 @@ mod tests {
         assert!(delete_file(&output_file, true).is_ok());
 
         let tokens_file: String = "ghtokens.csv".to_string();
+        let target: String = format!("{}/prs", TEST_DATA);
 
         let run_scraper: Result<(), Error> = run(
             &input_file,
@@ -713,14 +714,14 @@ mod tests {
             false,
             "id",
             "name",
-            &format!("{}/target", TEST_DATA),
+            &target,
             None,
             &mut Logger::new(),
         );
         assert!(run_scraper.is_ok());
 
         let pr_discussion_path: String =
-            format!("{}/target/5983/1128315983/1128315983_1.csv", TEST_DATA);
+            format!("{}/5983/1128315983/1128315983_1.csv", target);
         let pr_discussion = open_csv(&output_file, None, None);
         assert!(pr_discussion.is_ok());
         let pr_discussion = pr_discussion.unwrap();
@@ -729,7 +730,7 @@ mod tests {
         assert!(pr_discussion_expected.is_ok());
         let pr_discussion_expected = pr_discussion_expected.unwrap();
 
-        assert!(pr_discussion.equals(&pr_discussion_expected));
+        assert_eq!(pr_discussion, pr_discussion_expected);
 
         let output_df = open_csv(&output_file, None, None);
         assert!(output_df.is_ok());
