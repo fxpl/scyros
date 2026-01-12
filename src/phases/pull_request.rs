@@ -769,6 +769,6 @@ mod tests {
         );
 
         assert!(run_scraper.is_err());
-        assert!(delete_file(&output_file, false).is_ok());
+        assert!(delete_file(&output_file, true).is_ok());
     }
 }

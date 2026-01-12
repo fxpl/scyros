@@ -329,7 +329,7 @@ pub fn run(
                     } else {
                         match gh.request(&format!("https://api.github.com/repos/{}", full_name)) {
                             Ok(json) => {
-                                ProjectMetadata::parse_json(&json, ())?.to_csv((id, String::new()))
+                                ProjectMetadata::parse_json(&json, ())?.to_csv((id, full_name.to_string()))
                             }
                             Err(e) => ProjectMetadata::default().to_csv((id, e.to_string())),
                         }
@@ -559,7 +559,7 @@ mod tests {
             .sort(vec!["name"], SortMultipleOptions::new())
             .unwrap();
 
-        assert!(sorted_expected_df.equals(&sorted_output_df));
+        assert_eq!(sorted_expected_df, sorted_output_df);
 
         assert!(delete_file(&output_file, false).is_ok());
     }

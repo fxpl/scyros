@@ -54,3 +54,7 @@ too_many_arguments = "allow"
 [[bin]]
 name = "skyscraper"
 path = "src/bin/main.rs"
+
+[dev-dependencies]
+cargo-husky = { version = "1.5.0", features = ["precommit-hook"] }
+
