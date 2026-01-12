@@ -18,6 +18,7 @@ A framework to design sound, reproducible and scalable mining repositories studi
 
 - [Installation](#installation)
 - [Usage](#usage)
+- [Authentication and Rate Limits](#authentication-and-rate-limits)
 - [Citing Skyscraper](#citing-skyscraper)
 - [License](#license)
 
@@ -49,7 +50,7 @@ Each module provides its own usage documentation. For example, to inspect the mo
 skyscraper ids --help
 ```
 
-## Authentication and rate limits
+## 
 
 Some modules interact with the GitHub API and require personal access tokens (PATs). Tokens can be created by following GitHub’s documentation: [https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token).
 

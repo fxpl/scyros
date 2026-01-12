@@ -56,6 +56,8 @@ too_many_arguments = "allow"
 name = "skyscraper"
 path = "src/bin/main.rs"
 
-[dev-dependencies]
-cargo-husky = { version = "1.5.0", features = ["precommit-hook"] }
+[dev-dependencies.cargo-husky]
+version = "1"
+default-features = false # Disable features which are enabled by default
+features = ["precommit-hook", "run-cargo-check", "run-cargo-fmt", "run-cargo-clippy"]
 
