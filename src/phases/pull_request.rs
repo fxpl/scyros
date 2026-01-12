@@ -720,8 +720,7 @@ mod tests {
         );
         assert!(run_scraper.is_ok());
 
-        let pr_discussion_path: String =
-            format!("{}/5983/1128315983/1128315983_1.csv", target);
+        let pr_discussion_path: String = format!("{}/5983/1128315983/1128315983_1.csv", target);
         let pr_discussion = open_csv(&output_file, None, None);
         assert!(pr_discussion.is_ok());
         let pr_discussion = pr_discussion.unwrap();
