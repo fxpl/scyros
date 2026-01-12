@@ -2,6 +2,7 @@
 name = "skyscraper"
 authors = ["Andrea Gilot <andrea.gilot@it.uu.se>"]
 edition = "2018"
+rust-version = "1.85"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

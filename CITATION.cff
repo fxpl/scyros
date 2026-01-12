@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use Skyscraper in your research, please cite the following paper."
+title: "Skyscraper"
+abstract: >
+  Skyscraper is a framework for designing sound, reproducible, and scalable
+  repository-mining studies.
+authors:
+  - family-names: Gilot
+    given-names: Andrea
+  - family-names: Wrigstad
+    given-names: Tobias
+  - family-names: Darulova
+    given-names: Eva
+repository-code: "https://github.com/fxpl/skyscraper"
+license: Apache-2.0
+preferred-citation:
+  type: article
+  title: "A Large-Scale Study of Floating-Point Usage in Statically Typed Languages"
+  authors:
+    - family-names: Gilot
+      given-names: Andrea
+    - family-names: Wrigstad
+      given-names: Tobias
+    - family-names: Darulova
+      given-names: Eva
+  year: 2025
+  archive: arXiv
+  archive-prefix: arXiv
+  arxiv: "2509.04936"
+  url: "https://arxiv.org/abs/2509.04936"
