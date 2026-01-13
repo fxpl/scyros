@@ -1,9 +1,11 @@
 # Scyros
 
 [![Actions status](https://github.com/fxpl/scyros/actions/workflows/ci.yml/badge.svg)](https://github.com/fxpl/scyros/actions)
+![License](https://img.shields.io/crates/l/scyros.svg)
 [![Rust](https://img.shields.io/badge/rust-1.85-blue)](
 https://releases.rs/docs/1.85.0/
 )
+[![Crates.io](https://img.shields.io/crates/v/scyros.svg)](https://crates.io/crates/scyros)
 
 A framework to design sound, reproducible and scalable mining repositories studies on GitHub.
 
