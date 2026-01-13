@@ -1,10 +1,10 @@
 [package]
-name = "skyscraper"
+name = "scyros"
 version = "0.1.0"
 description = "A framework to design sound, reproducible and scalable mining repositories studies on GitHub."
 authors = ["Andrea Gilot <andrea.gilot@it.uu.se>"]
 edition = "2021"
-repository = "https://github.com/fxpl/skyscraper"
+repository = "https://github.com/fxpl/scyros"
 rust-version = "1.85"
 readme = "README.md"
 include = ["src/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "README.md", "LICENSE", "tests/**"]
@@ -61,7 +61,7 @@ type_complexity = "allow"
 too_many_arguments = "allow"
 
 [[bin]]
-name = "skyscraper"
+name = "scyros"
 path = "src/bin/main.rs"
 
 [dev-dependencies.cargo-husky]

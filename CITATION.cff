@@ -1,8 +1,8 @@
 cff-version: 1.2.0
-message: "If you use Skyscraper in your research, please cite the following paper."
-title: "Skyscraper"
+message: "If you use Scyros in your research, please cite the following paper."
+title: "Scyros"
 abstract: >
-  Skyscraper is a framework for designing sound, reproducible, and scalable
+  Scyros is a framework for designing sound, reproducible, and scalable
   repository-mining studies.
 authors:
   - family-names: Gilot
@@ -11,7 +11,7 @@ authors:
     given-names: Tobias
   - family-names: Darulova
     given-names: Eva
-repository-code: "https://github.com/fxpl/skyscraper"
+repository-code: "https://github.com/fxpl/scyros"
 license: Apache-2.0
 preferred-citation:
   type: article

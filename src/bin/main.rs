@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use clap::{Arg, ArgAction, Command};
-use skyscraper::phases::{
+use scyros::phases::{
     download, duplicate_files, duplicate_ids, extract_benchmarks, filter_languages,
     filter_metadata, forks, ids, languages, metadata, parse, pull_request,
 };
-use skyscraper::utils::error::*;
-use skyscraper::utils::logger::Logger;
+use scyros::utils::error::*;
+use scyros::utils::logger::Logger;
 
 fn cli() -> Command {
-    Command::new("skyscraper")
+    Command::new("scyros")
         .about("")
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
         .subcommand(ids::cli())

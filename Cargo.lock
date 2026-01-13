@@ -2500,6 +2500,46 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "scyros"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "byteorder",
+ "cargo-husky",
+ "cc",
+ "chrono",
+ "clang",
+ "clap",
+ "console",
+ "crossbeam",
+ "crossbeam-channel 0.5.13",
+ "csv",
+ "curl",
+ "indicatif",
+ "json",
+ "lazy_static",
+ "num-traits",
+ "pathdiff",
+ "petgraph",
+ "polars",
+ "rand",
+ "regex",
+ "reqwest",
+ "snafu",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-fortran",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-python",
+ "tree-sitter-scala",
+ "tree-sitter-typescript",
+ "walkdir",
+]
+
+[[package]]
 name = "security-framework"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2584,46 +2624,6 @@ name = "siphasher"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
-
-[[package]]
-name = "skyscraper"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "byteorder",
- "cargo-husky",
- "cc",
- "chrono",
- "clang",
- "clap",
- "console",
- "crossbeam",
- "crossbeam-channel 0.5.13",
- "csv",
- "curl",
- "indicatif",
- "json",
- "lazy_static",
- "num-traits",
- "pathdiff",
- "petgraph",
- "polars",
- "rand",
- "regex",
- "reqwest",
- "snafu",
- "tree-sitter",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-fortran",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-python",
- "tree-sitter-scala",
- "tree-sitter-typescript",
- "walkdir",
-]
 
 [[package]]
 name = "slab"

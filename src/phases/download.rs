@@ -626,7 +626,7 @@ fn download_repo(
             )?,
         );
 
-        headers.insert(USER_AGENT, HeaderValue::from_static("Skyscraper"));
+        headers.insert(USER_AGENT, HeaderValue::from_static("Scyros"));
 
         let url: String = format!(
             "https://api.github.com/repositories/{}/zipball/{}",

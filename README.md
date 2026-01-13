@@ -1,13 +1,13 @@
-# Skyscraper
+# Scyros
 
-[![Actions status](https://github.com/fxpl/skyscraper/actions/workflows/ci.yml/badge.svg)](https://github.com/fxpl/skyscraper/actions)
+[![Actions status](https://github.com/fxpl/scyros/actions/workflows/ci.yml/badge.svg)](https://github.com/fxpl/scyros/actions)
 [![Rust](https://img.shields.io/badge/rust-1.85-blue)](
 https://releases.rs/docs/1.85.0/
 )
 
 A framework to design sound, reproducible and scalable mining repositories studies on GitHub.
 
-### Skyscraper is...
+### Scyros is...
 
 - 🧪 **Reproducibility-first**: declarative configuration and deterministic execution to enable repeatable experiments.
 - 📈 **Scalable**: designed for large-scale repository mining studies on GitHub.
@@ -19,7 +19,7 @@ A framework to design sound, reproducible and scalable mining repositories studi
 - [Installation](#installation)
 - [Usage](#usage)
 - [Authentication and Rate Limits](#authentication-and-rate-limits)
-- [Citing Skyscraper](#citing-skyscraper)
+- [Citing Scyros](#citing-scyros)
 - [License](#license)
 
 
@@ -27,27 +27,27 @@ A framework to design sound, reproducible and scalable mining repositories studi
 
 This project is written is Rust and requires Rust version 1.85. Install Rust by following the instructions on the [official website](https://rust-lang.org/tools/install/).
 
-Build Skyscraper from source:
+Build Scyros from source:
 ```bash
-git clone git@github.com:fxpl/skyscraper.git
-cd skyscraper
+git clone git@github.com:fxpl/scyros.git
+cd scyros
 cargo build --release
 ```
 
-The binary is produced at `target/release/skyscraper`. You can optionally move it to a directory in your PATH for easier access.
+The binary is produced at `target/release/scyros`. You can optionally move it to a directory in your PATH for easier access.
 
 ## Usage
 
 To discover available commands and modules:
 
 ```bash
-skyscraper --help
+scyros --help
 ```
 
 Each module provides its own usage documentation. For example, to inspect the module used to sample random repositories from GitHub:
 
 ```bash
-skyscraper ids --help
+scyros ids --help
 ```
 
 ## 
@@ -67,9 +67,9 @@ GitHub enforces API rate limits. Using multiple tokens from the same account doe
 - [Rate limits for the REST API](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api?apiVersion=2022-11-28)
 - [Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
 
-## Citing Skyscraper
+## Citing Scyros
 
-Skyscraper is introduced and described in the following large-scale empirical study. If you use Skyscraper in academic work, please cite:.
+Scyros is introduced and described in the following large-scale empirical study. If you use Scyros in academic work, please cite:.
 
 ```bibtex
 @misc{gilot2025largescalestudyfloatingpointusage,
