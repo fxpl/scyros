@@ -29,7 +29,7 @@ use polars::prelude::{AnyValue, DataType, Field, Schema};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::Response;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
@@ -38,6 +38,8 @@ use std::io::{copy, BufRead, Write};
 use std::iter::FromIterator as _;
 use std::path::Path;
 use std::sync::Mutex;
+use std::thread::sleep;
+use std::time::Duration;
 
 use crate::shell_commands::{FileType, FindCommand, ShellCommand};
 use crate::utils::csv::*;
@@ -615,20 +617,28 @@ fn download_repo(
     delete: bool,
 ) -> Result<(String, String), Error> {
     if !skip {
-        let http_client = Client::new();
+        let http_client = map_err(
+            reqwest::blocking::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(None)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .redirect(reqwest::redirect::Policy::limited(10))
+                .build(),
+            "Failed to build HTTP client",
+        )?;
         let mut headers = HeaderMap::new();
 
         headers.insert(
             AUTHORIZATION,
             map_err(
-                HeaderValue::from_str(&format!("token {}", token)),
+                HeaderValue::from_str(&format!("Bearer {}", token)),
                 "Invalid header format for HTTP request",
             )?,
         );
 
         headers.insert(USER_AGENT, HeaderValue::from_static("Scyros"));
 
-        let url: String = format!(
+        let url_str: String = format!(
             "https://api.github.com/repositories/{}/zipball/{}",
             id,
             ok_or_else(
@@ -640,13 +650,42 @@ fn download_repo(
             )?
         );
 
-        let mut response: Response = map_err(
-            http_client.get(url).headers(headers).send(),
-            &format!(
-                "Could not download repository {} (id: {}), error while sending HTTP request",
-                full_name, id
-            ),
-        )?;
+        let url: reqwest::Url =
+            map_err(reqwest::Url::parse(&url_str), &format!("Bad URL {url_str}"))?;
+
+        let mut response_res: Result<Response, Error> =
+            Error::new("Did not send request yet").to_res();
+        const MAX_RETRIES: usize = 5;
+        let mut attempts: usize = 0;
+
+        fn retry_delay(attempt: usize) -> Duration {
+            // exp backoff: 250ms, 500ms, 1s, 2s, 4s ...
+            let base_ms: u64 = 250u64.saturating_mul(1u64 << attempt.min(MAX_RETRIES));
+            Duration::from_millis(base_ms)
+        }
+
+        while attempts < MAX_RETRIES && response_res.is_err() {
+            attempts += 1;
+            response_res = map_err(
+                http_client.get(url.clone()).headers(headers.clone()).send(),
+                &format!(
+                    "Could not download repository {} (id: {}), error while sending HTTP request",
+                    full_name, id
+                ),
+            );
+            if attempts < MAX_RETRIES && response_res.is_err() {
+                // Wait before retrying
+                sleep(retry_delay(attempts));
+            } else if attempts == MAX_RETRIES && response_res.is_err() {
+                response_res = Error::new(&format!(
+                    "Could not download repository {} (id: {}), maximum number of retries reached",
+                    full_name, id
+                ))
+                .to_res();
+            }
+        }
+
+        let mut response = response_res?;
 
         if !response.status().is_success() {
             return Ok((
