@@ -673,15 +673,17 @@ fn download_repo(
                     full_name, id
                 ),
             );
-            if attempts < MAX_RETRIES && response_res.is_err() {
-                // Wait before retrying
-                sleep(retry_delay(attempts));
-            } else if attempts == MAX_RETRIES && response_res.is_err() {
-                response_res = Error::new(&format!(
-                    "Could not download repository {} (id: {}), maximum number of retries reached",
-                    full_name, id
-                ))
-                .to_res();
+            if response_res.is_err() {
+                if attempts < MAX_RETRIES {
+                    // Wait before retrying
+                    sleep(retry_delay(attempts));
+                } else {
+                    response_res = Error::new(&format!(
+                        "Could not download repository {} (id: {}), maximum number of retries reached",
+                        full_name, id
+                    ))
+                    .to_res();
+                }
             }
         }
 
