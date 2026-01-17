@@ -700,13 +700,15 @@ fn download_repo(
         let mut out: File = open_file(&format!("{}.zip", project_path), FileMode::Overwrite)?;
 
         // Stream response to file
-        map_err(
-            copy(&mut response, &mut out),
-            &format!(
-                "Could not download repository {} (id: {}), error while writing to file",
-                full_name, id
-            ),
-        )?;
+        match copy(&mut response, &mut out) {
+            Ok(_) => (),
+            Err(_) => {
+                return Ok((
+                    error_row(id, full_name, last_commit, keywords_files.len()),
+                    String::new(),
+                ));
+            }
+        }
 
         ShellCommand::Unzip {
             filename: project_path,
