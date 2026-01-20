@@ -15,21 +15,15 @@
 use std::{fmt::Display, process::Command};
 
 /// DSL for usefull shell commands.
-pub enum ShellCommand<'a> {
+pub enum ShellCommand {
     /// Find command to search for files in a directory. Internally uses `find`.
     Find {
         /// Underlying builder object.
         builder: FindCommand,
     },
-
-    /// Unzip a file. Internally uses `unzip`.
-    Unzip {
-        /// The name of the file to unzip (without .zip).
-        filename: &'a str,
-    },
 }
 
-impl ShellCommand<'_> {
+impl ShellCommand {
     /// Returns an error message if the command fails.
     /// The error message is specific to the command and contains the name of the file or directory where the error occured.s
     fn error_msg(&self) -> String {
@@ -37,7 +31,6 @@ impl ShellCommand<'_> {
             ShellCommand::Find { builder: find } => {
                 format!("Find command failed on {}", &find.filename)
             }
-            ShellCommand::Unzip { filename } => format!("Could not unzip {}.zip", filename),
         }
     }
 
@@ -45,11 +38,6 @@ impl ShellCommand<'_> {
     pub fn command(self) -> Command {
         match self {
             ShellCommand::Find { builder: find } => find.command,
-            ShellCommand::Unzip { filename } => {
-                let mut cmd = Command::new("unzip");
-                cmd.arg(format!("{}.zip", filename)).arg("-d").arg(filename);
-                cmd
-            }
         }
     }
 

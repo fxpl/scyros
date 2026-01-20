@@ -31,6 +31,7 @@ use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use zip_extensions::zip_extract::zip_extract;
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 use std::fs::File;
@@ -622,7 +623,6 @@ fn download_repo(
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(None)
                 .pool_idle_timeout(Duration::from_secs(90))
-                .redirect(reqwest::redirect::Policy::limited(10))
                 .build(),
             "Failed to build HTTP client",
         )?;
@@ -710,10 +710,7 @@ fn download_repo(
             }
         }
 
-        ShellCommand::Unzip {
-            filename: project_path,
-        }
-        .run();
+        map_err(zip_extract(&format!("{}.zip", project_path).into(), &Path::new(project_path).to_path_buf()), &format!("Failed to extract archive to {}", project_path))?;
 
         delete_file(format!("{}.zip", project_path), true)?;
     }

@@ -50,6 +50,9 @@ tree-sitter-c-sharp = "0.23.1"
 tree-sitter-go = "0.23.4"
 tree-sitter-scala = "0.24.0"
 walkdir = "2.5.0"
+zip = "6.0.0"
+zip-extensions = "0.13.0"
+
 
 
 [profile.release]
