@@ -546,7 +546,7 @@ fn analyze_file(
                         &format!("Error parsing file {}", path),
                     )?;
 
-                    let file_has_parse_error = tree.root_node().has_error();
+                    let file_has_parse_error: bool = tree.root_node().has_error();
 
                     if file_has_parse_error && fail_policy == "skip-file" {
                         Ok((String::new(), None))
@@ -686,7 +686,7 @@ fn extract_functions(
 
     while let Some(node) = call_stack.pop() {
         if grammar.function_nodes.contains(node.kind()) {
-            let has_error = node.has_error();
+            let has_error: bool = node.has_error();
 
             if (has_error && fail_policy == "skip-function")
                 || (language == "java" && find_fields(&node, "body").is_empty())
@@ -1263,7 +1263,7 @@ fn find_first_node_of_kind<'a>(
 ///
 /// The first error node found in the tree, or `None` if no error node is found.
 fn find_first_error_node<'a>(root: &Node<'a>) -> Option<Node<'a>> {
-    find_first_node(root, &|n: &Node| n.is_error(), false)
+    find_first_node(root, &|n: &Node| n.is_error() || n.is_missing(), false)
         .into_iter()
         .next()
 }

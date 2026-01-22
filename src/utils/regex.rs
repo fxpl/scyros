@@ -409,7 +409,7 @@ impl KeywordFiles {
     pub fn count_matches_in_text(&self, lang: &str, text: &[u8]) -> Vec<usize> {
         match self.matchers.get(lang) {
             Some(m) => m.iter().map(|m| m.count_matches_in_text(text)).collect(),
-            None => vec![0, self.paths.len()],
+            None => vec![0; self.paths.len()],
         }
     }
 
