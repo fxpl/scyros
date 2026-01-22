@@ -31,7 +31,6 @@ use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
-use zip_extensions::zip_extract::zip_extract;
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 use std::fs::File;
@@ -41,6 +40,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
+use zip_extensions::zip_extract::zip_extract;
 
 use crate::shell_commands::{FileType, FindCommand, ShellCommand};
 use crate::utils::csv::*;
@@ -710,7 +710,13 @@ fn download_repo(
             }
         }
 
-        map_err(zip_extract(&format!("{}.zip", project_path).into(), &Path::new(project_path).to_path_buf()), &format!("Failed to extract archive to {}", project_path))?;
+        map_err(
+            zip_extract(
+                &format!("{}.zip", project_path).into(),
+                &Path::new(project_path).to_path_buf(),
+            ),
+            &format!("Failed to extract archive to {}", project_path),
+        )?;
 
         delete_file(format!("{}.zip", project_path), true)?;
     }

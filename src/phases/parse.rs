@@ -553,6 +553,7 @@ fn analyze_file(
                     } else if file_has_parse_error && fail_policy == "abort" {
                         Error::new(&format!("Parse error in file {}", path)).to_res()
                     } else {
+                        let root: Node<'_> = tree.root_node();
                         let (
                             output,
                             total_functions,
@@ -560,7 +561,7 @@ fn analyze_file(
                             functions_with_specific_kw,
                         ) = extract_functions(
                             project_id,
-                            &tree.root_node(),
+                            &root,
                             &target_folder,
                             language,
                             &grammar,
@@ -570,6 +571,12 @@ fn analyze_file(
                             word_counter,
                             &mut parser,
                         )?;
+
+                        let error_position: String = if file_has_parse_error {
+                            find_first_error_position(&root)
+                        } else {
+                            "none".to_string()
+                        };
 
                         Ok((
                             output,
@@ -586,7 +593,7 @@ fn analyze_file(
                                     .map(|x| x.to_string())
                                     .collect::<Vec<String>>()
                                     .join(","),
-                                if file_has_parse_error { 1 } else { 0 }
+                                error_position,
                             )),
                         ))
                     }
@@ -600,7 +607,7 @@ fn analyze_file(
                         path,
                         language,
                         keywords_files,
-                        false,
+                        "none",
                     )),
                 )),
             }
@@ -614,7 +621,7 @@ fn file_error_row(
     path: &str,
     language: &str,
     keyword_files: &KeywordFiles,
-    parse_error: bool,
+    parse_error: &str,
 ) -> String {
     format!(
         "{},{},{},-1,-1,{},{}",
@@ -628,7 +635,7 @@ fn file_error_row(
             .map(|_| "-1".to_string())
             .collect::<Vec<String>>()
             .join(","),
-        if parse_error { "1" } else { "0" }
+        parse_error,
     )
 }
 
@@ -686,6 +693,12 @@ fn extract_functions(
             {
                 continue;
             } else {
+                let error_position: String = if has_error {
+                    find_first_error_position(root)
+                } else {
+                    "none".to_string()
+                };
+
                 // Fetch the code of the function and remove comments from it
                 let function_code_with_strings = &remove_kind_from_source(
                     node_source_code(&node, source),
@@ -740,8 +753,8 @@ fn extract_functions(
                     }
                     name = name.chars().filter(|c| !c.is_whitespace()).collect();
 
-                    let mut n_param = 0;
-                    let mut param_match = 0;
+                    let mut n_param: usize = 0;
+                    let mut param_match: usize = 0;
                     for params in params_vec {
                         let matches = match grammar.param_type_field {
                             Some(field) => {
@@ -786,7 +799,7 @@ fn extract_functions(
                             calls_nesting,
                             n_param,
                             param_match,
-                            if has_error { 1 } else { 0 }
+                            error_position,
                         ),
                         &format!("Error writing function statistics of {}", function_path),
                     )?;
@@ -1189,9 +1202,9 @@ fn count_nodes_of_kind(root: &Node, kinds: &HashSet<&str>) -> (usize, usize) {
     (node_count, max_nesting)
 }
 
-fn find_first_node_of_kind<'a>(
+fn find_first_node<'a>(
     node: &Node<'a>,
-    kind: &HashSet<&str>,
+    pred: &dyn Fn(&Node) -> bool,
     breadth: bool,
 ) -> Vec<Node<'a>> {
     let mut cursor = node.walk();
@@ -1204,7 +1217,7 @@ fn find_first_node_of_kind<'a>(
     while let Some((node, depth)) = call_stack.pop() {
         if max_depth.filter(|&d| depth > d).is_some() {
             return res;
-        } else if kind.contains(node.kind()) {
+        } else if pred(&node) {
             if breadth {
                 res.push(node);
                 if max_depth.is_none() {
@@ -1230,6 +1243,41 @@ fn find_first_node_of_kind<'a>(
         }
     }
     vec![]
+}
+
+fn find_first_node_of_kind<'a>(
+    root: &Node<'a>,
+    kind: &HashSet<&str>,
+    breadth: bool,
+) -> Vec<Node<'a>> {
+    find_first_node(root, &|n: &Node| kind.contains(n.kind()), breadth)
+}
+
+/// Finds the first error node in the tree
+///
+/// # Arguments
+///
+/// * `root` - The root node of the tree.
+///
+/// # Returns
+///
+/// The first error node found in the tree, or `None` if no error node is found.
+fn find_first_error_node<'a>(root: &Node<'a>) -> Option<Node<'a>> {
+    find_first_node(root, &|n: &Node| n.is_error(), false)
+        .into_iter()
+        .next()
+}
+
+fn find_first_error_position(root: &Node) -> String {
+    find_first_error_node(root)
+        .map(|n| {
+            format!(
+                "{}:{}",
+                n.start_position().row + 1,
+                n.start_position().column + 1
+            )
+        })
+        .unwrap_or_else(|| "not-found".to_string())
 }
 
 fn find_fields<'a>(root: &Node<'a>, field: &str) -> Vec<Node<'a>> {

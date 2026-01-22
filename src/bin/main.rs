@@ -160,6 +160,7 @@ fn main() {
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_one::<String>("similarity").unwrap(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
+                                    cli_subargs.get_one::<String>("header").unwrap(),
                                     &mut logger,
                                 )
                             } else if subcommand == parse::cli().get_name() {

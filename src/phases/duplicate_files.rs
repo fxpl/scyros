@@ -35,7 +35,8 @@ pub fn cli() -> Command {
     Command::new("duplicate_files")
         .about("Detects duplicate files in a dataset, returning only unique files.")
         .long_about(
-            "Detects duplicate files in a dataset, returning only unique files. The input and output are CSV files storing file metadata.\n\
+            "Detects duplicate files in a dataset, returning only unique files. The input and output are CSV files storing file paths.\n\
+            The name of the column storing file paths in the input CSV file can be specified (default is 'name').\n\
              The similarity criterion can be either exact match or token-based (i.e., invariant to token order and whitespaces)."
         )
         .disable_version_flag(true)
@@ -85,6 +86,12 @@ pub fn cli() -> Command {
                 .default_value("exact")
                 .value_parser(["exact", "bow"]),
         )
+        .arg(
+            Arg::new("header")
+                .long("header")
+                .help("Name of column storing file paths in the input CSV file.")
+                .default_value("name"),
+        )
 }
 
 /// Detects duplicate files in a dataset, returning only unique files.
@@ -109,12 +116,13 @@ pub fn run(
     force: bool,
     similarity: &str,
     threads: usize,
+    input_header: &str,
     logger: &mut Logger,
 ) -> Result<(), Error> {
-    let default_output_path = format!("{}.unique.csv", input_path);
-    let default_map_path = format!("{}.duplicates_map.csv", input_path);
-    let output_path = output_path.unwrap_or(&default_output_path);
-    let map_path = map_path.unwrap_or(&default_map_path);
+    let default_output_path: String = format!("{}.unique.csv", input_path);
+    let default_map_path: String = format!("{}.duplicates_map.csv", input_path);
+    let output_path: &str = output_path.unwrap_or(&default_output_path);
+    let map_path: &str = map_path.unwrap_or(&default_map_path);
 
     check_path(input_path)?;
 
@@ -135,7 +143,7 @@ pub fn run(
     let files: DataFrame = open_csv(
         input_path,
         Some(Schema::from_iter(vec![
-            Field::new("name".into(), DataType::String),
+            Field::new(input_header.into(), DataType::String),
             Field::new("extension".into(), DataType::String),
             Field::new("loc".into(), DataType::UInt32),
             Field::new("words".into(), DataType::UInt32),
@@ -143,19 +151,27 @@ pub fn run(
         None,
     )?;
 
-    if !has_column(&files, "name") {
-        Error::new("The input file must contain an 'name' column.").to_res()?;
+    if !has_column(&files, input_header) {
+        Error::new(&format!(
+            "The input file must contain a '{}' column.",
+            input_header
+        ))
+        .to_res()?;
     }
 
-    let file_count = files.height();
+    let file_count: usize = files.height();
 
     logger.log(&format!("{} files found.", file_count))?;
 
-    let split_dataset = map_err(
-        map_err(files.column("name"), "Cannot access 'name' columns")?
-            .clone()
-            .into_frame()
-            .with_row_index("idx".into(), None),
+    // Split the dataset into chunks for each thread.
+    let split_dataset: Vec<DataFrame> = map_err(
+        map_err(
+            files.column(input_header),
+            &format!("Cannot access '{}' columns", input_header),
+        )?
+        .clone()
+        .into_frame()
+        .with_row_index("idx".into(), None),
         "Could not add row indices to the dataframe",
     )?
     .split_chunks_by_n(threads, true);
@@ -177,7 +193,7 @@ pub fn run(
                 s.spawn(move |_| {
                     let word_matcher: Matcher = Matcher::words_matcher();
                     for el in chunk
-                        .column("name")
+                        .column(input_header)
                         .and_then(|c| c.str())
                         .unwrap()
                         .into_iter()
@@ -185,6 +201,7 @@ pub fn run(
                     {
                         match el {
                             (Some(name), Some(idx)) => {
+                                // Revert the temporary replacements of special characters.
                                 let clean_name: String = name
                                     .replace("-was_comma-", ",")
                                     .replace("-was_quote-", "\"");
@@ -374,6 +391,7 @@ mod tests {
             false,
             similarity,
             1,
+            "name",
             &mut Logger::new()
         )
         .is_ok());
