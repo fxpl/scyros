@@ -1,0 +1,3 @@
+id,name,language,functions,functions_with_kw,tests/data/keywords/fp_types.json,tests/data/keywords/fp_transcendental.json,tests/data/keywords/fp_others.json,parse_error
+0,tests/data/phases/parse/weird.go,go,2,2,2,1,0,none
+1,tests/data/phases/parse/several_functions.go,go,13,12,12,3,4,none

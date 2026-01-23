@@ -1,4 +1,4 @@
-double tan(double x) {
+long double tan(double x) {
     if (x == INFINITY) {
         return 0;
     }

@@ -1,1 +1,1 @@
-kjhfkb
+    int main() {double d}

@@ -1,0 +1,5 @@
+public static double Hypotenuse(double a, double b)
+        {
+            double Square(double x) => x * x;
+            return Math.Sqrt(Square(a) + Square(b));
+        }

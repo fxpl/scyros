@@ -1,0 +1,7 @@
+@Override
+    public float divide(float a, float b) throws ArithmeticException {
+        if (b == 0) {
+            throw new ArithmeticException("Division by zero");
+        }
+        return a / b;
+    }

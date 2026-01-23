@@ -1,0 +1,81 @@
+2026.01.23 14:23:58 WARN  Using H2 2.4.240 which is newer than the version Flyway has been verified with. The latest verified version of H2 is 2.3.232.
+2026.01.23 14:23:58 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:23:59 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:23:59 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:23:59 WARN  no build tool detected in workspace '/Users/andrea/Documents/repos/software/scyros'. The most common cause for this problem is that the editor was opened in the wrong working directory, for example if you use sbt then the workspace directory should contain build.sbt. 
+2026.01.23 14:23:59 WARN  Build server is not auto-connectable.
+2026.01.23 14:23:59 WARN  no build target for: /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java
+2026.01.23 14:23:59 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:00 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:00 WARN  Running javac-semanticdb failed for file:///Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Output:
+
+2026.01.23 14:24:00 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:01 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:02 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+Jan 23, 2026 2:24:02 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 12
+2026.01.23 14:24:02 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:02 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+Jan 23, 2026 2:24:02 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 14
+2026.01.23 14:24:02 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+Jan 23, 2026 2:24:02 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 13
+2026.01.23 14:24:02 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:03 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:03 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:04 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:24:05 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:28:29 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:30:42 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+Jan 23, 2026 2:31:17 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 35
+Jan 23, 2026 2:31:17 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 36
+Jan 23, 2026 2:31:17 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 37
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+Jan 23, 2026 2:31:17 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 41
+2026.01.23 14:31:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+Jan 23, 2026 2:31:21 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 48
+Jan 23, 2026 2:31:21 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 49
+Jan 23, 2026 2:31:21 PM org.eclipse.lsp4j.jsonrpc.RemoteEndpoint handleCancellation
+WARNING: Unmatched cancel notification for request id 50
+2026.01.23 14:31:21 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:21 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:22 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:23 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:24 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:28 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:29 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:32 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:33 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:35 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:39 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:40 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:42 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:31:43 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:32:19 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:32:19 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:41:12 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:41:17 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 14:59:23 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 15:02:20 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 15:02:27 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 15:03:50 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 15:03:56 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.23 15:03:57 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.

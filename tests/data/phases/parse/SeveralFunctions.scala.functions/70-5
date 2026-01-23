@@ -1,0 +1,3 @@
+def specialValuesDemo(): Seq[Double] = {
+        Seq(Double.NaN, Double.PositiveInfinity, Double.NegativeInfinity, Double.MinValue, Double.MaxValue, 0.0, -0.0)
+    }

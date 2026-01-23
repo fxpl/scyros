@@ -345,7 +345,7 @@ pub fn run(
     });
 
     // Number of columns in the output file.
-    const OUTPUT_COLS: usize = 16;
+    const OUTPUT_COLS: usize = 17;
     const LOGS_COLS: usize = 7;
 
     let keyword_files: KeywordFiles = logger.log_completion("Loading keywords", || {
@@ -364,6 +364,7 @@ pub fn run(
         "id",
         "path",
         "name",
+        "position",
         "language",
         "loc",
         "words",
@@ -573,7 +574,7 @@ fn analyze_file(
                         )?;
 
                         let error_position: String = if file_has_parse_error {
-                            find_first_error_position(&root)
+                            position_to_string(find_first_error_position(&root))
                         } else {
                             "none".to_string()
                         };
@@ -693,18 +694,29 @@ fn extract_functions(
             {
                 continue;
             } else {
+                // Function source code
+                let function_source_code: &[u8] = node_source_code(&node, source);
+                let function_position: (usize, usize) = (
+                    node.start_position().row + 1,
+                    node.start_position().column + 1,
+                );
+
                 let error_position: String = if has_error {
-                    find_first_error_position(root)
+                    position_to_string(find_first_error_position(&node).map(|(row, col)| {
+                        let error_row = row - function_position.0 + 1;
+                        if row == function_position.0 {
+                            (error_row, col - function_position.1 + 1)
+                        } else {
+                            (error_row, col)
+                        }
+                    }))
                 } else {
                     "none".to_string()
                 };
 
                 // Fetch the code of the function and remove comments from it
-                let function_code_with_strings = &remove_kind_from_source(
-                    node_source_code(&node, source),
-                    &node,
-                    &grammar.comment_nodes,
-                );
+                let function_code_with_strings: &Vec<u8> =
+                    &remove_kind_from_source(function_source_code, &node, &grammar.comment_nodes);
                 // Re parse the function without comments to get the correct tree
                 let tree_without_comments: Tree = ok_or_else(
                     parser.parse(function_code_with_strings, None),
@@ -725,10 +737,13 @@ fn extract_functions(
                     keyword_files.count_matches_in_text(language, function_code);
 
                 if matches.iter().any(|x| *x > 0) {
-                    let function_path: String = format!("{}/{}", target_folder, functions);
+                    let function_path: String = format!(
+                        "{}/{}-{}",
+                        target_folder, function_position.0, function_position.1
+                    );
 
                     map_err(
-                        std::fs::write(&function_path, function_code_with_strings),
+                        std::fs::write(&function_path, function_source_code),
                         &format!("Cannot write function code to {}", function_path),
                     )?;
 
@@ -776,13 +791,14 @@ fn extract_functions(
                     map_err(
                         writeln!(
                             &mut builder,
-                            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                             project_id,
                             &function_path
                                 .replace(",", "-was_comma-")
                                 .replace("\"", "-was_quote-"),
                             name.replace(",", "-was_comma-")
                                 .replace("\"", "-was_quote-"),
+                            position_to_string(Some(function_position)),
                             language,
                             count_text_lines(function_code_with_strings),
                             word_counter.count_matches_in_text(function_code_with_strings),
@@ -1268,16 +1284,15 @@ fn find_first_error_node<'a>(root: &Node<'a>) -> Option<Node<'a>> {
         .next()
 }
 
-fn find_first_error_position(root: &Node) -> String {
-    find_first_error_node(root)
-        .map(|n| {
-            format!(
-                "{}:{}",
-                n.start_position().row + 1,
-                n.start_position().column + 1
-            )
-        })
-        .unwrap_or_else(|| "not-found".to_string())
+fn find_first_error_position(root: &Node) -> Option<(usize, usize)> {
+    find_first_error_node(root).map(|n| (n.start_position().row + 1, n.start_position().column + 1))
+}
+
+fn position_to_string(position: Option<(usize, usize)>) -> String {
+    match position {
+        Some((row, col)) => format!("{}:{}", row, col),
+        None => "not-found".to_string(),
+    }
 }
 
 fn find_fields<'a>(root: &Node<'a>, field: &str) -> Vec<Node<'a>> {
@@ -1511,6 +1526,7 @@ mod tests {
             "tests/data/keywords/fp_types.json",
             "tests/data/keywords/fp_transcendental.json",
             "tests/data/keywords/fp_others.json",
+            "tests/data/keywords/long_double.json",
         ];
 
         let input_file_path = format!("{}/to_parse.csv", TEST_DATA);

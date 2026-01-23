@@ -1,0 +1,8 @@
+public static string CategorizeNumber(double number) => number switch
+        {
+            < 0 => "Negative",
+            >= 0 and < 1 => "Small",
+            >= 1 and < 100 => "Medium",
+            >= 100 => "Large",
+            _ => "Unknown"
+        };

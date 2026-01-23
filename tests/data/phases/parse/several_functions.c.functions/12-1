@@ -1,0 +1,4 @@
+float max_float(float a, float b) {
+    // Ternary operator
+    return (a > b) ? a : b;
+}

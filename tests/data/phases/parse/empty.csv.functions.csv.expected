@@ -1,1 +1,1 @@
-id,path,name,language,loc,words,tests/data/keywords/scala_float.json,loop_statements,loop_nestings,if_statements,if_nestings,functions_calls,function_calls_nestings,params,param_kw_match,parse_error
+id,path,name,position,language,loc,words,tests/data/keywords/scala_float.json,loop_statements,loop_nestings,if_statements,if_nestings,functions_calls,function_calls_nestings,params,param_kw_match,parse_error

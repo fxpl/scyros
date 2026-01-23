@@ -1,0 +1,4 @@
+public ExoticFloat(double value)
+            {
+                Value = value;
+            }

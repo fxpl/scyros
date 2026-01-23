@@ -1,0 +1,16 @@
+func classifyFloat(x float64) string {
+	switch {
+	case math.IsNaN(x):
+		return "NaN"
+	case math.IsInf(x, 1):
+		return "+Inf"
+	case math.IsInf(x, -1):
+		return "-Inf"
+	case x == 0:
+		return "Zero"
+	case x > 0:
+		return "Positive"
+	default:
+		return "Negative"
+	}
+}

@@ -1,0 +1,10 @@
+function applyToPairs(
+    operation: FloatOperation,
+    numbers: number[]
+): number[] {
+    const results: number[] = [];
+    for (let i = 0; i < numbers.length - 1; i++) {
+        results.push(operation(numbers[i], numbers[i + 1]));
+    }
+    return results;
+}

@@ -68,7 +68,7 @@ int random_between(int min, int max) {
     return rand() % (max - min + 1) + min;
 }
 
-double tan(double x) {
+long double tan(double x) {
     if (x == INFINITY) {
         return 0;
     }

@@ -1,0 +1,5 @@
+void checkInfinity(float value) {
+    if (std::isinf(value)) {
+        throw std::overflow_error("Value is infinity");
+    }
+}

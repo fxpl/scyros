@@ -1,0 +1,14 @@
+{
+    "languages": [
+        {
+            "name": "c",
+            "extensions" : [
+                "c"
+            ],
+            "keywords" : []
+        }
+    ],
+    "keywords": [
+        "long double"
+    ]
+}

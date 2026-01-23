@@ -1,0 +1,7 @@
+func trigonometricMap() map[string]float64 {
+	return map[string]float64{
+		"sin(π/4)": math.Sin(Pi / 4),
+		"cos(π/4)": math.Cos(Pi / 4),
+		"tan(π/4)": math.Tan(Pi / 4),
+	}
+}
