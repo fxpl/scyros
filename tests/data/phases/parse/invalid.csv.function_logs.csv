@@ -1,2 +1,0 @@
-id,name,language,functions,functions_with_kw,tests/data/keywords/c_float.json,parse_error
-0,tests/data/phases/parse/invalid.c,c,1,1,1,1:25

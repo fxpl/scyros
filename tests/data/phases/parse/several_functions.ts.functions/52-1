@@ -1,6 +1,0 @@
-function recursiveSineSum(numbers: number[], index = 0): number {
-    if (index >= numbers.length) {
-        return 0;
-    }
-    return Math.sin(numbers[index]) + recursiveSineSum(numbers, index + 1);
-}

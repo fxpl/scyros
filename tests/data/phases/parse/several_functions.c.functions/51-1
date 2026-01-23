@@ -1,3 +1,0 @@
-double power(double base, int exp) {
-    return pow(base, exp);
-}

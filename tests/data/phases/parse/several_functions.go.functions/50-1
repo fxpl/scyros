@@ -1,6 +1,0 @@
-func approximateSqrt(x, guess float64) float64 {
-	if math.Abs(guess*guess-x) < Epsilon {
-		return guess
-	}
-	return approximateSqrt(x, (guess+x/guess)/2)
-}

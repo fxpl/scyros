@@ -1,8 +1,0 @@
-override def process(values: Seq[Double]): Double = {
-        var sum = 0.0
-        // Handle NaN values by treating them as zero
-        for (v <- values) {
-            sum += (if (v.isNaN) 0.0 else v)
-        }
-        sum / (if (values.isEmpty) 1 else values.size)
-    }

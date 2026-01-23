@@ -1,3 +1,0 @@
-void print(float value) const {
-        std::cout << "Float value: " << value << std::endl;
-    }

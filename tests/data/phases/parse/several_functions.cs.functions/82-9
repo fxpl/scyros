@@ -1,6 +1,0 @@
-public static double StandardDeviation(this IEnumerable<double> numbers)
-        {
-            var mean = numbers.Average();
-            var variance = numbers.Select(x => Math.Pow(x - mean, 2)).Average();
-            return Math.Sqrt(variance);
-        }

@@ -1,9 +1,0 @@
-func deferredDivision(a, b float64) (result float64) {
-	defer func() {
-		if b == 0 {
-			result = math.NaN()
-		}
-	}()
-	result = a / b
-	return
-}

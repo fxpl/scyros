@@ -1,9 +1,0 @@
-def factorial(n: Int): Double = {
-        var result = 1.0
-        var i = 1
-        while (i <= n) {
-            result *= i
-            i += 1
-        }
-        result
-    }

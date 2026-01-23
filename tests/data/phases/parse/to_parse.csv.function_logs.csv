@@ -1,7 +1,0 @@
-id,name,language,functions,functions_with_kw,tests/data/keywords/fp_types.json,tests/data/keywords/fp_transcendental.json,tests/data/keywords/fp_others.json,tests/data/keywords/long_double.json,parse_error
-0,tests/data/phases/parse/SeveralFunctions.java,java,5,5,5,0,0,0,none
-0,tests/data/phases/parse/several_functions.c,c,23,3,3,1,1,1,none
-2,tests/data/phases/parse/several_functions.ts,typescript,6,3,3,1,0,0,none
-1,tests/data/phases/parse/several_functions.cpp,c++,8,7,7,0,3,0,none
-3,tests/data/phases/parse/SeveralFunctions.scala,scala,10,8,8,2,4,0,none
-2,tests/data/phases/parse/several_functions.cs,c#,12,8,8,3,0,0,none

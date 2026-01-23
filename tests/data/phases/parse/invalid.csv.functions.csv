@@ -1,2 +1,0 @@
-id,path,name,position,language,loc,words,tests/data/keywords/c_float.json,loop_statements,loop_nestings,if_statements,if_nestings,functions_calls,function_calls_nestings,params,param_kw_match,parse_error
-0,tests/data/phases/parse/invalid.c.functions/1-5,main,1:5,c,1,4,1,0,0,0,0,0,0,0,0,1:21

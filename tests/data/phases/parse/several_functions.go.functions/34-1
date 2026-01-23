@@ -1,3 +1,0 @@
-func complexMagnitude(c complex128) float64 {
-	return cmplx.Abs(c)
-}

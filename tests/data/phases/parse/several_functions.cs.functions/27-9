@@ -1,6 +1,0 @@
-public static double RecursivePower(double baseValue, int exponent)
-        {
-            if (exponent == 0) return 1;
-            if (exponent < 0) return 1 / RecursivePower(baseValue, -exponent);
-            return baseValue * RecursivePower(baseValue, exponent - 1);
-        }

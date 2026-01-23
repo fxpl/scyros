@@ -1,8 +1,0 @@
-func findFirstAboveThreshold(threshold float64, values []float64) (float64, bool) {
-	for _, v := range values {
-		if v > threshold {
-			return v, true
-		}
-	}
-	return 0, false
-}

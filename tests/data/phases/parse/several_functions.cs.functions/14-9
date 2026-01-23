@@ -1,4 +1,0 @@
-public static (double Sin, double Cos) ComputeSinCos(double angle)
-        {
-            return (Math.Sin(angle), Math.Cos(angle));
-        }

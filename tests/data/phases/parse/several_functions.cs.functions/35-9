@@ -1,4 +1,0 @@
-public static double AverageOfSquares(IEnumerable<double> numbers)
-        {
-            return numbers.Select(x => x * x).Average();
-        }
