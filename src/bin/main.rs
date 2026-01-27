@@ -28,6 +28,7 @@ fn cli() -> Command {
         .subcommand(duplicate_ids::cli())
         .subcommand(forks::cli())
         .subcommand(metadata::cli())
+        .subcommand(pull_request::cli())
         .subcommand(filter_metadata::cli())
         .subcommand(languages::cli())
         .subcommand(filter_languages::cli())
