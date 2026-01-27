@@ -136,3 +136,6 @@ WARNING: Unmatched cancel notification for request id 2
 2026.01.27 08:39:44 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
 2026.01.27 08:39:45 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
 2026.01.27 08:47:20 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.27 09:20:16 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.27 09:40:35 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.
+2026.01.27 09:40:43 INFO  no build target found for /Users/andrea/Documents/repos/software/scyros/tests/data/phases/parse/SeveralFunctions.java. Using fallback presentation compiler.

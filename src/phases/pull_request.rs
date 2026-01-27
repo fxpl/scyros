@@ -220,7 +220,7 @@ pub fn run(
 
     let n_pr: usize = input_file.height();
 
-    logger.log(&format!("  {} PR found.", n_pr))?;
+    logger.log(&format!("  {} projects found.", n_pr))?;
 
     // Name of the output file.
     let default_output_path: String = format!("{}.pulls.csv", &input_path);
@@ -298,7 +298,8 @@ pub fn run(
                     let mut pull_requests: String = String::new();
 
                     // PRs are fetched page by page (100 PRs per page).
-                    for pr_res in scrape_pages(
+
+                    if let Ok(pages) = scrape_pages(
                         &gh,
                         &|per_page, page| {
                             format!("https://api.github.com/repositories/{}/pulls?state=all&per_page={}&page={}", id, per_page, page)
@@ -311,23 +312,23 @@ pub fn run(
                             });
                             Ok(pr_metadata)
                         },
-                    )? {
-                        let obj: PRMetadata = pr_res.unwrap_or_default();
+                    ) {
+                        for pr_res in pages {
+                            let obj: PRMetadata = pr_res.unwrap_or_default();
+                            map_err(
+                                writeln!(
+                                    &mut pull_requests,
+                                    "{}",
+                                    obj.to_csv((id, full_name.to_string()))
+                                ),
+                                "Could not write to string builder",
+                            )?;
+                        }
                         map_err(
-                            writeln!(
-                                &mut pull_requests,
-                                "{}",
-                                obj.to_csv((id, full_name.to_string()))
-                            ),
-                            "Could not write to string builder",
+                            write!(&mut output_file, "{}", pull_requests),
+                            &format!("Could not write to file {}", &output_file_path),
                         )?;
                     }
-
-                    map_err(
-                        write!(&mut output_file, "{}", pull_requests),
-                        &format!("Could not write to file {}", &output_file_path),
-                    )?;
-
                     progress_bar.inc(1);
                     n -= 1;
                 }
@@ -766,7 +767,15 @@ mod tests {
             &mut Logger::new(),
         );
 
-        assert!(run_scraper.is_err());
+        assert!(run_scraper.is_ok());
+
+        let output_df = open_csv(&output_file, None, None);
+        assert!(output_df.is_ok());
+        let output_df = output_df.unwrap();
+        let expected_df = open_csv(&format!("{}.expected", output_file), None, None);
+        assert!(expected_df.is_ok());
+        let expected_df = expected_df.unwrap();
+        assert!(expected_df.equals(&output_df));
         assert!(delete_file(&output_file, true).is_ok());
     }
 }
