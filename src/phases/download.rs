@@ -427,7 +427,7 @@ pub fn run(
     let (tx, rx) = crossbeam_channel::unbounded::<Option<Result<(String, String), Error>>>();
 
     map_err_debug(
-        crossbeam::thread::scope(|s| {
+        crossbeam::thread::scope(|s: &crossbeam::thread::Scope<'_>| {
             // Spawn a thread per github token
             for t in tokens {
                 let my_tx = tx.clone();
@@ -505,7 +505,7 @@ pub fn run(
                 });
             }
 
-            let mut ended_threads = 0;
+            let mut ended_threads: usize = 0;
 
             let progress = ProgressBar::new(n_proj as u64);
             progress.set_style(
@@ -526,9 +526,7 @@ pub fn run(
                         }
                         progress.inc(1);
                     }
-                    Some(Err(e)) => {
-                        panic!("Error in child thread: {}", e);
-                    }
+                    Some(Err(e)) => e.chain("Error in child thread").to_res()?,
                     None => {
                         // When a None message is received, the sender thread is considered finished.
                         // When all threads are finished, the main thread can exit.
@@ -540,9 +538,10 @@ pub fn run(
                 }
             }
             progress.finish();
+            Ok(())
         }),
         "Error in thread",
-    )
+    )?
 }
 
 /// Downloads a GitHub repository and filters the files according to the provided extensions and keywords.

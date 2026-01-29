@@ -104,6 +104,7 @@ pub fn cli() -> Command {
 /// * `force` - Whether to override the output file if it already exists.
 /// * `similarity` - The similarity criterion for duplicate detection (exact match or invariant to token order and whitespaces).
 /// * `threads` - The number of threads to use.
+/// * `input_header` - The name of the column storing file paths in the input CSV file.
 /// * `logger` - The logger displaying the progress.
 ///
 /// # Returns
@@ -269,9 +270,7 @@ pub fn run(
                             progress.inc(1);
                         }
                     },
-                    Some(Err(e)) => {
-                        panic!("Error in child thread: {}", e);
-                    }
+                    Some(Err(e)) => e.chain("Error in child thread").to_res()?,
                     None => {
                         // When a None message is received, the sender thread is considered finished.
                         // When all threads are finished, the main thread can exit.
@@ -362,9 +361,10 @@ pub fn run(
             let _ = logger.log_completion(&format!("Writing to {}", output_path), || {
                 write_csv(output_path, &mut output_df)
             });
+            Ok::<(), Error>(())
         }),
         "Error in thread",
-    )?;
+    )??;
 
     Ok(())
 }
