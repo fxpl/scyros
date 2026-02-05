@@ -328,9 +328,10 @@ pub fn run(
                         cache.get(&id).unwrap().clone()
                     } else {
                         match gh.request(&format!("https://api.github.com/repos/{}", full_name)) {
-                            Ok(json) => ProjectMetadata::parse_json(&json, ())?
+                            Ok(json) => { ProjectMetadata::parse_json(&json, ())? }
                                 .to_csv((id, full_name.to_string())),
-                            Err(e) => ProjectMetadata::default().to_csv((id, e.to_string())),
+                            Err(e) => ProjectMetadata::default()
+                                .to_csv((id, e.to_string().trim().to_string())),
                         }
                     };
 
@@ -467,7 +468,11 @@ impl ToCSV for ProjectMetadata {
 impl FromGitHub for ProjectMetadata {
     type Complement = ();
     fn parse_json(json: &JsonValue, _complement: ()) -> Result<Self, Error> {
-        let language = get_field::<String>(json, "language")?;
+        let language: String = if !json["language"].is_null() {
+            get_field::<String>(json, "language")?
+        } else {
+            String::new()
+        };
         let created: i64 = Self::parse_date_time(json, "created_at")?;
         let pushed: i64 = Self::parse_date_time(json, "pushed_at")?;
         let updated: i64 = Self::parse_date_time(json, "updated_at")?;
