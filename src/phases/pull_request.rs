@@ -233,7 +233,7 @@ pub fn run(
         logger.log_completion("Resuming progress", || {
             Ok(if Path::new(output_file_path).exists() {
                 let df_res: DataFrame = open_csv(
-                    input_path,
+                    output_file_path,
                     Some(Schema::from_iter(vec![Field::new(
                         ids.into(),
                         DataType::UInt32,
