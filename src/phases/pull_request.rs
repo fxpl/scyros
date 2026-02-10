@@ -231,6 +231,7 @@ pub fn run(
         HashSet::new()
     } else {
         logger.log_completion("Resuming progress", || {
+            // Open output file if it exists and load the ids of the projects that have already been processed.
             Ok(if Path::new(output_file_path).exists() {
                 let df_res: DataFrame = open_csv(
                     output_file_path,
@@ -704,9 +705,6 @@ mod tests {
     ) {
         assert!(std::path::Path::new(&input_file).exists());
 
-        // Remove the output files if they exist.
-        assert!(delete_file(&output_file, true).is_ok());
-
         let tokens_file: String = "ghtokens.csv".to_string();
 
         let run_scraper: Result<(), Error> = run(
@@ -771,29 +769,26 @@ mod tests {
             &input_path,
             &format!("{}/repos_complete.csv", TEST_DATA),
             &format!("{}/prs2", TEST_DATA),
-            &vec![
-                format!("{}/prs2/5983/1128315983/1128315983_1.csv", TEST_DATA),
-                format!("{}/prs2/5983/1128315983/1128315983_2.csv", TEST_DATA),
-            ],
+            &vec![],
         );
     }
 
     #[test]
     fn test_pr_with_partial_output() {
         let input_path: String = format!("{}/repos3.csv", TEST_DATA);
+        let output_path: String = format!("{}/repos_partial_output.csv.temp", TEST_DATA);
         let copy_result: Result<u64, std::io::Error> = std::fs::copy(
             &format!("{}/repos_partial_output.csv", TEST_DATA),
-            &format!("{}/repos_partial_output.csv.temp", TEST_DATA),
+            &output_path,
         );
         assert!(copy_result.is_ok());
+        assert!(std::path::Path::new(&output_path).exists());
+
         test_phase_pull_request(
             &input_path,
-            &format!("{}/repos_partial_output.csv.temp", TEST_DATA),
+            &output_path,
             &format!("{}/prs3", TEST_DATA),
-            &vec![
-                format!("{}/prs3/5983/1128315983/1128315983_1.csv", TEST_DATA),
-                format!("{}/prs3/5983/1128315983/1128315983_2.csv", TEST_DATA),
-            ],
+            &vec![],
         );
     }
 
