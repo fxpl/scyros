@@ -1,0 +1,2 @@
+id,name,pr_number,file_path,user,user_id,created_at,updated_at,closed_at,merged_at,draft,state
+1128315983,corradobohm1923/test_repo,2,tests/data/phases/pull_request/prs/5983/1128315983/1128315983_2.csv,corradobohm1923,210552196,1770716876,1770716894,1770716894,1770716894,0,closed

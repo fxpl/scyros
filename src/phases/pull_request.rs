@@ -691,25 +691,27 @@ fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     const TEST_DATA: &str = "tests/data/phases/pull_request";
 
-    #[test]
-    fn test_language_scraper() {
-        let input_file: String = format!("{}/repos.csv", TEST_DATA);
-        let output_file: String = format!("{}.pulls.csv", input_file);
+    fn test_phase_pull_request(
+        input_file: &str,
+        output_file: &str,
+        target: &str,
+        pr_paths: &Vec<String>,
+    ) {
         assert!(std::path::Path::new(&input_file).exists());
 
         // Remove the output files if they exist.
         assert!(delete_file(&output_file, true).is_ok());
 
         let tokens_file: String = "ghtokens.csv".to_string();
-        let target: String = format!("{}/prs", TEST_DATA);
 
         let run_scraper: Result<(), Error> = run(
             &input_file,
-            None,
+            Some(&output_file.to_string()),
             &tokens_file,
             0,
             false,
@@ -721,16 +723,18 @@ mod tests {
         );
         assert!(run_scraper.is_ok());
 
-        let pr_discussion_path: String = format!("{}/5983/1128315983/1128315983_1.csv", target);
-        let pr_discussion = open_csv(&output_file, None, None);
-        assert!(pr_discussion.is_ok());
-        let pr_discussion = pr_discussion.unwrap();
+        for pr_path in pr_paths {
+            let pr_discussion = open_csv(pr_path, None, None);
+            assert!(pr_discussion.is_ok());
+            let pr_discussion = pr_discussion.unwrap();
 
-        let pr_discussion_expected = open_csv(&format!("{}.expected", &output_file), None, None);
-        assert!(pr_discussion_expected.is_ok());
-        let pr_discussion_expected = pr_discussion_expected.unwrap();
+            let pr_discussion_expected = open_csv(&format!("{}.expected", pr_path), None, None);
+            assert!(pr_discussion_expected.is_ok());
+            let pr_discussion_expected = pr_discussion_expected.unwrap();
 
-        assert_eq!(pr_discussion, pr_discussion_expected);
+            assert_eq!(pr_discussion, pr_discussion_expected);
+            assert!(delete_file(pr_path, false).is_ok());
+        }
 
         let output_df = open_csv(&output_file, None, None);
         assert!(output_df.is_ok());
@@ -739,43 +743,67 @@ mod tests {
         assert!(expected_df.is_ok());
         let expected_df = expected_df.unwrap();
         assert!(expected_df.equals(&output_df));
-
-        assert!(delete_file(&pr_discussion_path, false).is_ok());
         assert!(delete_file(&output_file, false).is_ok());
     }
 
     #[test]
-    fn test_language_scraper_inexistent() {
-        let input_file: String = format!("{}/invalid.csv", TEST_DATA);
-        let output_file: String = format!("{}.pulls.csv", input_file);
-        assert!(std::path::Path::new(&input_file).exists());
-        // Remove the output files if they exist.
-        assert!(delete_file(&output_file, true).is_ok());
-
-        let tokens_file: String = "ghtokens.csv".to_string();
-
-        let run_scraper: Result<(), Error> = run(
-            &input_file,
-            None,
-            &tokens_file,
-            0,
-            false,
-            "id",
-            "name",
-            &format!("{}/target", TEST_DATA),
-            None,
-            &mut Logger::new(),
+    fn test_pr_empty_output() {
+        test_phase_pull_request(
+            &format!("{}/repos.csv", TEST_DATA),
+            &format!("{}/repos.csv.pulls.csv", TEST_DATA),
+            &format!("{}/prs", TEST_DATA),
+            &vec![
+                format!("{}/prs/5983/1128315983/1128315983_1.csv", TEST_DATA),
+                format!("{}/prs/5983/1128315983/1128315983_2.csv", TEST_DATA),
+            ],
         );
+    }
 
-        assert!(run_scraper.is_ok());
+    #[test]
+    fn test_pr_with_output() {
+        let input_path: String = format!("{}/repos2.csv", TEST_DATA);
+        let copy_result: Result<u64, std::io::Error> = std::fs::copy(
+            &format!("{}/repos_complete.csv.expected", TEST_DATA),
+            &format!("{}/repos_complete.csv", TEST_DATA),
+        );
+        assert!(copy_result.is_ok());
+        test_phase_pull_request(
+            &input_path,
+            &format!("{}/repos_complete.csv", TEST_DATA),
+            &format!("{}/prs2", TEST_DATA),
+            &vec![
+                format!("{}/prs2/5983/1128315983/1128315983_1.csv", TEST_DATA),
+                format!("{}/prs2/5983/1128315983/1128315983_2.csv", TEST_DATA),
+            ],
+        );
+    }
 
-        let output_df = open_csv(&output_file, None, None);
-        assert!(output_df.is_ok());
-        let output_df = output_df.unwrap();
-        let expected_df = open_csv(&format!("{}.expected", output_file), None, None);
-        assert!(expected_df.is_ok());
-        let expected_df = expected_df.unwrap();
-        assert!(expected_df.equals(&output_df));
-        assert!(delete_file(&output_file, true).is_ok());
+    #[test]
+    fn test_pr_with_partial_output() {
+        let input_path: String = format!("{}/repos3.csv", TEST_DATA);
+        let copy_result: Result<u64, std::io::Error> = std::fs::copy(
+            &format!("{}/repos_partial_output.csv", TEST_DATA),
+            &format!("{}/repos_partial_output.csv.temp", TEST_DATA),
+        );
+        assert!(copy_result.is_ok());
+        test_phase_pull_request(
+            &input_path,
+            &format!("{}/repos_partial_output.csv.temp", TEST_DATA),
+            &format!("{}/prs3", TEST_DATA),
+            &vec![
+                format!("{}/prs3/5983/1128315983/1128315983_1.csv", TEST_DATA),
+                format!("{}/prs3/5983/1128315983/1128315983_2.csv", TEST_DATA),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_language_scraper_inexistent() {
+        test_phase_pull_request(
+            &format!("{}/invalid.csv", TEST_DATA),
+            &format!("{}/invalid.csv.pulls.csv", TEST_DATA),
+            &format!("{}/prs_invalid", TEST_DATA),
+            &vec![],
+        );
     }
 }
