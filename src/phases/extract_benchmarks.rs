@@ -13,14 +13,16 @@
 // limitations under the License.
 
 use crate::utils::csv::CSVFile;
-use crate::utils::error::*;
+use crate::utils::dataframes;
 use crate::utils::fs::*;
 use crate::utils::logger::Logger;
+use anyhow::{anyhow, bail, Context, Result};
 use clang::{Clang, Entity, EntityKind, Index, Usr};
 use clap::{Arg, ArgAction, Command};
 use indicatif::ProgressBar;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
+use polars::frame::DataFrame;
 use polars::prelude::BooleanType;
 use polars::prelude::ChunkedArray;
 use polars::prelude::{AnyValue, DataType, Field, Schema};
@@ -39,13 +41,14 @@ use std::{
     iter::FromIterator as _,
     path::PathBuf,
 };
+use tracing::{info, warn};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
     Command::new("extract_benchmarks")
-        .about("Extract self-contained C files containing all the dependencies of specified functions.")
+        .about("(Experimental) Extract self-contained C files containing all the dependencies of specified functions.")
         .long_about(
-            "Extracts self-contained C files containing all the dependencies of specified functions."
+            "(Experimental) Extracts self-contained C files containing all the dependencies of specified functions."
 
         )
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
@@ -174,13 +177,15 @@ struct EntityData {
 }
 
 impl EntityData {
-    fn from_entity(e: &Entity) -> Result<Self, Error> {
+    fn from_entity(e: &Entity) -> Result<Self> {
         let mut children: Vec<EntityData> = Vec::new();
         for child in e.get_children().iter() {
             children.push(EntityData::from_entity(child)?);
         }
 
-        let range = ok_or_else(e.get_range(), "Could not get entity range")?;
+        let range = e
+            .get_range()
+            .with_context(|| "Could not get entity range")?;
         let start = range.get_start().get_spelling_location();
         let end = range.get_end().get_spelling_location();
         let file = start.file.map(|f| f.get_path());
@@ -200,12 +205,14 @@ impl EntityData {
         })
     }
 
-    fn extract_code(&self) -> Result<Vec<u8>, Error> {
-        let file = ok_or_else(self.file.clone(), "Could not get entity file")?;
-        let src = map_err(read(&file), &format!("Could not read file {:?}", file))?;
-        let mut code = src
+    fn extract_code(&self) -> Result<Vec<u8>> {
+        let file: PathBuf = self
+            .file
+            .clone()
+            .with_context(|| "Error while cloning file path")?;
+        let mut code = read(&file)?
             .get(self.start..self.end)
-            .ok_or_else(|| Error::new("Invalid range for entity code extraction"))?
+            .with_context(|| "Invalid range for entity code extraction")?
             .to_vec();
         if matches!(
             self.kind,
@@ -342,7 +349,7 @@ impl Workspace {
         root_function: &str,
         cache: bool,
         timeout: u64,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self> {
         let candidates = VecDeque::from(files_sorted_by_proximity(project_root, root_file, "c")?);
 
         Ok(Self {
@@ -362,15 +369,15 @@ impl Workspace {
         })
     }
 
-    fn check_timeout(&self) -> Result<(), Error> {
+    fn check_timeout(&self) -> Result<()> {
         if self.creation_time.elapsed().as_secs() > self.timeout {
-            Error::new("Timeout reached").to_res()
+            bail!("Timeout reached")
         } else {
             Ok(())
         }
     }
 
-    fn index_file(&mut self, file: &PathBuf, search_key: Option<&EntityKey>) -> Result<(), Error> {
+    fn index_file(&mut self, file: &PathBuf, search_key: Option<&EntityKey>) -> Result<()> {
         self.check_timeout()?;
         // Read the file and extract all #include<...> directives
         if let Ok(src) = std::fs::read_to_string(file) {
@@ -388,14 +395,12 @@ impl Workspace {
         }
 
         let index = Index::new(&self.clang, false, false);
-        let tu = map_err(
-            index
-                .parser(file)
-                .skip_function_bodies(false)
-                .detailed_preprocessing_record(true)
-                .parse(),
-            &format!("Could not parse file {:?}", file.to_str()),
-        )?;
+        let tu = index
+            .parser(file)
+            .skip_function_bodies(false)
+            .detailed_preprocessing_record(true)
+            .parse()
+            .with_context(|| format!("Could not parse file {:?}", file.to_str()))?;
         let root = tu.get_entity();
 
         let mut map = HashMap::<EntityKey, EntityData>::new();
@@ -444,7 +449,7 @@ impl Workspace {
         Ok(())
     }
 
-    fn discover_candidates(&mut self, key: &EntityKey) -> Result<(), Error> {
+    fn discover_candidates(&mut self, key: &EntityKey) -> Result<()> {
         self.check_timeout()?;
         if self.cache {
             if !self.decl.contains_key(key) && self.candidates.is_empty() {
@@ -475,24 +480,24 @@ impl Workspace {
         }
     }
 
-    fn discover_root(&mut self) -> Result<&EntityKey, Error> {
+    fn discover_root(&mut self) -> Result<&EntityKey> {
         self.check_timeout()?;
-        let root_file = ok_or_else(self.candidates.pop_front(), "No root file found")?;
-        map_err(
-            self.index_file(&root_file, None),
-            &format!("Could not index root file {:?}", root_file),
-        )?;
+        let root_file = self
+            .candidates
+            .pop_front()
+            .with_context(|| "No root file found")?;
+        self.index_file(&root_file, None)
+            .with_context(|| format!("Could not index root file {:?}", root_file))?;
         for key in self.decl.keys() {
             if key.name.as_deref() == Some(&self.root_function_name) {
                 return Ok(key);
             }
         }
-        Error::new(&format!(
+        bail!(
             "Root function {} not found in {} (potentially due to conditional compilation)",
             self.root_function_name,
             root_file.display()
-        ))
-        .to_res()
+        )
     }
 
     fn explore_entity(
@@ -500,7 +505,7 @@ impl Workspace {
         key: &EntityKey,
         explored: &mut HashSet<EntityKey>,
         to_explore: &mut VecDeque<EntityKey>,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_timeout()?;
         let _ = self.add_node(key);
         explored.insert(key.clone());
@@ -519,48 +524,52 @@ impl Workspace {
         Ok(())
     }
 
-    fn add_node(&mut self, key: &EntityKey) -> Result<(), Error> {
+    fn add_node(&mut self, key: &EntityKey) -> Result<()> {
         self.check_timeout()?;
         if !self.node_indices.contains_key(key) {
             let idx = self.dependencies.add_node(key.clone());
             self.node_indices.insert(key.clone(), idx);
             Ok(())
         } else {
-            Error::new("Node already exists").to_res()
+            bail!("Node already exists")
         }
     }
 
-    fn add_edge(&mut self, from: &EntityKey, to: &EntityKey) -> Result<(), Error> {
+    fn add_edge(&mut self, from: &EntityKey, to: &EntityKey) -> Result<()> {
         self.check_timeout()?;
         if from == to {
-            Error::new("Cannot add self-loop edges").to_res()
+            bail!("Cannot add self-loop edges")
         } else {
-            let from_idx = ok_or_else(self.node_indices.get(from), "From node not found")?;
-            let to_idx = ok_or_else(self.node_indices.get(to), "To node not found")?;
+            let from_idx = self
+                .node_indices
+                .get(from)
+                .with_context(|| "From node not found")?;
+            let to_idx = self
+                .node_indices
+                .get(to)
+                .with_context(|| "To node not found")?;
             self.dependencies.add_edge(*from_idx, *to_idx, ());
             Ok(())
         }
     }
 
-    fn resolve_dependencies(&mut self) -> Result<Vec<EntityKey>, Error> {
+    fn resolve_dependencies(&mut self) -> Result<Vec<EntityKey>> {
         self.check_timeout()?;
         let root_key = self.discover_root()?;
         let mut explored: HashSet<EntityKey> = HashSet::new();
         let mut to_explore: VecDeque<EntityKey> = VecDeque::new();
         to_explore.push_back(root_key.clone());
         while !to_explore.is_empty() {
-            let key = ok_or_else(to_explore.pop_front(), "No more entities to explore")?;
-            map_err(
-                self.explore_entity(&key, &mut explored, &mut to_explore),
-                &format!("Error exploring entity {}", key),
-            )?;
+            let key = to_explore
+                .pop_front()
+                .ok_or_else(|| anyhow!("No more entities to explore"))?;
+            self.explore_entity(&key, &mut explored, &mut to_explore)
+                .with_context(|| format!("Error exploring entity {}", key))?;
         }
         // Topological sort of the dependency graph
         // Safe unwrap
-        let mut sorted_idx = map_err_debug(
-            toposort(&self.dependencies, None),
-            "Cycle detected in dependency graph",
-        )?;
+        let mut sorted_idx = toposort(&self.dependencies, None)
+            .map_err(|_| anyhow!("Cycle detected in dependency graph"))?;
         sorted_idx.reverse();
 
         Ok(sorted_idx
@@ -570,7 +579,7 @@ impl Workspace {
             .collect::<Vec<_>>())
     }
 
-    fn emit_code(&self, keys: &[EntityKey]) -> Result<Vec<u8>, Error> {
+    fn emit_code(&self, keys: &[EntityKey]) -> Result<Vec<u8>> {
         self.check_timeout()?;
         let mut out_text = Vec::new();
 
@@ -617,10 +626,10 @@ pub fn run(
     overwrite: bool,
     thread: usize,
     timeout: u64,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     // Open the input file and filter out duplicate ids
-    let input_df = logger.log_completion("Loading input file and filtering duplicates", || {
+    let input_df = logger.run_task("Loading input file and filtering duplicates", || {
         open_csv(
             input_file_path,
             Some(Schema::from_iter(vec![
@@ -632,30 +641,19 @@ pub fn run(
         )
     })?;
 
-    let id_col = map_err(
-        map_err(
-            input_df.column("id"),
-            &format!("Could not get 'id' column from {}", input_file_path),
-        )?
-        .u32(),
-        &format!(
-            "Could not convert 'id' column to u32 from {}",
-            input_file_path
-        ),
-    )?;
+    let id_col = dataframes::u32(&input_df, "id")?;
 
     let mut unique_ids: HashSet<u32> = HashSet::new();
     let mut mask: Vec<bool> = Vec::new();
 
-    for id in id_col.into_iter().flatten() {
+    for id in id_col {
         mask.push(!unique_ids.contains(&id));
         unique_ids.insert(id);
     }
 
-    let mut input_file = map_err(
-        input_df.filter(&mask.into_iter().collect::<ChunkedArray<BooleanType>>()),
-        &format!("Could not filter input file {}", input_file_path),
-    )?;
+    let mut input_file = input_df
+        .filter(&mask.into_iter().collect::<ChunkedArray<BooleanType>>())
+        .with_context(|| format!("Could not filter input file {}", input_file_path))?;
 
     let project_input = format!("{}/{}", target, "tmp_in.csv");
 
@@ -678,7 +676,7 @@ pub fn run(
         thread,
     )?;
 
-    let projects_df = logger.log_completion("Loading downloaded projects", || {
+    let projects_df: DataFrame = logger.run_task("Loading downloaded projects", || {
         open_csv(
             &projects_output,
             Some(Schema::from_iter(vec![
@@ -690,32 +688,15 @@ pub fn run(
     })?;
 
     let id_to_projects: HashMap<u32, String> = {
-        let ids = map_err(
-            map_err(
-                projects_df.column("id"),
-                "Could not get 'id' column from projects_df",
-            )?
-            .u32(),
-            "Could not convert 'id' column to u32",
-        )?;
-        let paths = map_err(
-            map_err(
-                projects_df.column("path"),
-                "Could not get 'path' column from projects_df",
-            )?
-            .str(),
-            "Could not convert 'path' column to utf8",
-        )?;
+        let ids = dataframes::u32(&projects_df, "id")?;
+        let paths = projects_df.column("path")?.str()?;
         ids.into_iter()
             .zip(paths)
-            .filter_map(|(id_opt, path_opt)| match (id_opt, path_opt) {
-                (Some(id), Some(path)) => Some((id, path.to_string())),
-                _ => None,
-            })
+            .filter_map(|(id, path_opt)| path_opt.map(|path| (id, path.to_string())))
             .collect()
     };
 
-    let input_file = logger.log_completion("Loading input file for extra", || {
+    let input_file: DataFrame = logger.run_task("Loading input file for extra", || {
         open_csv(
             input_file_path,
             Some(Schema::from_iter(vec![
@@ -732,7 +713,7 @@ pub fn run(
     let mut shuffled_idx = (0..n_fun).collect::<Vec<usize>>();
 
     // Load the ids from the input file in random order.
-    logger.log_completion("Loading functions in random order", || {
+    logger.run_task("Loading functions in random order", || {
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         shuffled_idx.shuffle(&mut rng);
         Ok(())
@@ -776,7 +757,7 @@ pub fn run(
     let previous_results: HashSet<(String, String)> = if overwrite {
         HashSet::new()
     } else {
-        logger.log_completion("Resuming progress (parsing)", || {
+        logger.run_task("Resuming progress (parsing)", || {
             if PathBuf::from(&output_path).exists() {
                 let output_df = open_csv(
                     output_path,
@@ -786,22 +767,19 @@ pub fn run(
                     ])),
                     Some(vec!["file", "function"]),
                 )?;
-                let columns = map_err(
-                    output_df.columns(["file", "function"]),
-                    "Could not extract the file and function columns from the output file",
-                )?;
-                let file_col = map_err(
-                    ok_or_else(columns.first(), "Could not get the file column")?.str(),
-                    "Could not convert the file column to string",
-                )?
-                .iter()
-                .map(|x| x.unwrap());
-                let function_col = map_err(
-                    ok_or_else(columns.get(1), "Could not get the function column")?.str(),
-                    "Could not convert the function column to string",
-                )?
-                .iter()
-                .map(|x| x.unwrap());
+                let columns = output_df.columns(["file", "function"])?;
+                let file_col = columns
+                    .first()
+                    .with_context(|| "Could not get the file column")?
+                    .str()?
+                    .iter()
+                    .map(|x| x.unwrap());
+                let function_col = columns
+                    .get(1)
+                    .with_context(|| "Could not get the function column")?
+                    .str()?
+                    .iter()
+                    .map(|x| x.unwrap());
                 Ok(file_col
                     .zip(function_col)
                     .map(|(f, func)| (f.to_string(), func.to_string()))
@@ -812,10 +790,10 @@ pub fn run(
         })?
     };
 
-    logger.log(&format!(
+    info!(
         "Resuming from {} previously extracted functions",
         previous_results.len()
-    ))?;
+    );
 
     // Create a progress bar
     let progress_bar: ProgressBar = ProgressBar::new(n_fun as u64);
@@ -833,44 +811,34 @@ pub fn run(
     for row in shuffled_rows {
         match row {
             Ok((_, id, rel_path, function)) => {
-                let proj_path = ok_or_else(
-                    id_to_projects.get(&id),
-                    &format!("Could not get project path for id {}", id),
-                )?;
+                let proj_path = id_to_projects
+                    .get(&id)
+                    .with_context(|| format!("Could not get project path for id {}", id))?;
                 if proj_path == "error" {
                     let csv_row = format!("{},{},{},{}", id, rel_path, function, "error");
-                    map_err(
-                        writeln!(&mut output_file, "{}", csv_row),
-                        &format!("Could not write to file {}", &output_path),
-                    )?;
+                    writeln!(&mut output_file, "{}", csv_row)?;
                 } else {
                     let abs_path = format!("{}/{}", proj_path, rel_path);
                     let out_path = format!("{}/benchmarks/{}-{}.c", target, id, function);
                     if !previous_results.contains(&(abs_path.clone(), function.to_owned())) {
-                        logger.log(&format!(
+                        info!(
                             "Extracting benchmark for function {} in file {}",
                             function, abs_path
-                        ))?;
+                        );
                         match extract_root(proj_path, &abs_path, function, &out_path, timeout) {
                             Ok(()) => {
                                 let csv_row =
                                     format!("{},{},{},{}", id, abs_path, function, out_path);
-                                map_err(
-                                    writeln!(&mut output_file, "{}", csv_row),
-                                    &format!("Could not write to file {}", &output_path),
-                                )?;
+                                writeln!(&mut output_file, "{}", csv_row)?;
                             }
                             Err(e) => {
                                 let csv_row =
                                     format!("{},{},{},{}", id, abs_path, function, "error");
-                                map_err(
-                                    writeln!(&mut output_file, "{}", csv_row),
-                                    &format!("Could not write to file {}", &output_path),
-                                )?;
-                                logger.log_warning(&format!(
+                                writeln!(&mut output_file, "{}", csv_row)?;
+                                warn!(
                                     "Could not extract benchmark for function {} in file {}:\n {}",
                                     function, abs_path, e
-                                ))?;
+                                );
                             }
                         }
                     }
@@ -879,10 +847,7 @@ pub fn run(
                 progress_bar.inc(1);
             }
             Err(idx) => {
-                map_err(
-                    row,
-                    &format!("Could not parse row {} in the input file", idx),
-                )?;
+                bail!("Could not parse row {} in the input file", idx)
             }
         }
     }
@@ -890,7 +855,7 @@ pub fn run(
     Ok(())
 }
 
-pub fn run_with_timeout<F, T>(dur: Duration, f: F) -> Result<T, Error>
+pub fn run_with_timeout<F, T>(dur: Duration, f: F) -> Result<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
@@ -900,7 +865,7 @@ where
         let _ = tx.send(f()); // ignore send errors if receiver dropped
     });
 
-    map_err(rx.recv_timeout(dur), "Operation timed out")
+    rx.recv_timeout(dur).with_context(|| "Operation timed out")
 }
 
 fn extract_root(
@@ -909,11 +874,11 @@ fn extract_root(
     root_name: &str,
     out_file: &str,
     timeout: u64,
-) -> Result<(), Error> {
+) -> Result<()> {
     let project = check_path(project)?;
     let root_file = check_path(root_file)?;
 
-    let clang = map_err(Clang::new(), "Could not create Clang instance.")?;
+    let clang = Clang::new().map_err(|_| anyhow!("Could not initialize Clang"))?;
     let mut ws = Workspace::new(clang, &project, &root_file, root_name, true, timeout)?;
     let entities = ws.resolve_dependencies()?;
     let code = ws.emit_code(&entities)?;
@@ -924,6 +889,7 @@ fn extract_root(
 #[cfg(test)]
 mod tests {
 
+    use anyhow::ensure;
     use clang::TranslationUnit;
 
     use super::*;
@@ -932,106 +898,95 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn extract_benchmarks_test() {
+    fn extract_benchmarks_test() -> Result<()> {
         const STACK_MAIN: &str = "main";
         const SIMPLE_MAIN: &str = "helper";
         const EXT_MAIN: &str = "main";
         const CONST_MAIN: &str = "add";
         const MACRO_MAIN: &str = "main";
 
-        fn extract_code_test() {
+        fn extract_code_test() -> Result<()> {
             let path = format!("{}/simple/simple.c", TEST_DATA);
-            let clang: Clang = Clang::new().unwrap();
+            let clang: Clang = Clang::new().map_err(|_| anyhow!("Could not initialize Clang"))?;
             let index: Index = Index::new(&clang, true, true);
 
-            let tu: TranslationUnit = index.parser(&path).parse().unwrap();
+            let tu: TranslationUnit = index.parser(&path).parse()?;
             let entity: Entity<'_> = tu.get_entity();
-            let data = EntityData::from_entity(&entity);
-            assert!(data.is_ok());
-            let data = data.unwrap();
+            let data = EntityData::from_entity(&entity)?;
 
-            let code = data.extract_code();
-            assert!(code.is_ok());
-            let code = code.unwrap();
-            assert_eq!(code, std::fs::read(path).unwrap());
+            let code = data.extract_code()?;
+            assert_eq!(code, std::fs::read(path)?);
+            Ok(())
         }
 
-        fn stack_workspace() -> Workspace {
-            let clang: Clang = Clang::new().unwrap();
+        fn stack_workspace() -> Result<Workspace> {
+            let clang: Clang = Clang::new().map_err(|_| anyhow!("Could not initialize Clang"))?;
             let project_root = PathBuf::from(format!("{}/stack_project", TEST_DATA));
             let root_file = project_root.join("stack.c");
             let root_function = STACK_MAIN;
-            let ws = Workspace::new(clang, &project_root, &root_file, root_function, true, 5);
-            assert!(ws.is_ok());
-            ws.unwrap()
+            Workspace::new(clang, &project_root, &root_file, root_function, true, 5)
         }
 
-        fn simple_workspace() -> Workspace {
-            let clang: Clang = Clang::new().unwrap();
+        fn simple_workspace() -> Result<Workspace> {
+            let clang: Clang = Clang::new().map_err(|_| anyhow!("Could not initialize Clang"))?;
             let project_root = PathBuf::from(format!("{}/simple", TEST_DATA));
             let root_file = project_root.join("simple.c");
             let root_function = "helper";
-            let ws = Workspace::new(clang, &project_root, &root_file, root_function, true, 5);
-            assert!(ws.is_ok());
-            ws.unwrap()
+            Workspace::new(clang, &project_root, &root_file, root_function, true, 5)
         }
 
-        fn ext_workspace() -> Workspace {
-            let clang: Clang = Clang::new().unwrap();
+        fn ext_workspace() -> Result<Workspace> {
+            let clang: Clang = Clang::new().map_err(|_| anyhow!("Could not initialize Clang"))?;
             let project_root = PathBuf::from(format!("{}/ext", TEST_DATA));
             let root_file = project_root.join("ext.c");
             let root_function = EXT_MAIN;
-            let ws = Workspace::new(clang, &project_root, &root_file, root_function, true, 5);
-            assert!(ws.is_ok());
-            ws.unwrap()
+            Workspace::new(clang, &project_root, &root_file, root_function, true, 5)
         }
 
-        fn const_workspace() -> Workspace {
-            let clang: Clang = Clang::new().unwrap();
+        fn const_workspace() -> Result<Workspace> {
+            let clang: Clang = Clang::new().map_err(|_| anyhow!("Could not initialize Clang"))?;
             let project_root = PathBuf::from(format!("{}/const", TEST_DATA));
             let root_file = project_root.join("add.c");
-            let ws = Workspace::new(clang, &project_root, &root_file, CONST_MAIN, true, 5);
-            assert!(ws.is_ok());
-            ws.unwrap()
+            Workspace::new(clang, &project_root, &root_file, CONST_MAIN, true, 5)
         }
 
-        fn macro_workspace() -> Workspace {
-            let clang: Clang = Clang::new().unwrap();
+        fn macro_workspace() -> Result<Workspace> {
+            let clang: Clang = Clang::new().map_err(|_| anyhow!("Could not initialize Clang"))?;
             let project_root = PathBuf::from(format!("{}/macro", TEST_DATA));
             let root_file = project_root.join("abs.c");
-            let ws = Workspace::new(clang, &project_root, &root_file, MACRO_MAIN, true, 5);
-            assert!(ws.is_ok());
-            ws.unwrap()
+            Workspace::new(clang, &project_root, &root_file, MACRO_MAIN, true, 5)
         }
 
-        fn workspace_new_test() {
-            let ws = stack_workspace();
+        fn workspace_new_test() -> Result<()> {
+            let ws = stack_workspace()?;
             assert_eq!(ws.root_function_name, STACK_MAIN);
             assert_eq!(ws.candidates.len(), 1);
             assert_eq!(
                 ws.candidates[0],
                 PathBuf::from(format!("{}/stack_project/stack.c", TEST_DATA))
             );
-            assert!(ws.decl.is_empty());
-            assert!(ws.dependencies.node_count() == 0);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.is_empty());
+            ensure!(ws.decl.is_empty());
+            assert_eq!(ws.dependencies.node_count(), 0);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            ensure!(ws.node_indices.is_empty());
+            Ok(())
         }
 
-        fn workspace_index_file_test() {
+        fn workspace_index_file_test() -> Result<()> {
             let file = PathBuf::from(format!("{}/stack_project/stack.c", TEST_DATA));
-            let mut ws = stack_workspace();
-            assert!(ws.index_file(&file, None).is_ok());
+            let mut ws = stack_workspace()?;
+            ws.index_file(&file, None)?;
             assert_eq!(ws.root_function_name, STACK_MAIN);
             assert_eq!(ws.candidates.len(), 1);
             assert_eq!(ws.candidates[0], file);
             assert_eq!(ws.decl.len(), 14);
-            assert!(ws.dependencies.node_count() == 0);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.is_empty());
+            assert_eq!(ws.dependencies.node_count(), 0);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            ensure!(ws.node_indices.is_empty());
+            Ok(())
         }
 
-        fn workspace_discover_candidates_test() {
+        fn workspace_discover_candidates_test() -> Result<()> {
             let key = {
                 let path = format!("{}/stack_project/stack.c", TEST_DATA);
                 let clang: Clang = Clang::new().unwrap();
@@ -1042,74 +997,79 @@ mod tests {
                 EntityKey::from_entity(&entity)
             };
 
-            let mut ws = stack_workspace();
-            assert!(ws.discover_candidates(&key).is_ok());
+            let mut ws = stack_workspace()?;
+            ws.discover_candidates(&key)?;
             assert_eq!(ws.root_function_name, STACK_MAIN);
-            assert!(ws.candidates.is_empty());
-            assert!(ws.decl.contains_key(&key));
-            assert!(ws.dependencies.node_count() == 0);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.is_empty());
+            ensure!(ws.candidates.is_empty());
+            ensure!(ws.decl.contains_key(&key));
+            assert_eq!(ws.dependencies.node_count(), 0);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            ensure!(ws.node_indices.is_empty());
+            Ok(())
         }
 
-        fn workspace_discover_root_stack_test() {
-            let mut ws = stack_workspace();
-            assert!(ws.discover_root().is_ok());
+        fn workspace_discover_root_stack_test() -> Result<()> {
+            let mut ws = stack_workspace()?;
+            ws.discover_root()?;
             assert_eq!(ws.root_function_name, STACK_MAIN);
-            assert!(ws.candidates.is_empty());
-            assert!(ws
+            ensure!(ws.candidates.is_empty());
+            ensure!(ws
                 .decl
                 .keys()
                 .any(|k| k.name.as_deref() == Some(STACK_MAIN)));
-            assert!(ws.dependencies.node_count() == 0);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.is_empty());
+            assert_eq!(ws.dependencies.node_count(), 0);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            ensure!(ws.node_indices.is_empty());
+            Ok(())
         }
 
-        fn workspace_discover_root_ext_test() {
-            let mut ws = ext_workspace();
-            assert!(ws.discover_root().is_ok());
+        fn workspace_discover_root_ext_test() -> Result<()> {
+            let mut ws = ext_workspace()?;
+            ws.discover_root()?;
             assert_eq!(ws.root_function_name, EXT_MAIN);
-            assert!(ws.candidates.is_empty());
-            assert!(ws.decl.keys().any(|k| k.name.as_deref() == Some(EXT_MAIN)));
-            assert!(ws.decl.len() == 1);
-            assert!(ws.dependencies.node_count() == 0);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.is_empty());
+            ensure!(ws.candidates.is_empty());
+            ensure!(ws.decl.keys().any(|k| k.name.as_deref() == Some(EXT_MAIN)));
+            assert_eq!(ws.decl.len(), 1);
+            assert_eq!(ws.dependencies.node_count(), 0);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            ensure!(ws.node_indices.is_empty());
+            Ok(())
         }
 
-        fn workspace_discover_root_const_test() {
-            let mut ws = const_workspace();
-            assert!(ws.discover_root().is_ok());
+        fn workspace_discover_root_const_test() -> Result<()> {
+            let mut ws = const_workspace()?;
+            ws.discover_root()?;
             assert_eq!(ws.root_function_name, CONST_MAIN);
-            assert!(ws.candidates.is_empty());
-            assert!(ws
+            ensure!(ws.candidates.is_empty());
+            ensure!(ws
                 .decl
                 .keys()
                 .any(|k| k.name.as_deref() == Some(CONST_MAIN)));
-            assert!(ws.decl.len() == 1);
-            assert!(ws.dependencies.node_count() == 0);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.is_empty());
+            assert_eq!(ws.decl.len(), 1);
+            assert_eq!(ws.dependencies.node_count(), 0);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            ensure!(ws.node_indices.is_empty());
+            Ok(())
         }
 
-        fn workspace_discover_root_macro_test() {
-            let mut ws = macro_workspace();
-            assert!(ws.discover_root().is_ok());
+        fn workspace_discover_root_macro_test() -> Result<()> {
+            let mut ws = macro_workspace()?;
+            ws.discover_root()?;
             assert_eq!(ws.root_function_name, MACRO_MAIN);
-            assert!(ws.candidates.is_empty());
-            assert!(ws
+            ensure!(ws.candidates.is_empty());
+            ensure!(ws
                 .decl
                 .keys()
                 .any(|k| k.name.as_deref() == Some(MACRO_MAIN)));
-            assert!(ws.decl.len() == 1);
-            assert!(ws.macros.len() == 1);
-            assert!(ws.dependencies.node_count() == 0);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.is_empty());
+            assert_eq!(ws.decl.len(), 1);
+            assert_eq!(ws.macros.len(), 1);
+            assert_eq!(ws.dependencies.node_count(), 0);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            ensure!(ws.node_indices.is_empty());
+            Ok(())
         }
 
-        fn workspace_add_node_test() {
+        fn workspace_add_node_test() -> Result<()> {
             let key = {
                 let path = format!("{}/stack_project/stack.c", TEST_DATA);
                 let clang: Clang = Clang::new().unwrap();
@@ -1120,22 +1080,23 @@ mod tests {
                 EntityKey::from_entity(&entity)
             };
 
-            let mut ws = stack_workspace();
-            assert!(ws.add_node(&key).is_ok());
+            let mut ws = stack_workspace()?;
+            ws.add_node(&key)?;
             assert_eq!(ws.root_function_name, STACK_MAIN);
             assert_eq!(ws.candidates.len(), 1);
-            assert!(ws.decl.is_empty());
-            assert!(ws.dependencies.node_count() == 1);
-            assert!(ws.dependencies.edge_count() == 0);
-            assert!(ws.node_indices.len() == 1);
-            assert!(ws.node_indices.contains_key(&key));
-            assert!(ws
+            ensure!(ws.decl.is_empty());
+            assert_eq!(ws.dependencies.node_count(), 1);
+            assert_eq!(ws.dependencies.edge_count(), 0);
+            assert_eq!(ws.node_indices.len(), 1);
+            ensure!(ws.node_indices.contains_key(&key));
+            ensure!(ws
                 .dependencies
                 .node_indices()
                 .all(|idx| idx == ws.node_indices[&key]));
+            Ok(())
         }
 
-        fn workspace_add_edge_test() {
+        fn workspace_add_edge_test() -> Result<()> {
             let keys = {
                 let path = format!("{}/stack_project/stack.c", TEST_DATA);
                 let clang: Clang = Clang::new().unwrap();
@@ -1149,196 +1110,176 @@ mod tests {
                 (key1, key2)
             };
 
-            let mut ws = stack_workspace();
-            assert!(ws.add_node(&keys.0).is_ok());
-            assert!(ws.add_node(&keys.1).is_ok());
-            assert!(ws.add_edge(&keys.0, &keys.1).is_ok());
+            let mut ws = stack_workspace()?;
+            ws.add_node(&keys.0)?;
+            ws.add_node(&keys.1)?;
+            ws.add_edge(&keys.0, &keys.1)?;
             assert_eq!(ws.root_function_name, STACK_MAIN);
             assert_eq!(ws.candidates.len(), 1);
-            assert!(ws.decl.is_empty());
-            assert!(ws.dependencies.node_count() == 2);
-            assert!(ws.dependencies.edge_count() == 1);
-            assert!(ws.node_indices.len() == 2);
-            assert!(ws.node_indices.contains_key(&keys.0));
-            assert!(ws.node_indices.contains_key(&keys.1));
-            assert!(ws
+            ensure!(ws.decl.is_empty());
+            assert_eq!(ws.dependencies.node_count(), 2);
+            assert_eq!(ws.dependencies.edge_count(), 1);
+            assert_eq!(ws.node_indices.len(), 2);
+            ensure!(ws.node_indices.contains_key(&keys.0));
+            ensure!(ws.node_indices.contains_key(&keys.1));
+            ensure!(ws
                 .dependencies
                 .node_indices()
                 .all(|idx| idx == ws.node_indices[&keys.0] || idx == ws.node_indices[&keys.1]));
+            Ok(())
         }
 
-        fn workspace_explore_entity_test() {
-            let mut ws = stack_workspace();
-            let key = ws.discover_root().unwrap().clone();
+        fn workspace_explore_entity_test() -> Result<()> {
+            let mut ws = stack_workspace()?;
+            let key = ws.discover_root()?.clone();
             let mut explored: HashSet<EntityKey> = HashSet::new();
             let mut to_explore: VecDeque<EntityKey> = VecDeque::new();
             let decl_before = ws.decl.clone();
-            assert!(ws
-                .explore_entity(&key, &mut explored, &mut to_explore)
-                .is_ok());
+            ws.explore_entity(&key, &mut explored, &mut to_explore)?;
             assert_eq!(ws.root_function_name, STACK_MAIN);
-            assert!(ws.candidates.is_empty());
+            ensure!(ws.candidates.is_empty());
             assert_eq!(ws.decl, decl_before);
             assert_eq!(explored == HashSet::from([key]), true);
-            assert!(!to_explore.is_empty());
+            ensure!(!to_explore.is_empty());
+            Ok(())
         }
 
-        fn workspace_explore_entity_ext_test() {
-            let mut ws = ext_workspace();
-            let key = ws.discover_root().unwrap().clone();
+        fn workspace_explore_entity_ext_test() -> Result<()> {
+            let mut ws = ext_workspace()?;
+            let key = ws.discover_root()?.clone();
             let mut explored: HashSet<EntityKey> = HashSet::new();
             let mut to_explore: VecDeque<EntityKey> = VecDeque::new();
             let decl_before = ws.decl.clone();
-            assert!(ws
-                .explore_entity(&key, &mut explored, &mut to_explore)
-                .is_ok());
+            ws.explore_entity(&key, &mut explored, &mut to_explore)?;
             assert_eq!(ws.root_function_name, EXT_MAIN);
-            assert!(ws.candidates.is_empty());
+            ensure!(ws.candidates.is_empty());
             assert_eq!(ws.decl, decl_before);
             assert_eq!(explored == HashSet::from([key.clone()]), true);
 
             let ignore1 = to_explore.pop_front().unwrap();
 
-            assert!(ws
-                .explore_entity(&ignore1, &mut explored, &mut to_explore)
-                .is_ok());
+            ws.explore_entity(&ignore1, &mut explored, &mut to_explore)?;
             assert_eq!(ws.root_function_name, EXT_MAIN);
-            assert!(ws.candidates.is_empty());
+            ensure!(ws.candidates.is_empty());
             assert_eq!(ws.decl, decl_before);
             assert_eq!(explored == HashSet::from([key, ignore1]), true);
+            Ok(())
         }
 
-        fn workspace_resolve_dependencies_simple_test() {
-            let mut ws = simple_workspace();
-            let dependencies = ws.resolve_dependencies();
-            assert!(dependencies.is_ok());
-            let dependencies = dependencies.unwrap();
+        fn workspace_resolve_dependencies_simple_test() -> Result<()> {
+            let mut ws = simple_workspace()?;
+            let dependencies = ws.resolve_dependencies()?;
             assert_eq!(dependencies.len(), 3);
+            Ok(())
         }
 
-        fn workspace_resolve_dependencies_ext_test() {
-            let mut ws = ext_workspace();
-            let dependencies = ws.resolve_dependencies();
-            assert!(dependencies.is_ok());
-            let dependencies = dependencies.unwrap();
+        fn workspace_resolve_dependencies_ext_test() -> Result<()> {
+            let mut ws = ext_workspace()?;
+            let dependencies = ws.resolve_dependencies()?;
             assert_eq!(dependencies.len(), 1);
+            Ok(())
         }
 
-        fn workspace_emit_code_simple_test() {
-            let mut ws = simple_workspace();
+        fn workspace_emit_code_simple_test() -> Result<()> {
+            let mut ws = simple_workspace()?;
             let dependencies = ws.resolve_dependencies().unwrap();
-            let code = ws.emit_code(&dependencies);
-            assert!(code.is_ok());
-            let code = code.unwrap();
+            let code = ws.emit_code(&dependencies)?;
             let expected = std::fs::read(format!("{}/simple_expected.c", TEST_DATA)).unwrap();
             assert_eq!(code.trim_ascii(), expected);
+            Ok(())
         }
 
-        fn run_simple_test() {
+        fn run_simple_test() -> Result<()> {
             let project_root = format!("{}/simple", TEST_DATA);
             let root_file = format!("{}/simple.c", project_root);
             let root_function = SIMPLE_MAIN;
             let out_path_str = format!("{}/simple_out.c", TEST_DATA);
-            assert!(delete_file(&out_path_str, true).is_ok());
-            assert!(
-                extract_root(&project_root, &root_file, root_function, &out_path_str, 5).is_ok()
-            );
-            let out_path = check_path(&out_path_str);
-            assert!(out_path.is_ok());
-            let out_path = out_path.unwrap();
-            let out_content = std::fs::read(&out_path).unwrap();
-            let expected = std::fs::read(format!("{}/simple_expected.c", TEST_DATA)).unwrap();
+            delete_file(&out_path_str, true)?;
+            extract_root(&project_root, &root_file, root_function, &out_path_str, 5)?;
+            let out_path = check_path(&out_path_str)?;
+            let out_content = std::fs::read(&out_path)?;
+            let expected = std::fs::read(format!("{}/simple_expected.c", TEST_DATA))?;
             assert_eq!(out_content.trim_ascii(), expected);
-            std::fs::remove_file(&out_path_str).unwrap();
+            std::fs::remove_file(&out_path_str)?;
+            Ok(())
         }
 
-        fn run_with_make_test() {
+        fn run_with_make_test() -> Result<()> {
             let project_root = format!("{}/with_make", TEST_DATA);
             let root_file = format!("{}/main.c", project_root);
             let root_function = "main";
             let out_path_str = format!("{}/with_make_out.c", TEST_DATA);
-            assert!(delete_file(&out_path_str, true).is_ok());
-            assert!(
-                extract_root(&project_root, &root_file, root_function, &out_path_str, 5).is_ok()
-            );
-            let out_path = check_path(&out_path_str);
-            assert!(out_path.is_ok());
-            let out_path = out_path.unwrap();
-            let out_content = std::fs::read(&out_path).unwrap();
-            let expected = std::fs::read(format!("{}/with_make_expected.c", TEST_DATA)).unwrap();
+            delete_file(&out_path_str, true)?;
+            extract_root(&project_root, &root_file, root_function, &out_path_str, 5)?;
+            let out_path = check_path(&out_path_str)?;
+            let out_content = std::fs::read(&out_path)?;
+            let expected = std::fs::read(format!("{}/with_make_expected.c", TEST_DATA))?;
             assert_eq!(
                 String::from_utf8_lossy(&out_content.trim_ascii()),
                 String::from_utf8_lossy(&expected)
             );
-            std::fs::remove_file(&out_path_str).unwrap();
+            std::fs::remove_file(&out_path_str)?;
+            Ok(())
         }
 
-        fn run_ext_test() {
+        fn run_ext_test() -> Result<()> {
             let project_root = format!("{}/ext", TEST_DATA);
             let root_file = format!("{}/ext.c", project_root);
             let root_function = EXT_MAIN;
             let out_path_str = format!("{}/ext_out.c", TEST_DATA);
-            assert!(delete_file(&out_path_str, true).is_ok());
-            assert!(
-                extract_root(&project_root, &root_file, root_function, &out_path_str, 5).is_ok()
-            );
-            let out_path = check_path(&out_path_str);
-            assert!(out_path.is_ok());
-            let out_path = out_path.unwrap();
-            let out_content = std::fs::read(&out_path).unwrap();
-            let out_content = out_content;
-            let out_content = String::from_utf8_lossy(&out_content.trim_ascii())
+            delete_file(&out_path_str, true)?;
+            extract_root(&project_root, &root_file, root_function, &out_path_str, 5)?;
+            let out_path = check_path(&out_path_str)?;
+            let out_content = String::from_utf8_lossy(&std::fs::read(&out_path)?.trim_ascii())
                 .lines()
                 .skip(2)
                 .collect::<Vec<_>>()
                 .join("\n");
             let out_content = out_content.trim();
-            let expected = std::fs::read(format!("{}/ext_expected.c", TEST_DATA)).unwrap();
+            let expected = std::fs::read(format!("{}/ext_expected.c", TEST_DATA))?;
             assert_eq!(out_content, String::from_utf8_lossy(&expected));
-            std::fs::remove_file(&out_path_str).unwrap();
+            std::fs::remove_file(&out_path_str)?;
+            Ok(())
         }
 
-        fn run_macro_test() {
+        fn run_macro_test() -> Result<()> {
             let project_root = format!("{}/macro", TEST_DATA);
             let root_file = format!("{}/abs.c", project_root);
             let root_function = MACRO_MAIN;
             let out_path_str = format!("{}/macro_out.c", TEST_DATA);
-            assert!(delete_file(&out_path_str, true).is_ok());
-            assert!(
-                extract_root(&project_root, &root_file, root_function, &out_path_str, 5).is_ok()
-            );
-            let out_path = check_path(&out_path_str);
-            assert!(out_path.is_ok());
-            let out_path = out_path.unwrap();
-            let out_content = std::fs::read(&out_path).unwrap();
+            delete_file(&out_path_str, true)?;
+            extract_root(&project_root, &root_file, root_function, &out_path_str, 5)?;
+            let out_path = check_path(&out_path_str)?;
+            let out_content = std::fs::read(&out_path)?;
             let out_content = out_content.trim_ascii();
-            let expected = std::fs::read(format!("{}/macro_expected.c", TEST_DATA)).unwrap();
+            let expected = std::fs::read(format!("{}/macro_expected.c", TEST_DATA))?;
             assert_eq!(
                 String::from_utf8_lossy(&out_content),
                 String::from_utf8_lossy(&expected)
             );
-            std::fs::remove_file(&out_path_str).unwrap();
+            std::fs::remove_file(&out_path_str)?;
+            Ok(())
         }
 
-        extract_code_test();
-        workspace_new_test();
-        workspace_index_file_test();
-        workspace_discover_candidates_test();
-        workspace_discover_root_stack_test();
-        workspace_discover_root_ext_test();
-        workspace_discover_root_const_test();
-        workspace_discover_root_macro_test();
-        workspace_add_node_test();
-        workspace_add_edge_test();
-        workspace_add_node_test();
-        workspace_explore_entity_test();
-        workspace_explore_entity_ext_test();
-        workspace_resolve_dependencies_simple_test();
-        workspace_resolve_dependencies_ext_test();
-        workspace_emit_code_simple_test();
-        run_simple_test();
-        run_with_make_test();
-        run_ext_test();
-        run_macro_test();
+        extract_code_test()?;
+        workspace_new_test()?;
+        workspace_index_file_test()?;
+        workspace_discover_candidates_test()?;
+        workspace_discover_root_stack_test()?;
+        workspace_discover_root_ext_test()?;
+        workspace_discover_root_const_test()?;
+        workspace_discover_root_macro_test()?;
+        workspace_add_node_test()?;
+        workspace_add_edge_test()?;
+        workspace_add_node_test()?;
+        workspace_explore_entity_test()?;
+        workspace_explore_entity_ext_test()?;
+        workspace_resolve_dependencies_simple_test()?;
+        workspace_resolve_dependencies_ext_test()?;
+        workspace_emit_code_simple_test()?;
+        run_simple_test()?;
+        run_with_make_test()?;
+        run_ext_test()?;
+        run_macro_test()
     }
 }

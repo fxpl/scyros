@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.s
 
+use anyhow::{bail, Error, Result};
 use std::fmt::Display;
+use std::io::{self, Write};
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
+use tracing::{info, warn};
 
 use crate::utils::{csv::CSVFile, fs::FileMode, github::is_valid_token_file};
 
-use super::{error::*, fs::write_csv};
-use console::Style;
-use console::Term;
+use super::fs::write_csv;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use polars::frame::DataFrame;
 
 #[derive(Debug)]
@@ -30,84 +35,136 @@ pub enum TaskStatus {
 
 impl Display for TaskStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                TaskStatus::InProgress => "...",
-                TaskStatus::Success => " - SUCCESS",
-                TaskStatus::Failure => " - FAILED",
+        match self {
+            TaskStatus::InProgress => write!(f, "IN PROGRESS"),
+            TaskStatus::Success => write!(f, "SUCCESS"),
+            TaskStatus::Failure => write!(f, "FAILED"),
+        }
+    }
+}
+
+pub struct TaskLogger {
+    pb: ProgressBar,
+    msg: String,
+}
+
+impl TaskLogger {
+    pub fn new(logger: &Logger, msg: impl Into<String>) -> Result<TaskLogger> {
+        let msg: String = msg.into();
+
+        let pb: ProgressBar = logger.progress.add(ProgressBar::new_spinner());
+        let style: ProgressStyle = ProgressStyle::with_template("{spinner} {msg}")?;
+        pb.set_style(style);
+        pb.enable_steady_tick(Duration::from_millis(100));
+        pb.set_message(format!("{msg} - {}", TaskStatus::InProgress));
+
+        Ok(TaskLogger { pb, msg })
+    }
+
+    pub fn success(&self) {
+        self.pb
+            .finish_with_message(format!("{} - {}", self.msg, TaskStatus::Success));
+    }
+
+    pub fn failure(&self) {
+        self.pb
+            .abandon_with_message(format!("{} - {}", self.msg, TaskStatus::Failure));
+    }
+
+    pub fn set_message(&self, msg: impl Into<String>) {
+        self.pb.set_message(msg.into());
+    }
+}
+
+#[derive(Clone)]
+struct MultiProgressWriter {
+    progress: Arc<MultiProgress>,
+}
+
+struct MultiProgressLineWriter {
+    progress: Arc<MultiProgress>,
+    buf: Vec<u8>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for MultiProgressWriter {
+    type Writer = MultiProgressLineWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        MultiProgressLineWriter {
+            progress: Arc::clone(&self.progress),
+            buf: Vec::new(),
+        }
+    }
+
+    fn make_writer_for(&'a self, meta: &tracing::Metadata<'_>) -> Self::Writer {
+        let _ = meta;
+        self.make_writer()
+    }
+}
+
+impl std::io::Write for MultiProgressLineWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buf.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.buf.is_empty() {
+            let s = String::from_utf8_lossy(&self.buf);
+            for line in s.lines() {
+                let _ = self.progress.println(line);
             }
-        )
+            self.buf.clear();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MultiProgressLineWriter {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
 
 pub struct Logger {
-    term: Term,
-    last_line: Option<String>,
-}
-
-impl Default for Logger {
-    fn default() -> Self {
-        Logger::new()
-    }
+    /// The multiprogess bar used to log the progress of the tasks.
+    progress: Arc<MultiProgress>,
 }
 
 impl Logger {
-    pub fn new() -> Logger {
-        Logger {
-            term: Term::stdout(),
-            last_line: None,
+    pub fn new() -> Result<Self> {
+        let logger = Self {
+            progress: Arc::new(MultiProgress::new()),
+        };
+
+        let writer = MultiProgressWriter {
+            progress: Arc::clone(&logger.progress),
+        };
+
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(writer)
+            .with_target(false)
+            .without_time()
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)?;
+
+        Ok(logger)
+    }
+
+    pub fn run_task<T, F>(&self, msg: impl Into<String>, f: F) -> anyhow::Result<T>
+    where
+        F: FnOnce() -> anyhow::Result<T>,
+    {
+        let task = TaskLogger::new(self, msg)?;
+        let result = f();
+
+        match &result {
+            Ok(_) => task.success(),
+            Err(_) => task.failure(),
         }
-    }
 
-    pub fn change_status(&self, status: TaskStatus) -> Result<(), Error> {
-        map_err(
-            self.term
-                .clear_line()
-                .and_then(|_| self.term.move_cursor_up(1)),
-            "Could not log in the terminal",
-        )?;
-        let last_line: &str = ok_or_else(
-            self.last_line.as_ref(),
-            "Could not change the status of a non previously logged task",
-        )?;
-        map_err(
-            self.term.write_line(&format!("{}{}", last_line, status)),
-            "Could not log in the terminal",
-        )
-    }
-
-    pub fn replace_last_line(&mut self, msg: &str) -> Result<(), Error> {
-        map_err(
-            self.term
-                .clear_line()
-                .and_then(|_| self.term.move_cursor_up(1))
-                .and_then(|_| self.term.write_line(msg)),
-            "Could not log in the terminal",
-        )
-    }
-
-    pub fn log(&mut self, msg: &str) -> Result<(), Error> {
-        self.last_line = Some(msg.to_string());
-        map_err(self.term.write_line(msg), "Could not log in the terminal")
-    }
-
-    pub fn log_warning(&mut self, msg: &str) -> Result<(), Error> {
-        let yellow = Style::new().yellow();
-        self.log(&yellow.apply_to(format!("WARNING: {}", msg)).to_string())
-    }
-
-    /// Logs the seed used for random number generation.
-    ///
-    /// # Arguments
-    /// * `seed` - The random seed to log.
-    ///
-    /// # Returns
-    ///
-    /// A result indicating success or failure of the operation.
-    pub fn log_seed(&mut self, seed: u64) -> Result<(), Error> {
-        self.log(&format!("Your random seed is {}, don't forget it!", seed))
+        result
     }
 
     /// Logs the tokens file being loaded.
@@ -118,78 +175,80 @@ impl Logger {
     /// # Returns
     ///
     /// A result containing a vector of strings representing the tokens, or an error if the file is invalid.
-    pub fn log_tokens(&mut self, tokens_file: &str) -> Result<Vec<String>, Error> {
-        self.log_completion("Loading tokens", || {
+    pub fn log_tokens(&self, tokens_file: &str) -> Result<Vec<String>> {
+        self.run_task("Loading tokens", || {
             is_valid_token_file(tokens_file)
                 .and_then(|_| CSVFile::new(tokens_file, FileMode::Read)?.column(0))
         })
     }
-
-    pub fn start_task(&mut self, msg: &str) -> Result<(), Error> {
-        self.log(msg)?;
-        self.change_status(TaskStatus::InProgress)
-    }
-
-    pub fn log_completion<T, F>(&mut self, msg: &str, task: F) -> Result<T, Error>
-    where
-        F: FnOnce() -> Result<T, Error>,
-    {
-        self.start_task(msg)?;
-        let res: Result<T, Error> = task();
-        if res.is_ok() {
-            self.change_status(TaskStatus::Success)
-        } else {
-            self.change_status(TaskStatus::Failure)
-        }?;
-        res
-    }
 }
 
+static TEST_LOGGER: OnceLock<Logger> = OnceLock::new();
+
+pub fn test_logger() -> &'static Logger {
+    TEST_LOGGER.get_or_init(|| Logger::new().unwrap())
+}
 /// Logs if the program will create an output file or overwrite an existing one.
 /// In the latter case, it will also check if the user explicitly asked for it.
 ///
 /// # Arguments
-/// * `logger` - A mutable reference to the logger.
 /// * `output_path` - The path to the output file.
 /// * `no_output` - If true, no output file will be generated.
 /// * `force` - Flag the user must set to override an existing file.
-pub fn log_output_file(
-    logger: &mut Logger,
-    output_path: &str,
-    no_output: bool,
-    force: bool,
-) -> Result<(), Error> {
+pub fn log_output_file(output_path: &str, no_output: bool, force: bool) -> Result<(), Error> {
     if no_output {
-        logger.log("No output file will be generated.")
+        info!("No output file will be generated.");
+        Ok(())
     } else {
         match crate::utils::fs::check_path(output_path) {
             Ok(_) => {
                 if force {
-                    logger.log(&format!("Overriding existing file: {}", output_path))
+                    warn!("Overriding existing file: {}", output_path);
+                    Ok(())
                 } else {
-                    Error::new(&format!(
+                    bail!(
                         "File {} already exists. Use --force to override it.",
                         output_path
-                    ))
-                    .to_res()
+                    )
                 }
             }
-            Err(_) => logger.log(&format!("Creating new file: {}", output_path)),
+            Err(_) => {
+                info!("Creating new file: {}", output_path);
+                Ok(())
+            }
         }
     }
 }
 
+/// Logs the writing of a DataFrame to a CSV file, unless no_output is true.
+///
+/// # Arguments
+/// * `logger` - A mutable reference to the logger.
+/// * `output_path` - The path to the output file.
+/// * `data` - The DataFrame to write to the output file.
+/// * `no_output` - If true, no output file will be generated and the writing will not be logged.
+///
+/// # Returns
+/// An error if the writing of the output file fails, or if the logging of the writing in the terminal fails.
 pub fn log_write_output(
-    logger: &mut Logger,
+    logger: &Logger,
     output_path: &str,
     data: &mut DataFrame,
     no_output: bool,
-) -> Result<(), Error> {
+) -> Result<()> {
     if !no_output {
-        logger.log_completion(&format!("Writing to {}", output_path), || {
+        logger.run_task(format!("Writing to {}", output_path), || {
             write_csv(output_path, data)
         })
     } else {
         Ok(())
     }
+}
+
+/// Logs the seed used for random number generation.
+///
+/// # Arguments
+/// * `seed` - The random seed to log.
+pub fn log_seed(seed: u64) {
+    info!("Your random seed is {}, don't forget it!", seed)
 }

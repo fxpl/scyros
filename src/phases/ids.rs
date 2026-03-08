@@ -12,19 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Collects random IDs of public projects on GitHub, along with their names and whether each project is a fork.
-//! IDs are selected at random with replacement (so the same ID can appear multiple times).
-//! The maximum ID is set to 871212690 by default (as of 2025/01/24).
-//! The IDs are stored in a CSV file at a location provided as an argument.
-//! If the program is interrupted, it can be restarted and will resume from the last ID sampled.
-//! IDs are sampled in sequential chunks of 100.
-//!
-//! Output CSV file format:
-//!  * id: ids of the projects.
-//!  * name: full names (i.e., username/projectname) of the projects.
-//!  * fork: whether projects are fork (1) or not (0).
-//!  * requests: number of requests made to the Github API (roughly row number / 100).
+#![doc = include_str!("../docs/ids.md")]
 
+use anyhow::{anyhow, bail, Context, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -37,14 +27,15 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::iter::FromIterator as _;
 use std::path::Path;
+use tracing::info;
 
 use crate::utils::csv::*;
-use crate::utils::error::*;
+use crate::utils::dataframes;
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::Github;
 use crate::utils::json::*;
-use crate::utils::logger::Logger;
+use crate::utils::logger::{log_seed, Logger};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -52,14 +43,7 @@ use rand::{Rng, SeedableRng};
 pub fn cli() -> Command {
     Command::new("ids")
         .about("Collects random ids of public projects on GitHub, along with their name and whether the project is a fork.")
-        .long_about(
-            "Collects random IDs of public projects on GitHub, along with their names and whether each project is a fork.\n\
-            IDs are selected at random with replacement (so the same ID can appear multiple times).\n\
-            The maximum ID is set to 1128315983 by default (as of 2026/01/05).\n\
-            The IDs are stored in a CSV file at a location provided as an argument.\n\
-            If the program is interrupted, it can be restarted and will resume from the last ID sampled.\n\
-            IDs are sampled in sequential chunks of 100."
-        )
+        .long_about(include_str!("../docs/ids.md"))
         .disable_version_flag(true)
         .arg(
             Arg::new("output")
@@ -155,17 +139,17 @@ pub fn run(
     n: Option<usize>,
     mode: &str,
     force: bool,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     // Check if the token file is valid.
     logger.log_tokens(tokens)?;
 
     // Load the previous results if the file exists.
     let (mut last_id, mut requests): (u32, usize) = if force {
-        logger.log("Overwriting previous results")?;
+        info!("Overwriting previous results");
         (min_id, 0)
     } else if Path::new(output_path).exists() {
-        let input_df: DataFrame = logger.log_completion("Loading previous results", || {
+        let input_df: DataFrame = logger.run_task("Loading previous results", || {
             open_csv(
                 output_path,
                 Some(Schema::from_iter(vec![
@@ -177,40 +161,28 @@ pub fn run(
                 Some(ProjectInfo::header().to_vec()),
             )
         })?;
-        let last_id: u32 = ok_or_else(
-            map_err(
-                map_err(input_df.column("id"), "Could not get 'id' column")?.u32(),
-                "Could not convert 'id' column to u32",
-            )?
-            .last(),
-            "Could not get last id",
-        )?;
+        let last_id: u32 = dataframes::u32(&input_df, "id")?
+            .into_iter()
+            .last()
+            .with_context(|| "Could not get last id")?;
 
-        let last_request_number: u32 = ok_or_else(
-            map_err(
-                map_err(
-                    input_df.column("request_number"),
-                    "Could not get 'request_number' column",
-                )?
-                .u32(),
-                "Could not convert 'request_number' column to u32",
-            )?
-            .last(),
-            "Could not get last request number",
-        )?;
+        let last_request_number: u32 = dataframes::u32(&input_df, "request_number")?
+            .into_iter()
+            .last()
+            .with_context(|| "Could not get last request number")?;
 
-        logger.log(&format!("  {} ids already sampled.", input_df.height()))?;
+        info!("  {} ids already sampled.", input_df.height());
         (last_id, last_request_number as usize + 1)
     } else {
-        logger.log("No previous data found")?;
+        info!("No previous data found");
         (min_id, 0)
     };
 
     match n {
-        Some(n) => logger.log(&format!("Sampling {} ids...", n))?,
-        None => logger.log("Sampling ids...")?,
+        Some(n) => info!("Sampling {} ids...", n),
+        None => info!("Sampling ids..."),
     }
-    logger.log(&format!("Range: [{}, {}]", min_id, max_id))?;
+    info!("Range: [{}, {}]", min_id, max_id);
 
     // Append or overwrite the data to the file depending on the force flag.
     let mut output_file = CSVFile::new(
@@ -236,9 +208,7 @@ pub fn run(
 
     if n.is_some() {
         progress_bar.set_style(
-            indicatif::ProgressStyle::default_bar()
-                .template("{elapsed} {wide_bar} {percent}%")
-                .unwrap(),
+            indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
         )
     }
 
@@ -249,7 +219,7 @@ pub fn run(
 
     let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
     if mode == "random" {
-        logger.log_seed(seed)?;
+        log_seed(seed);
         for _ in 0..requests {
             rng.gen_range(min_id..max_id);
         }
@@ -276,22 +246,23 @@ pub fn run(
         let request: JsonValue = {
             let mut attempts = 0;
 
-            let mut request: Result<JsonValue, Error> =
-                Error::new("Did not send any request yet: ID {}").to_res();
+            let mut request: Result<JsonValue> =
+                Err(anyhow!("Did not send any request yet: ID {}", first_id));
             while request.is_err() && attempts < MAX_RETRIES {
-                request = map_err(
-                    gh.request(&format!(
+                request = gh
+                    .request(&format!(
                         "https://api.github.com/repositories?since={}",
                         first_id
-                    )),
-                    &format!(
-                        "Could not send the request to the Github API: ID {}",
-                        first_id
-                    ),
-                );
+                    ))
+                    .with_context(|| {
+                        format!(
+                            "Could not send the request to the Github API: ID {}",
+                            first_id
+                        )
+                    });
                 attempts += 1;
             }
-            map_err(request, "Maximum number of retries reached")
+            request.with_context(|| "Maximum number of retries reached")
         }?;
         match request {
             json::JsonValue::Array(repos) => {
@@ -312,10 +283,7 @@ pub fn run(
                         let project_info: ProjectInfo = ProjectInfo::parse_json(repo, ())?;
                         last_id = project_info.id as u32;
                         // Write the row in the CSV file.
-                        map_err(
-                            writeln!(&mut builder, "{}", project_info.to_csv(requests)),
-                            &format!("Could not write {} to string builder", repo),
-                        )?;
+                        writeln!(&mut builder, "{}", project_info.to_csv(requests))?;
                     }
                 }
 
@@ -329,20 +297,18 @@ pub fn run(
                 remaining = remaining.map(|x| x.saturating_sub(response_size - skipped));
 
                 // Write the response to the file.
-                map_err(
-                    write!(&mut output_file, "{}", builder),
-                    &format!("Could not write to file {}", output_path),
-                )?;
+
+                write!(&mut output_file, "{}", builder)
+                    .with_context(|| format!("Could not write to file {}", output_path))?;
             }
             // Handle "Not Found" error or unknown response format.
             _ => {
                 if !request.has_key("message")
-                    || ok_or_else(
-                        request["message"].as_str(),
-                        &format!("Could not parse message as string in {}", request),
-                    )? != "Not Found"
+                    || request["message"].as_str().with_context(|| {
+                        format!("Could not parse message as string in {}", request)
+                    })? != "Not Found"
                 {
-                    Error::new(&format!("Unknown response format: {} ", request)).to_res()?;
+                    bail!("Unknown response format: {} ", request)
                 }
             }
         }
@@ -388,7 +354,7 @@ impl Default for ProjectInfo {
 impl FromGitHub for ProjectInfo {
     type Complement = ();
 
-    fn parse_json(json: &json::JsonValue, _complement: ()) -> Result<Self, Error>
+    fn parse_json(json: &json::JsonValue, _complement: ()) -> Result<Self>
     where
         Self: Sized,
     {
@@ -409,21 +375,21 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::utils::logger::Logger;
+    use crate::utils::logger::test_logger;
 
     const TEST_DATA: &str = "tests/data/phases/ids";
     const TOKENS: &str = "ghtokens.csv";
     const SEED: u64 = 113722657;
 
     #[test]
-    fn test_random_ids() {
+    fn test_random_ids() -> Result<()> {
         let id_half = format!("{}/id_random_1.csv", TEST_DATA);
         let id_full = format!("{}/id_random_2.csv", TEST_DATA);
         let id_force = format!("{}/id_random_3.csv", TEST_DATA);
 
-        assert!(delete_file(&id_half, true).is_ok());
-        assert!(delete_file(&id_full, true).is_ok());
-        assert!(delete_file(&id_force, true).is_ok());
+        delete_file(&id_half, true)?;
+        delete_file(&id_full, true)?;
+        delete_file(&id_force, true)?;
 
         run(
             &id_half,
@@ -434,11 +400,10 @@ mod tests {
             Some(280),
             "random",
             false,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
-        assert!(run(
+        run(
             &id_half,
             TOKENS,
             SEED,
@@ -447,9 +412,8 @@ mod tests {
             Some(280),
             "random",
             false,
-            &mut Logger::new()
-        )
-        .is_ok());
+            test_logger(),
+        )?;
 
         run(
             &id_full,
@@ -460,9 +424,8 @@ mod tests {
             Some(500),
             "random",
             false,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
         run(
             &id_force,
@@ -473,9 +436,8 @@ mod tests {
             Some(1000),
             "random",
             true,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
         run(
             &id_half,
@@ -486,27 +448,29 @@ mod tests {
             Some(500),
             "random",
             true,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
-        assert!(fs::read_to_string(&id_half).unwrap() == fs::read_to_string(&id_full).unwrap());
-        assert!(fs::read_to_string(&id_half).unwrap() != fs::read_to_string(&id_force).unwrap());
+        assert_eq!(fs::read_to_string(&id_half)?, fs::read_to_string(&id_full)?);
+        assert_ne!(
+            fs::read_to_string(&id_half)?,
+            fs::read_to_string(&id_force)?
+        );
 
-        assert!(delete_file(&id_half, false).is_ok());
-        assert!(delete_file(&id_full, false).is_ok());
-        assert!(delete_file(&id_force, false).is_ok());
+        delete_file(&id_half, false)?;
+        delete_file(&id_full, false)?;
+        delete_file(&id_force, false)
     }
 
     #[test]
-    fn test_linear_ids() {
+    fn test_linear_ids() -> Result<()> {
         let id_half = format!("{}/id_linear_1.csv", TEST_DATA);
         let id_full = format!("{}/id_linear_2.csv", TEST_DATA);
         let id_force = format!("{}/id_linear_3.csv", TEST_DATA);
 
-        assert!(delete_file(&id_half, true).is_ok());
-        assert!(delete_file(&id_full, true).is_ok());
-        assert!(delete_file(&id_force, true).is_ok());
+        delete_file(&id_half, true)?;
+        delete_file(&id_full, true)?;
+        delete_file(&id_force, true)?;
 
         run(
             &id_half,
@@ -517,11 +481,10 @@ mod tests {
             Some(280),
             "linear",
             false,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
-        assert!(run(
+        run(
             &id_half,
             TOKENS,
             SEED,
@@ -530,9 +493,8 @@ mod tests {
             Some(280),
             "linear",
             false,
-            &mut Logger::new()
-        )
-        .is_ok());
+            test_logger(),
+        )?;
 
         run(
             &id_full,
@@ -543,9 +505,8 @@ mod tests {
             Some(500),
             "linear",
             false,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
         run(
             &id_force,
@@ -556,9 +517,8 @@ mod tests {
             Some(1000),
             "linear",
             true,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
         run(
             &id_half,
@@ -569,15 +529,17 @@ mod tests {
             Some(500),
             "linear",
             true,
-            &mut Logger::new(),
-        )
-        .unwrap();
+            test_logger(),
+        )?;
 
-        assert!(fs::read_to_string(&id_half).unwrap() == fs::read_to_string(&id_full).unwrap());
-        assert!(fs::read_to_string(&id_half).unwrap() != fs::read_to_string(&id_force).unwrap());
+        assert_eq!(fs::read_to_string(&id_half)?, fs::read_to_string(&id_full)?);
+        assert_ne!(
+            fs::read_to_string(&id_half)?,
+            fs::read_to_string(&id_force)?
+        );
 
-        assert!(delete_file(&id_half, false).is_ok());
-        assert!(delete_file(&id_full, false).is_ok());
-        assert!(delete_file(&id_force, false).is_ok());
+        delete_file(&id_half, false)?;
+        delete_file(&id_full, false)?;
+        delete_file(&id_force, false)
     }
 }

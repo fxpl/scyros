@@ -1,0 +1,3 @@
+Downloads GitHub repositories from an input CSV file in random order.
+Keeps track of reposiories and files written in user-selected languages (identified by their extension) and containing user-selected keywords. Downloaded repositories are either stored in their entirety, or deleted if they do not contain any file in the selected languages or with the selected keywords.
+Downloading can be resumed if the program is interrupted, restarting from the last downloaded repository.

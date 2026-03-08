@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This program is used to download all the GitHub projects from a list. A list of ids, full names and latest commit SHA of projects must be
-//! provided in a CSV file. The program will then make requests to the GitHub API to download every repository in the list in random order
-//! Ultimately only the files written in selected languages and featuring one of the provided keywords are kept. For each extension, a list of
-//! additional keywords can be also provided.
-//! The id of the downloaded repositories are logged in two CSV files. The first one (ending in .project_log) gathers data on a per project basis,
-//! the second one (ending in .file_log) gathers data on a per file basis. If the program is interrupted, it can be restarted and will continue from
-//! where it left off. A skip flag can be provided to avoid downloading the repositories again and instead only logging the files.
-//! A count flag can be provided to compute statistics on the downloaded projects without deleting any file.
-//! For usage and command line arguments refer to the [`cli_args`] function.
+#![doc = include_str!("../docs/download.md")]
 
 use crate::utils::logger::Logger;
+use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use indicatif::ProgressBar;
+use polars::frame::DataFrame;
 use polars::prelude::{AnyValue, DataType, Field, Schema};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
@@ -40,29 +34,19 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
+use tracing::info;
 use zip_extensions::zip_extract::zip_extract;
 
-use crate::shell_commands::{FileType, FindCommand, ShellCommand};
 use crate::utils::csv::*;
-use crate::utils::error::*;
 use crate::utils::fs::*;
 use crate::utils::regex::*;
+use crate::utils::shell_commands::{FileType, FindCommand, ShellCommand};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
     Command::new("download")
         .about("Downloads all github repositories from a list and keeps only the files that satisfy user defined criteria.")
-        .long_about(
-            "Downloads all github repositories from a list and keeps only the files that satisfy the following criteria:\n    \
-            - Their extension is in the list of extensions provided in the command line arguments.\n    \
-            - They contain a keyword related to floating point arithmetic.\n    \
-            - They are not symbolic links.\n\n\
-            Furthermore, all empty directories are removed. All downloaded repositories are logged in a CSV file to track progress \
-            and be able to resume the download if the program is interrupted.\nThe name of the log file is the same as the input file \
-            with the extension \".project_log\".\nEvery file is also logged in a CSV file with the same name as the input file with the \
-            extension \".file_log\".\n\
-            Ids are chosen in a random order from the input file."
-        )
+        .long_about(include_str!("../docs/download.md"))
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
         .disable_version_flag(true)
         .arg(
@@ -237,9 +221,9 @@ pub fn run(
     count: bool,
     overwrite: bool,
     seed: u64,
-    logger: &mut Logger,
+    logger: &Logger,
     thread: usize,
-) -> Result<(), Error> {
+) -> Result<()> {
     // Number of columns in the log files
     const PROJECT_LOG_COLS: usize = 14;
     const FILE_LOG_COLS: usize = 6;
@@ -251,7 +235,7 @@ pub fn run(
         logger.log_tokens(tokens_file)?
     };
 
-    let input_file = logger.log_completion("Loading input file", || {
+    let input_file: DataFrame = logger.run_task("Loading input file", || {
         open_csv(
             input_file_path,
             Some(Schema::from_iter(vec![
@@ -268,10 +252,10 @@ pub fn run(
         )
     })?;
 
-    let mut shuffled_idx = (0..input_file.height()).collect::<Vec<usize>>();
+    let mut shuffled_idx: Vec<usize> = (0..input_file.height()).collect::<Vec<usize>>();
 
     // Load the ids from the input file in random order.
-    logger.log_completion("Loading project IDs in random order", || {
+    logger.run_task("Loading project IDs in random order", || {
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         shuffled_idx.shuffle(&mut rng);
         Ok(())
@@ -296,7 +280,7 @@ pub fn run(
     });
 
     let n_proj = input_file.height();
-    logger.log(&format!("  {} projects found.", n_proj))?;
+    info!("  {} projects found.", n_proj);
 
     const MAX_SUBDIRS: usize = 30000;
 
@@ -316,7 +300,7 @@ pub fn run(
 
     // Load previous results if the skip flag is not set.
 
-    let previous_results: HashSet<u32> = logger.log_completion("Resuming progress", || {
+    let previous_results: HashSet<u32> = logger.run_task("Resuming progress", || {
         Ok(if overwrite || !Path::new(&project_log_path).exists() {
             HashSet::<u32>::new()
         } else {
@@ -327,14 +311,14 @@ pub fn run(
     })?;
 
     if !previous_results.is_empty() {
-        logger.log(&format!(
+        info!(
             "  {} projects have already been downloaded",
             previous_results.len()
-        ))?;
+        )
     }
 
-    let keyword_files: KeywordFiles = logger.log_completion("Loading keywords", || {
-        KeywordFiles::new().add_files(keywords_file_paths)
+    let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
+        KeywordFiles::new().add_files(keywords_file_paths, true)
     })?;
 
     let files_with_kw_headers: String = keyword_files
@@ -415,8 +399,7 @@ pub fn run(
     // Iterate over the projects and collect metadata.
     let iter = Mutex::new(shuffled_rows);
 
-    logger.log("Starting download...")?;
-    logger.log("")?;
+    info!("Starting download...\n");
 
     // Numbers of threads to be spawned.
     let n = tokens.len();
@@ -424,124 +407,120 @@ pub fn run(
     // Every thread comes with a sender channel.
     // The sender channel is used to send information about the downloaded repository back to the main thread.
     // The receiver channel is used by the main thread to collect and write the information to the log file.
-    let (tx, rx) = crossbeam_channel::unbounded::<Option<Result<(String, String), Error>>>();
+    let (tx, rx) = crossbeam_channel::unbounded::<Option<Result<(String, String)>>>();
+    crossbeam::thread::scope(|s: &crossbeam::thread::Scope<'_>| {
+        // Spawn a thread per github token
+        for t in tokens {
+            let my_tx = tx.clone();
+            let keyword_files = &keyword_files;
+            let word_counter = &word_counter;
+            let iter = &iter;
+            let previous_results = &previous_results;
+            s.spawn(move |_| {
+                // The main loop of the thread.
+                // Download the repositories until the iterator is empty.
+                loop {
+                    // Lock the repository iterator and retrieve the next item.
+                    let next_item = {
+                        let mut iter_guard = iter.lock().unwrap();
+                        iter_guard.next()
+                    };
 
-    map_err_debug(
-        crossbeam::thread::scope(|s: &crossbeam::thread::Scope<'_>| {
-            // Spawn a thread per github token
-            for t in tokens {
-                let my_tx = tx.clone();
-                let keyword_files = &keyword_files;
-                let word_counter = &word_counter;
-                let iter = &iter;
-                let previous_results = &previous_results;
-                s.spawn(move |_| {
-                    // The main loop of the thread.
-                    // Download the repositories until the iterator is empty.
-                    loop {
-                        // Lock the repository iterator and retrieve the next item.
-                        let next_item = {
-                            let mut iter_guard = iter.lock().unwrap();
-                            iter_guard.next()
-                        };
+                    match next_item {
+                        Some(row) => {
+                            match row {
+                                Ok((row_nr, id, full_name, last_commit)) => {
+                                    // Check if the project has already been downloaded.
+                                    // If not, download it and send the information back to the main thread.
 
-                        match next_item {
-                            Some(row) => {
-                                match row {
-                                    Ok((row_nr, id, full_name, last_commit)) => {
-                                        // Check if the project has already been downloaded.
-                                        // If not, download it and send the information back to the main thread.
+                                    let project_path: String = match last_commit {
+                                        Some(commit) => format!(
+                                            "{}/{}/{}-{}",
+                                            target,
+                                            row_nr / MAX_SUBDIRS,
+                                            id,
+                                            commit
+                                        ),
+                                        None => full_name.to_string(),
+                                    };
 
-                                        let project_path: String = match last_commit {
-                                            Some(commit) => format!(
-                                                "{}/{}/{}-{}",
-                                                target,
-                                                row_nr / MAX_SUBDIRS,
-                                                id,
-                                                commit
-                                            ),
-                                            None => full_name.to_string(),
-                                        };
-
-                                        if !previous_results.contains(&id)
-                                            && (!skip || Path::new(&project_path).exists())
-                                        {
-                                            match download_repo(
-                                                &t,
-                                                id,
-                                                &project_path,
-                                                full_name,
-                                                last_commit,
-                                                keyword_files,
-                                                word_counter,
-                                                skip,
-                                                !count,
-                                            ) {
-                                                Ok(r) => {
-                                                    let _ = my_tx.send(Some(Ok(r)));
-                                                }
-                                                Err(e) => {
-                                                    let _ = my_tx.send(Some(Err(e)));
-                                                    break;
-                                                }
+                                    if !previous_results.contains(&id)
+                                        && (!skip || Path::new(&project_path).exists())
+                                    {
+                                        match download_repo(
+                                            t.as_str(),
+                                            id,
+                                            &project_path,
+                                            full_name,
+                                            last_commit,
+                                            keyword_files,
+                                            word_counter,
+                                            skip,
+                                            !count,
+                                        ) {
+                                            Ok(r) => {
+                                                let _ = my_tx.send(Some(Ok(r)));
+                                            }
+                                            Err(e) => {
+                                                let _ = my_tx.send(Some(Err(e)));
+                                                break;
                                             }
                                         }
                                     }
-                                    Err(row_nr) => {
-                                        let _ = my_tx.send(Some(
-                                            Error::new(&format!("Could not parse row {}", row_nr))
-                                                .to_res(),
-                                        ));
-                                    }
+                                }
+                                Err(row_nr) => {
+                                    let _ = my_tx
+                                        .send(Some(Err(anyhow!("Could not parse row {}", row_nr))));
                                 }
                             }
-                            None => {
-                                // When the iterator is empty, sends a None message to the main thread to signal the end of the thread.
-                                let _ = my_tx.send(None);
-                                break;
-                            }
                         }
-                    }
-                });
-            }
-
-            let mut ended_threads: usize = 0;
-
-            let progress = ProgressBar::new(n_proj as u64);
-            progress.set_style(
-                indicatif::ProgressStyle::default_bar()
-                    .template("{elapsed} {wide_bar} {percent}%")
-                    .unwrap(),
-            );
-            progress.inc(previous_results.len() as u64);
-
-            // Writes received messages to the log file.
-            // The order is therefore non-deterministic although the list of projects is.
-            while let Ok(msg) = rx.recv() {
-                match msg {
-                    Some(Ok((project_msg, files_msg))) => {
-                        writeln!(&mut project_log_file, "{}", project_msg).unwrap();
-                        if !files_msg.trim().is_empty() {
-                            write!(&mut file_log, "{}", files_msg).unwrap();
-                        }
-                        progress.inc(1);
-                    }
-                    Some(Err(e)) => e.chain("Error in child thread").to_res()?,
-                    None => {
-                        // When a None message is received, the sender thread is considered finished.
-                        // When all threads are finished, the main thread can exit.
-                        ended_threads += 1;
-                        if ended_threads == n {
+                        None => {
+                            // When the iterator is empty, sends a None message to the main thread to signal the end of the thread.
+                            let _ = my_tx.send(None);
                             break;
                         }
                     }
                 }
+            });
+        }
+
+        let mut ended_threads: usize = 0;
+
+        let progress = ProgressBar::new(n_proj as u64);
+        progress.set_style(
+            indicatif::ProgressStyle::default_bar()
+                .template("{elapsed} {wide_bar} {percent}%")
+                .unwrap(),
+        );
+        progress.inc(previous_results.len() as u64);
+
+        // Writes received messages to the log file.
+        // The order is therefore non-deterministic although the list of projects is.
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                Some(msg_content) => {
+                    let (project_msg, files_msg) = msg_content?;
+
+                    writeln!(&mut project_log_file, "{}", project_msg).unwrap();
+                    if !files_msg.trim().is_empty() {
+                        write!(&mut file_log, "{}", files_msg).unwrap();
+                    }
+                    progress.inc(1);
+                }
+                None => {
+                    // When a None message is received, the sender thread is considered finished.
+                    // When all threads are finished, the main thread can exit.
+                    ended_threads += 1;
+                    if ended_threads == n {
+                        break;
+                    }
+                }
             }
-            progress.finish();
-            Ok(())
-        }),
-        "Error in thread",
-    )?
+        }
+        progress.finish();
+        Ok(())
+    })
+    .map_err(|e| anyhow!("Thread panicked: {:?}", e))?
 }
 
 /// Downloads a GitHub repository and filters the files according to the provided extensions and keywords.
@@ -615,24 +594,18 @@ fn download_repo(
     word_counter: &Matcher,
     skip: bool,
     delete: bool,
-) -> Result<(String, String), Error> {
+) -> Result<(String, String)> {
     if !skip {
-        let http_client = map_err(
-            reqwest::blocking::Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(None)
-                .pool_idle_timeout(Duration::from_secs(90))
-                .build(),
-            "Failed to build HTTP client",
-        )?;
+        let http_client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(None)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .build()?;
         let mut headers = HeaderMap::new();
 
         headers.insert(
             AUTHORIZATION,
-            map_err(
-                HeaderValue::from_str(&format!("Bearer {}", token)),
-                "Invalid header format for HTTP request",
-            )?,
+            HeaderValue::from_str(&format!("Bearer {}", token))?,
         );
 
         headers.insert(USER_AGENT, HeaderValue::from_static("Scyros"));
@@ -640,20 +613,16 @@ fn download_repo(
         let url_str: String = format!(
             "https://api.github.com/repositories/{}/zipball/{}",
             id,
-            ok_or_else(
-                last_commit,
-                &format!(
-                    "Last commit not found for project {} (id: {})",
-                    full_name, id
-                )
-            )?
+            last_commit.with_context(|| format!(
+                "Last commit not found for project {} (id: {})",
+                full_name, id
+            ))?
         );
 
         let url: reqwest::Url =
-            map_err(reqwest::Url::parse(&url_str), &format!("Bad URL {url_str}"))?;
+            reqwest::Url::parse(&url_str).with_context(|| format!("Bad URL {url_str}"))?;
 
-        let mut response_res: Result<Response, Error> =
-            Error::new("Did not send request yet").to_res();
+        let mut response_res: Result<Response> = Err(anyhow!("Did not send request yet"));
         const MAX_RETRIES: usize = 5;
         let mut attempts: usize = 0;
 
@@ -665,23 +634,25 @@ fn download_repo(
 
         while attempts < MAX_RETRIES && response_res.is_err() {
             attempts += 1;
-            response_res = map_err(
-                http_client.get(url.clone()).headers(headers.clone()).send(),
-                &format!(
+            response_res = http_client
+                .get(url.clone())
+                .headers(headers.clone())
+                .send()
+                .with_context(|| {
+                    format!(
                     "Could not download repository {} (id: {}), error while sending HTTP request",
                     full_name, id
-                ),
-            );
+                )
+                });
             if response_res.is_err() {
                 if attempts < MAX_RETRIES {
                     // Wait before retrying
                     sleep(retry_delay(attempts));
                 } else {
-                    response_res = Error::new(&format!(
+                    response_res = Err(anyhow!(
                         "Could not download repository {} (id: {}), maximum number of retries reached",
                         full_name, id
-                    ))
-                    .to_res();
+                    ));
                 }
             }
         }
@@ -709,13 +680,11 @@ fn download_repo(
             }
         }
 
-        map_err(
-            zip_extract(
-                &format!("{}.zip", project_path).into(),
-                &Path::new(project_path).to_path_buf(),
-            ),
-            &format!("Failed to extract archive to {}", project_path),
-        )?;
+        zip_extract(
+            &format!("{}.zip", project_path).into(),
+            &Path::new(project_path).to_path_buf(),
+        )
+        .with_context(|| format!("Failed to extract archive to {}", project_path))?;
 
         delete_file(format!("{}.zip", project_path), true)?;
     }
@@ -801,23 +770,21 @@ fn download_repo(
                         }
 
                         // Remove commas from the filename to avoid issues with the CSV format.
-                        map_err(
-                            writeln!(
-                                &mut files_output,
-                                "{},{},{},{},{},{}",
-                                id,
-                                path.replace(",", "-was_comma-")
-                                    .replace("\"", "-was_quote-"),
-                                lang,
-                                loc,
-                                words,
-                                matches
-                                    .iter()
-                                    .map(|m| m.to_string())
-                                    .collect::<Vec<String>>()
-                                    .join(",")
-                            ),
-                            "Could not write to builder",
+
+                        writeln!(
+                            &mut files_output,
+                            "{},{},{},{},{},{}",
+                            id,
+                            path.replace(",", "-was_comma-")
+                                .replace("\"", "-was_quote-"),
+                            lang,
+                            loc,
+                            words,
+                            matches
+                                .iter()
+                                .map(|m| m.to_string())
+                                .collect::<Vec<String>>()
+                                .join(",")
                         )?;
                     } else if delete {
                         delete_file(path, false)?
@@ -916,6 +883,9 @@ fn error_row(id: u32, full_name: &str, last_commit: Option<&str>, n_kw_files: us
 #[cfg(test)]
 mod tests {
 
+    use crate::utils::logger::test_logger;
+    use anyhow::ensure;
+
     use super::*;
 
     const TEST_DATA: &str = "tests/data/phases/download";
@@ -926,15 +896,19 @@ mod tests {
         keywords_files: &[&str],
         count: bool,
         skip: bool,
-    ) {
+    ) -> Result<()> {
         let input_file: String = format!("{}/{}", TEST_DATA, input);
         let output_file_project: String = format!("{}.project_log.csv", input_file);
         let output_file_file: String = format!("{}.file_log.csv", input_file);
-        assert!(std::path::Path::new(&input_file).exists());
+        ensure!(
+            std::path::Path::new(&input_file).exists(),
+            "Input file {} does not exist",
+            input_file
+        );
 
         // Remove the output files if they exist.
-        assert!(delete_file(&output_file_file, true).is_ok());
-        assert!(delete_file(&output_file_project, true).is_ok());
+        delete_file(&output_file_file, true)?;
+        delete_file(&output_file_project, true)?;
 
         let target_def: String = match target {
             Some(t) => format!("target/tests/{}", t),
@@ -943,16 +917,20 @@ mod tests {
 
         // Remove the target directory if it exists.
         if target.is_some() {
-            assert!(delete_dir(&target_def, true).is_ok());
+            delete_dir(&target_def, true)?;
         }
 
         let tokens_file: String = "ghtokens.csv".to_string();
 
         for keywords_file in keywords_files {
-            assert!(std::path::Path::new(keywords_file).exists());
+            ensure!(
+                std::path::Path::new(keywords_file).exists(),
+                "Keywords file {} does not exist",
+                keywords_file
+            );
         }
 
-        let run_downloader = run(
+        run(
             &input_file,
             None,
             None,
@@ -963,32 +941,28 @@ mod tests {
             count,
             false,
             0,
-            &mut Logger::new(),
+            test_logger(),
             2,
-        );
-
-        assert!(run_downloader.is_ok());
+        )?;
 
         assert_eq!(
             CSVFile::new(&output_file_project, FileMode::Read)
                 .unwrap()
-                .indexed_lines::<String>(0)
-                .unwrap(),
+                .indexed_lines::<String>(0)?,
             CSVFile::new(
                 &format!("{}/{}.project_log.csv.expected", TEST_DATA, input),
                 FileMode::Read
             )
             .unwrap()
-            .indexed_lines(0)
-            .unwrap()
+            .indexed_lines(0)?
         );
 
-        assert!(delete_file(&output_file_file, false).is_ok());
-        assert!(delete_file(&output_file_project, false).is_ok());
+        delete_file(&output_file_file, false)?;
+        delete_file(&output_file_project, false)
     }
 
     #[test]
-    fn download_java_scala_float_double() {
+    fn download_java_scala_float_double() -> Result<()> {
         download_test(
             "to_download.csv",
             Some("java_scala_float_double"),
@@ -1002,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn download_float_local() {
+    fn download_float_local() -> Result<()> {
         download_test(
             "to_download_local.csv",
             None,

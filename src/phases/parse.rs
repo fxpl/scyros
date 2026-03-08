@@ -28,15 +28,19 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
 
+use anyhow::{anyhow, bail, ensure, Context, Error, Result};
 use std::iter::FromIterator as _;
 use std::vec;
 use std::{collections::HashSet, fmt::Write, io::Write as IOWrite, sync::Mutex};
+use tracing::info;
 use tree_sitter::{Language, Node, Parser, Tree};
 
-use crate::utils::error::*;
 use crate::utils::fs::*;
 use crate::utils::regex::*;
-use crate::utils::{csv::*, logger::Logger};
+use crate::utils::{
+    csv::*,
+    logger::{log_output_file, log_seed, Logger},
+};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -206,8 +210,8 @@ pub fn run(
     threads: usize,
     seed: u64,
     force: bool,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     let supported_languages: HashSet<&'static str> = vec![
         "c",
         "c++",
@@ -225,14 +229,16 @@ pub fn run(
     let languages: Vec<&str> = match opt_languages {
         Some(l) => {
             for lang in l.iter() {
-                if !supported_languages.contains(lang) {
-                    Error::new(&format!("Unsupported language: {}", lang)).to_res()?;
-                }
+                ensure!(
+                    supported_languages.contains(lang),
+                    "Unsupported language: {}",
+                    lang
+                );
             }
             l
         }
         None => {
-            logger.log("No language specified, using all supported languages")?;
+            info!("No language specified, using all supported languages");
             supported_languages.into_iter().collect()
         }
     };
@@ -247,40 +253,12 @@ pub fn run(
 
     let default_output_path: String = format!("{}.functions.csv", input_path);
     let output_path: &str = output_path.unwrap_or(&default_output_path);
-
-    match check_path(output_path) {
-        Ok(_) => {
-            if force {
-                logger.log(&format!("Overriding existing file: {}", output_path))?;
-            } else {
-                Error::new(&format!(
-                    "File {} already exists. Use --force to override it.",
-                    output_path
-                ))
-                .to_res()?;
-            }
-        }
-        Err(_) => logger.log(&format!("Creating new file: {}", output_path))?,
-    }
+    log_output_file(output_path, false, force)?;
 
     let default_logs_path: String = format!("{}.function_logs.csv", input_path);
     let logs_path: &str = logs_path.unwrap_or(&default_logs_path);
 
-    // Check if the logs file already exists
-    match check_path(logs_path) {
-        Ok(_) => {
-            if force {
-                logger.log(&format!("Overriding existing file: {}", logs_path))?;
-            } else {
-                Error::new(&format!(
-                    "File {} already exists. Use --force to override it.",
-                    logs_path
-                ))
-                .to_res()?;
-            }
-        }
-        Err(_) => logger.log(&format!("Creating new file: {}", logs_path))?,
-    }
+    log_output_file(logs_path, false, force)?;
 
     let mut input_file = open_csv(
         input_path,
@@ -294,23 +272,20 @@ pub fn run(
 
     let n_files_before = input_file.height();
 
-    logger.log(&format!(
+    info!(
         "  {} files found in the input file, filtering by selected languages",
         n_files_before
-    ))?;
+    );
 
     // Keep only the files written in the selected languages
-    input_file = map_err(
-        input_file
-            .lazy()
-            .filter(col("language").is_in(lit(languages_series)))
-            .collect(),
-        "Error filtering languages",
-    )?;
+    input_file = input_file
+        .lazy()
+        .filter(col("language").is_in(lit(languages_series)))
+        .collect()?;
 
     let n_files = input_file.height();
 
-    logger.log(&format!(
+    info!(
         "  {} files found after filtering ({:.2} %)",
         n_files,
         if n_files_before == 0 {
@@ -318,14 +293,14 @@ pub fn run(
         } else {
             n_files / n_files_before * 100
         }
-    ))?;
+    );
 
-    logger.log_seed(seed)?;
+    log_seed(seed);
 
     let mut shuffled_idx = (0..input_file.height()).collect::<Vec<usize>>();
 
     // Load the ids from the input file in random order.
-    logger.log_completion("Loading files in random order", || {
+    logger.run_task("Loading files in random order", || {
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         shuffled_idx.shuffle(&mut rng);
         Ok(())
@@ -348,8 +323,8 @@ pub fn run(
     const OUTPUT_COLS: usize = 17;
     const LOGS_COLS: usize = 7;
 
-    let keyword_files: KeywordFiles = logger.log_completion("Loading keywords", || {
-        KeywordFiles::new().add_files(keywords_file_paths)
+    let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
+        KeywordFiles::new().add_files(keywords_file_paths, true)
     })?;
 
     let keyword_match_headers: String = keyword_files.paths.join(",");
@@ -405,98 +380,85 @@ pub fn run(
     let (tx, rx) =
         crossbeam_channel::unbounded::<Option<Result<(String, Option<String>), Error>>>();
 
-    map_err_debug(
-        crossbeam::thread::scope(|s| {
-            for _ in 0..threads {
-                s.spawn(|_| {
-                    let my_tx = tx.clone();
-                    // The main loop of the thread.
-                    // Download the repositories until the iterator is empty.
-                    loop {
-                        // Lock the repository iterator and retrieve the next item.
-                        let next_item: Option<Result<(u32, String, &str), usize>> = {
-                            let mut iter_guard = iter.lock().unwrap();
-                            iter_guard.next()
-                        };
+    crossbeam::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|_| {
+                let my_tx = tx.clone();
+                // The main loop of the thread.
+                // Download the repositories until the iterator is empty.
+                loop {
+                    // Lock the repository iterator and retrieve the next item.
+                    let next_item: Option<Result<(u32, String, &str), usize>> = {
+                        let mut iter_guard = iter.lock().unwrap();
+                        iter_guard.next()
+                    };
 
-                        match next_item {
-                            Some(row) => match row {
-                                Ok((project_id, file_name, language)) => match analyze_file(
-                                    project_id,
-                                    &file_name,
-                                    language,
-                                    &keyword_files,
-                                    fail_policy,
-                                    &word_counter,
-                                ) {
-                                    Ok(s) => {
-                                        my_tx.send(Some(Ok(s))).unwrap();
-                                    }
-                                    Err(e) => {
-                                        my_tx.send(Some(e.to_res())).unwrap();
-                                        break;
-                                    }
-                                },
-                                Err(row_nr) => {
-                                    let _ = my_tx.send(Some(
-                                        Error::new(&format!("Could not parse row {}", row_nr))
-                                            .to_res(),
-                                    ));
+                    match next_item {
+                        Some(row) => match row {
+                            Ok((project_id, file_name, language)) => match analyze_file(
+                                project_id,
+                                &file_name,
+                                language,
+                                &keyword_files,
+                                fail_policy,
+                                &word_counter,
+                            ) {
+                                Ok(s) => {
+                                    my_tx.send(Some(Ok(s))).unwrap();
+                                }
+                                Err(e) => {
+                                    my_tx.send(Some(Err(e))).unwrap();
+                                    break;
                                 }
                             },
-                            None => {
-                                // When the iterator is empty, sends a None message to the main thread to signal the end of the thread.
-                                my_tx.send(None).unwrap();
-                                break;
+                            Err(row_nr) => {
+                                let _ = my_tx
+                                    .send(Some(Err(anyhow!("Could not parse row {}", row_nr))));
                             }
-                        }
-                    }
-                });
-            }
-
-            let mut ended_threads = 0;
-
-            let progress = ProgressBar::new(n_files as u64);
-            progress.set_style(map_err(
-                indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%"),
-                "Invalid progress bar style",
-            )?);
-
-            // Writes received messages to the log file.
-            // The order is therefore non-deterministic although the list of projects is.
-            while let Ok(msg) = rx.recv() {
-                match msg {
-                    Some(Ok((output, opt_log))) => {
-                        map_err(
-                            write!(&mut output_file, "{}", output),
-                            &format!("Error writing {}", output_path),
-                        )?;
-                        if let Some(log) = opt_log {
-                            map_err(
-                                writeln!(&mut logs_file, "{}", log),
-                                &format!("Error writing {}", logs_path),
-                            )?;
-                        }
-                        progress.inc(1);
-                    }
-                    Some(Err(e)) => {
-                        e.chain("Error in child thread").to_res::<()>()?;
-                    }
-                    None => {
-                        // When a None message is received, the sender thread is considered finished.
-                        // When all threads are finished, the main thread can exit.
-                        ended_threads += 1;
-                        if ended_threads == threads {
+                        },
+                        None => {
+                            // When the iterator is empty, sends a None message to the main thread to signal the end of the thread.
+                            my_tx.send(None).unwrap();
                             break;
                         }
                     }
                 }
+            });
+        }
+
+        let mut ended_threads = 0;
+
+        let progress = ProgressBar::new(n_files as u64);
+        progress.set_style(
+            indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
+        );
+
+        // Writes received messages to the log file.
+        // The order is therefore non-deterministic although the list of projects is.
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                Some(msg_content) => {
+                    let (output, opt_log) = msg_content?;
+                    write!(&mut output_file, "{}", output)?;
+                    if let Some(log) = opt_log {
+                        writeln!(&mut logs_file, "{}", log)?;
+                    }
+                    progress.inc(1);
+                }
+                None => {
+                    // When a None message is received, the sender thread is considered finished.
+                    // When all threads are finished, the main thread can exit.
+                    ended_threads += 1;
+                    if ended_threads == threads {
+                        break;
+                    }
+                }
             }
-            progress.finish();
-            Ok(())
-        }),
-        "Error in one of the threads",
-    )?
+        }
+        progress.finish();
+        Ok(())
+    })
+    .map_err(|e| anyhow!("Error in thread pool: {:?}", e))?
 }
 
 /// Analyze a file and extract the functions whose body contains one of the provided keywords.
@@ -529,91 +491,83 @@ fn analyze_file(
     keywords_files: &KeywordFiles,
     fail_policy: &str,
     word_counter: &Matcher,
-) -> Result<(String, Option<String>), Error> {
-    match language_to_grammar(language) {
-        Some(grammar) => {
-            // Initializes the parser
-            let mut parser: Parser = Parser::new();
-            map_err(parser.set_language(&grammar.lang), "Cannot load grammar")?;
-            match load_file(path, 1024 * 1024 * 1024)? {
-                Ok(source_code) => {
-                    // Creates a folder to store the functions of the file
-                    let target_folder: String = format!("{}.functions", path);
-                    create_dir(&target_folder)?;
+) -> Result<(String, Option<String>)> {
+    let grammar = language_to_grammar(language)
+        .with_context(|| format!("Unsupported language: {}", language))?;
+    // Initializes the parser
+    let mut parser: Parser = Parser::new();
+    parser.set_language(&grammar.lang)?;
+    match load_file(path, 1024 * 1024 * 1024)? {
+        Ok(source_code) => {
+            // Creates a folder to store the functions of the file
+            let target_folder: String = format!("{}.functions", path);
+            create_dir(&target_folder)?;
 
-                    // Parses the source code of the file
-                    let tree: Tree = ok_or_else(
-                        parser.parse(&source_code, None),
-                        &format!("Error parsing file {}", path),
+            // Parses the source code of the file
+            let tree: Tree = parser
+                .parse(&source_code, None)
+                .with_context(|| format!("Failed to parse file {}", path))?;
+
+            let file_has_parse_error: bool = tree.root_node().has_error();
+
+            if file_has_parse_error && fail_policy == "skip-file" {
+                Ok((String::new(), None))
+            } else if file_has_parse_error && fail_policy == "abort" {
+                bail!("Parse error in file {}", path)
+            } else {
+                let root: Node<'_> = tree.root_node();
+                let (output, total_functions, functions_with_kw, functions_with_specific_kw) =
+                    extract_functions(
+                        project_id,
+                        &root,
+                        &target_folder,
+                        language,
+                        &grammar,
+                        &source_code,
+                        keywords_files,
+                        fail_policy,
+                        word_counter,
+                        &mut parser,
                     )?;
 
-                    let file_has_parse_error: bool = tree.root_node().has_error();
+                let error_position: String = if file_has_parse_error {
+                    position_to_string(find_first_error_position(&root))
+                } else {
+                    "none".to_string()
+                };
 
-                    if file_has_parse_error && fail_policy == "skip-file" {
-                        Ok((String::new(), None))
-                    } else if file_has_parse_error && fail_policy == "abort" {
-                        Error::new(&format!("Parse error in file {}", path)).to_res()
-                    } else {
-                        let root: Node<'_> = tree.root_node();
-                        let (
-                            output,
-                            total_functions,
-                            functions_with_kw,
-                            functions_with_specific_kw,
-                        ) = extract_functions(
-                            project_id,
-                            &root,
-                            &target_folder,
-                            language,
-                            &grammar,
-                            &source_code,
-                            keywords_files,
-                            fail_policy,
-                            word_counter,
-                            &mut parser,
-                        )?;
-
-                        let error_position: String = if file_has_parse_error {
-                            position_to_string(find_first_error_position(&root))
-                        } else {
-                            "none".to_string()
-                        };
-
-                        Ok((
-                            output,
-                            Some(format!(
-                                "{},{},{},{},{},{},{}",
-                                project_id,
-                                path.replace(",", "-was_comma-")
-                                    .replace("\"", "-was_quote-"),
-                                language,
-                                total_functions,
-                                functions_with_kw,
-                                functions_with_specific_kw
-                                    .iter()
-                                    .map(|x| x.to_string())
-                                    .collect::<Vec<String>>()
-                                    .join(","),
-                                error_position,
-                            )),
-                        ))
-                    }
-                }
-
-                // If the file is too large, return an error row
-                Err(_) => Ok((
-                    String::new(),
-                    Some(file_error_row(
+                Ok((
+                    output,
+                    Some(format!(
+                        "{},{},{},{},{},{},{}",
                         project_id,
-                        path,
+                        path.replace(",", "-was_comma-")
+                            .replace("\"", "-was_quote-"),
                         language,
-                        keywords_files,
-                        "none",
+                        total_functions,
+                        functions_with_kw,
+                        functions_with_specific_kw
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<String>>()
+                            .join(","),
+                        error_position,
                     )),
-                )),
+                ))
             }
         }
-        None => Error::new(&format!("Unsupported language: {}", language)).to_res(),
+
+        // If the file is too large, return an error row
+        Err(_) => Ok((
+            String::new(),
+            Some(file_error_row(
+                project_id,
+                path,
+                language,
+                keywords_files,
+                "none",
+            )),
+        )),
     }
 }
 
@@ -718,13 +672,14 @@ fn extract_functions(
                 let function_code_with_strings: &Vec<u8> =
                     &remove_kind_from_source(function_source_code, &node, &grammar.comment_nodes);
                 // Re parse the function without comments to get the correct tree
-                let tree_without_comments: Tree = ok_or_else(
-                    parser.parse(function_code_with_strings, None),
-                    &format!(
-                        "Error parsing code for function {}/{}",
-                        target_folder, functions
-                    ),
-                )?;
+                let tree_without_comments: Tree = parser
+                    .parse(function_code_with_strings, None)
+                    .with_context(|| {
+                        format!(
+                            "Error parsing code for function {}/{}",
+                            target_folder, functions
+                        )
+                    })?;
 
                 // Remove string literals from the function code
                 let function_code = &remove_kind_from_source(
@@ -742,10 +697,7 @@ fn extract_functions(
                         target_folder, function_position.0, function_position.1
                     );
 
-                    map_err(
-                        std::fs::write(&function_path, function_source_code),
-                        &format!("Cannot write function code to {}", function_path),
-                    )?;
+                    std::fs::write(&function_path, function_source_code)?;
 
                     // Count the number of loops, conditionals and parameters if the function
                     let (loops, loop_nesting) = count_nodes_of_kind(&node, &grammar.loop_nodes);
@@ -787,37 +739,33 @@ fn extract_functions(
                         n_param += count_nodes_of_kind(&params, &grammar.param_nodes).0;
                         param_match += matches;
                     }
-
-                    map_err(
-                        writeln!(
-                            &mut builder,
-                            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                            project_id,
-                            &function_path
-                                .replace(",", "-was_comma-")
-                                .replace("\"", "-was_quote-"),
-                            name.replace(",", "-was_comma-")
-                                .replace("\"", "-was_quote-"),
-                            position_to_string(Some(function_position)),
-                            language,
-                            count_text_lines(function_code_with_strings),
-                            word_counter.count_matches_in_text(function_code_with_strings),
-                            matches
-                                .iter()
-                                .map(|x| x.to_string())
-                                .collect::<Vec<String>>()
-                                .join(","),
-                            loops,
-                            loop_nesting,
-                            conditionals,
-                            conditional_nesting,
-                            calls,
-                            calls_nesting,
-                            n_param,
-                            param_match,
-                            error_position,
-                        ),
-                        &format!("Error writing function statistics of {}", function_path),
+                    writeln!(
+                        &mut builder,
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        project_id,
+                        &function_path
+                            .replace(",", "-was_comma-")
+                            .replace("\"", "-was_quote-"),
+                        name.replace(",", "-was_comma-")
+                            .replace("\"", "-was_quote-"),
+                        position_to_string(Some(function_position)),
+                        language,
+                        count_text_lines(function_code_with_strings),
+                        word_counter.count_matches_in_text(function_code_with_strings),
+                        matches
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<String>>()
+                            .join(","),
+                        loops,
+                        loop_nesting,
+                        conditionals,
+                        conditional_nesting,
+                        calls,
+                        calls_nesting,
+                        n_param,
+                        param_match,
+                        error_position,
                     )?;
                     functions_with_kw += 1;
                     for (i, m) in matches.iter().enumerate() {
@@ -1398,6 +1346,7 @@ mod tests {
 
     use crate::utils::dataframes::*;
     use crate::utils::fs::*;
+    use crate::utils::logger::test_logger;
 
     use super::*;
 
@@ -1408,26 +1357,29 @@ mod tests {
         keywords: &[&str],
         languages: Option<Vec<&str>>,
         should_pass: bool,
-    ) {
-        let input_df = open_csv(&input_file_path, None, None);
-        assert!(input_df.is_ok());
-        let input_df = input_df.unwrap();
-        assert!(has_column(&input_df, "name"));
-        let input_df = input_df.column("name").unwrap().str().unwrap();
+    ) -> Result<()> {
+        let input_df = open_csv(&input_file_path, None, None)?;
+        ensure!(
+            has_column(&input_df, "name"),
+            "Input dataframe must have a 'name' column"
+        );
+        let input_df = input_df.column("name")?.str()?;
 
         let output_file_path = format!("{}.functions.csv", input_file_path);
-        assert!(delete_file(&output_file_path, true).is_ok());
+        delete_file(&output_file_path, true)?;
 
         let logs_file_path = format!("{}.function_logs.csv", input_file_path);
-        assert!(delete_file(&logs_file_path, true).is_ok());
+        delete_file(&logs_file_path, true)?;
 
         for path in input_df {
-            assert!(path.is_some());
-            assert!(delete_dir(&format!("{}.functions", path.unwrap()), true).is_ok());
+            delete_dir(
+                &format!("{}.functions", path.with_context(|| "Failed to get path")?),
+                true,
+            )?;
         }
 
         if should_pass {
-            assert!(run(
+            run(
                 input_file_path,
                 None,
                 None,
@@ -1437,14 +1389,14 @@ mod tests {
                 8,
                 0,
                 false,
-                &mut Logger::new()
-            )
-            .is_ok());
+                test_logger(),
+            )?;
 
-            let logs_df = open_csv(&logs_file_path, None, None);
-            assert!(logs_df.is_ok());
-            let logs_df = logs_df.unwrap();
-            assert!(has_column(&logs_df, "name"));
+            let logs_df = open_csv(&logs_file_path, None, None)?;
+            ensure!(
+                has_column(&logs_df, "name"),
+                "Logs dataframe must have a 'name' column"
+            );
             let sorted_logs_df = logs_df
                 .sort(vec!["name"], SortMultipleOptions::new())
                 .unwrap();
@@ -1453,50 +1405,54 @@ mod tests {
                 &format!("{}.function_logs.csv.expected", input_file_path),
                 None,
                 None,
+            )?;
+            ensure!(
+                has_column(&expected_logs_df, "name"),
+                "Expected logs dataframe must have a 'name' column"
             );
-            assert!(expected_logs_df.is_ok());
-            let expected_logs_df = expected_logs_df.unwrap();
-            assert!(has_column(&expected_logs_df, "name"));
             let sorted_expected_logs_df = expected_logs_df
                 .sort(vec!["name"], SortMultipleOptions::new())
                 .unwrap();
-            assert!(sorted_expected_logs_df.equals(&sorted_logs_df));
+            assert_eq!(sorted_expected_logs_df, sorted_logs_df);
 
-            let output_df = open_csv(&output_file_path, None, None);
-            assert!(output_df.is_ok());
-            let output_df = output_df.unwrap();
-            assert!(has_column(&output_df, "path"));
-            let sorted_output_df = output_df
-                .sort(vec!["path"], SortMultipleOptions::new())
-                .unwrap();
+            let output_df = open_csv(&output_file_path, None, None)?;
+            ensure!(
+                has_column(&output_df, "path"),
+                "Output dataframe must have a 'path' column"
+            );
+            let sorted_output_df = output_df.sort(vec!["path"], SortMultipleOptions::new())?;
 
-            let expected_df = open_csv(&format!("{}.expected", output_file_path), None, None);
-            assert!(expected_df.is_ok());
-            let expected_df = expected_df.unwrap();
-            assert!(has_column(&expected_df, "path"));
-            let sorted_expected_df = expected_df
-                .sort(vec!["path"], SortMultipleOptions::new())
-                .unwrap();
+            let expected_df = open_csv(&format!("{}.expected", output_file_path), None, None)?;
+            ensure!(
+                has_column(&expected_df, "path"),
+                "Expected dataframe must have a 'path' column"
+            );
+            let sorted_expected_df = expected_df.sort(vec!["path"], SortMultipleOptions::new())?;
 
-            assert!(sorted_expected_df.equals(&sorted_output_df));
+            assert_eq!(sorted_expected_df, sorted_output_df);
 
-            for path in sorted_output_df.column("path").unwrap().str().unwrap() {
-                assert!(path.is_some());
-                let path = Path::new(path.unwrap());
-                assert!(path.exists());
+            for path in sorted_output_df.column("path")?.str()? {
+                let path = Path::new(path.with_context(|| "Failed to get path")?);
+                ensure!(path.exists(), "Parsed file not found: {}", path.display());
                 let expected_path_name = format!(
                     "{}.expected/{}",
-                    path.parent().unwrap().to_str().unwrap(),
-                    path.file_name().unwrap().to_str().unwrap()
+                    path.parent()
+                        .with_context(|| "Failed to get parent directory")?
+                        .to_str()
+                        .with_context(|| "Failed to convert parent directory to string")?,
+                    path.file_name()
+                        .with_context(|| "Failed to get file name")?
+                        .to_str()
+                        .with_context(|| "Failed to convert file name to string")?
                 );
                 let expected_path = Path::new(&expected_path_name);
                 assert_eq!(
-                    std::fs::read_to_string(path).unwrap(),
-                    std::fs::read_to_string(expected_path).unwrap()
+                    std::fs::read_to_string(path)?,
+                    std::fs::read_to_string(expected_path)?
                 );
             }
         } else {
-            assert!(run(
+            ensure!(run(
                 input_file_path,
                 None,
                 None,
@@ -1506,7 +1462,7 @@ mod tests {
                 8,
                 0,
                 false,
-                &mut Logger::new()
+                test_logger()
             )
             .is_err());
         }
@@ -1515,13 +1471,13 @@ mod tests {
         assert!(delete_file(&logs_file_path, true).is_ok());
 
         for path in input_df {
-            assert!(path.is_some());
-            assert!(delete_dir(&format!("{}.functions", path.unwrap()), true).is_ok());
+            delete_dir(&format!("{}.functions", path.unwrap()), true)?;
         }
+        Ok(())
     }
 
     #[test]
-    fn parse_fp() {
+    fn parse_fp() -> Result<()> {
         let keywords = vec![
             "tests/data/keywords/fp_types.json",
             "tests/data/keywords/fp_transcendental.json",
@@ -1531,11 +1487,11 @@ mod tests {
 
         let input_file_path = format!("{}/to_parse.csv", TEST_DATA);
 
-        test_parse(&input_file_path, &keywords, None, true);
+        test_parse(&input_file_path, &keywords, None, true)
     }
 
     #[test]
-    fn parse_go() {
+    fn parse_go() -> Result<()> {
         let keywords = vec![
             "tests/data/keywords/fp_types.json",
             "tests/data/keywords/fp_transcendental.json",
@@ -1544,33 +1500,33 @@ mod tests {
 
         let input_file_path = format!("{}/parse_go.csv", TEST_DATA);
 
-        test_parse(&input_file_path, &keywords, None, true);
+        test_parse(&input_file_path, &keywords, None, true)
     }
 
     #[test]
-    fn invalid_file() {
+    fn invalid_file() -> Result<()> {
         let keywords = vec!["tests/data/keywords/c_float.json"];
 
         let input_file_path = format!("{}/invalid.csv", TEST_DATA);
 
-        test_parse(&input_file_path, &keywords, None, true);
+        test_parse(&input_file_path, &keywords, None, true)
     }
 
     #[test]
-    fn invalid_lang() {
+    fn invalid_lang() -> Result<()> {
         let keywords = vec!["tests/data/keywords/scala_float.json"];
 
         let input_file_path = format!("{}/empty.csv", TEST_DATA);
 
-        test_parse(&input_file_path, &keywords, Some(["rust"].to_vec()), false);
+        test_parse(&input_file_path, &keywords, Some(["rust"].to_vec()), false)
     }
 
     #[test]
-    fn empty() {
+    fn empty() -> Result<()> {
         let keywords = vec!["tests/data/keywords/scala_float.json"];
 
         let input_file_path = format!("{}/empty.csv", TEST_DATA);
 
-        test_parse(&input_file_path, &keywords, Some(["c"].to_vec()), true);
+        test_parse(&input_file_path, &keywords, Some(["c"].to_vec()), true)
     }
 }

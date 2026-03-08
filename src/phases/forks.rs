@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Discards forks from a CSV file.\n\
-//! The file must contain a column named 'fork' with the value 1 for forks and 0 for non-forks.\n\
-//! Prints statistics about the number of forks found in the file and write the non-forked projects to a new CSV file.\n
-//! By default, the output file name is the same as the input file name with \".non_forks.csv\" appended.
+#![doc = include_str!("../docs/forks.md")]
 
 use std::iter::FromIterator;
 
+use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, Command};
 use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IntoLazy, Schema};
+use tracing::info;
 
-use crate::utils::error::*;
 use crate::utils::fs::*;
 use crate::utils::logger::{log_output_file, log_write_output, Logger};
 
@@ -31,12 +29,7 @@ use crate::utils::logger::{log_output_file, log_write_output, Logger};
 pub fn cli() -> Command {
     Command::new("forks")
         .about("Discards forks from a CSV file")
-        .long_about(
-            "Discards forks from a CSV file.\n\
-             The file must contain a column named 'fork' with the value 1 for forks and 0 for non-forks.\n\
-             Prints statistics about the number of forks found in the file and write the non-forked projects to a new CSV file.\n
-             By default, the output file name is the same as the input file name with \".non_forks.csv\" appended.\n"
-        )
+        .long_about(include_str!("../docs/forks.md"))
         .disable_version_flag(true)
         .arg(
             Arg::new("input")
@@ -59,7 +52,7 @@ pub fn cli() -> Command {
                 .long("column")
                 .value_name("FORK_COLUMN")
                 .help("Name of the column storing whether projects are forks.")
-                .default_value("fork")
+                .default_value("fork"),
         )
         .arg(
             Arg::new("force")
@@ -99,8 +92,8 @@ pub fn run(
     forks: &str,
     force: bool,
     no_output: bool,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     let default_output_path = format!("{}.non-forks.csv", input_path);
     let output_path = output_path.unwrap_or(&default_output_path);
 
@@ -108,7 +101,7 @@ pub fn run(
     check_path(input_path)?;
 
     // Checks if the output file already exists
-    log_output_file(logger, output_path, no_output, force)?;
+    log_output_file(output_path, no_output, force)?;
 
     // Reads the CSV file into a DataFrame
     let mut projects: DataFrame = open_csv(
@@ -121,27 +114,28 @@ pub fn run(
     )?;
     let projects_count = projects.height();
 
-    logger.log(&format!("{} entries found in the file.", projects_count))?;
+    info!("{} entries found in the file.", projects_count);
 
     // Filter out forked projects
-    projects = map_err(
-        projects.lazy().filter(col(forks).eq(lit(0))).collect(),
-        "Could not remove forked projects",
-    )?;
+    projects = projects
+        .lazy()
+        .filter(col(forks).eq(lit(0)))
+        .collect()
+        .with_context(|| "Could not remove forked projects")?;
 
     let non_forks_count = projects.height();
     let non_forks_percentage = (non_forks_count as f64 / projects_count as f64) * 100.0;
 
     // Log the number of forked and non-forked projects
-    logger.log(&format!(
+    info!(
         "Forks: {} / {:.2} %",
         projects_count - non_forks_count,
         100.0 - non_forks_percentage
-    ))?;
-    logger.log(&format!(
+    );
+    info!(
         "Non-forks: {} / {:.2} %",
         non_forks_count, non_forks_percentage
-    ))?;
+    );
 
     // Writes the result to the output CSV file
     log_write_output(logger, output_path, &mut projects, no_output)
@@ -151,26 +145,26 @@ pub fn run(
 mod tests {
 
     use super::*;
+    use crate::utils::logger::test_logger;
+    use anyhow::ensure;
 
     #[test]
-    fn remove_forks() {
+    fn remove_forks() -> Result<()> {
         let input_path = "tests/data/phases/forks/forks.csv";
         let default_output_path = format!("{}.non-forks.csv", input_path);
 
-        assert!(delete_file(&default_output_path, true).is_ok());
-        assert!(run(input_path, None, "fork", false, false, &mut Logger::new()).is_ok());
+        delete_file(&default_output_path, true)?;
+        run(input_path, None, "fork", false, false, &test_logger())?;
 
-        let expected_output_path = format!("{}.expected", default_output_path);
-        let expected_df = open_csv(&expected_output_path, None, None);
-        assert!(expected_df.is_ok());
-        let expected_df = expected_df.unwrap();
+        let expected_df = open_csv(&format!("{}.expected", default_output_path), None, None)?;
 
-        let output_df = open_csv(&default_output_path, None, None);
-        assert!(output_df.is_ok());
-        let output_df = output_df.unwrap();
+        let output_df = open_csv(&default_output_path, None, None)?;
 
-        assert!(expected_df.equals(&output_df));
+        ensure!(
+            expected_df.equals(&output_df),
+            "Filtered DataFrame does not match expected result."
+        );
 
-        assert!(delete_file(&default_output_path, false).is_ok());
+        delete_file(&default_output_path, false)
     }
 }

@@ -25,12 +25,13 @@ use std::iter::FromIterator as _;
 use std::path::Path;
 
 use crate::utils::csv::*;
-use crate::utils::error::*;
+use crate::utils::dataframes;
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::Github;
 use crate::utils::json::*;
 use crate::utils::logger::*;
+use anyhow::{anyhow, bail, Context, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -39,6 +40,7 @@ use polars::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
+use tracing::info;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -163,8 +165,8 @@ pub fn run(
     ids: &str,
     names: &str,
     sub: Option<usize>,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     // Column index of the id in the input and cache files.
     const ID_COL: usize = 0;
 
@@ -172,7 +174,7 @@ pub fn run(
     logger.log_tokens(tokens)?;
 
     // Load input file
-    let input_file: DataFrame = logger.log_completion("Loading input file", || {
+    let input_file: DataFrame = logger.run_task("Loading input file", || {
         open_csv(
             input_path,
             Some(Schema::from_iter(vec![
@@ -183,12 +185,12 @@ pub fn run(
         )
     })?;
 
-    logger.log_seed(seed)?;
+    log_seed(seed);
 
     let mut shuffled_idx: Vec<usize> = (0..input_file.height()).collect();
 
     // Load the ids from the input file in random order.
-    logger.log_completion("Loading project IDs in random order", || {
+    logger.run_task("Loading project IDs in random order", || {
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         shuffled_idx.shuffle(&mut rng);
         Ok(())
@@ -206,7 +208,7 @@ pub fn run(
 
     let n_proj: usize = input_file.height();
 
-    logger.log(&format!("  {} projects found.", n_proj))?;
+    info!("  {} projects found.", n_proj);
 
     // Name of the output file.
     let default_output_path: String = format!("{}.languages.csv", &input_path);
@@ -216,26 +218,20 @@ pub fn run(
     let previous_results: HashSet<u32> = if force {
         HashSet::new()
     } else {
-        logger.log_completion("Resuming progress", || {
+        logger.run_task("Resuming progress", || {
             Ok(if Path::new(&output_file_path).exists() {
-                map_err(
-                    map_err(
-                        open_csv(
-                            input_path,
-                            Some(Schema::from_iter(vec![Field::new(
-                                ids.into(),
-                                DataType::UInt32,
-                            )])),
-                            Some(vec![ids]),
-                        )?
-                        .column(ids),
-                        "Could not extract the ids from the output file",
-                    )?
-                    .u32(),
-                    "Could not convert the ids to u32",
+                dataframes::u32(
+                    &open_csv(
+                        input_path,
+                        Some(Schema::from_iter(vec![Field::new(
+                            ids.into(),
+                            DataType::UInt32,
+                        )])),
+                        Some(vec![ids]),
+                    )?,
+                    ids,
                 )?
-                .iter()
-                .map(|x| x.unwrap())
+                .into_iter()
                 .collect()
             } else {
                 HashSet::new()
@@ -244,10 +240,10 @@ pub fn run(
     };
 
     if !previous_results.is_empty() {
-        logger.log(&format!(
+        info!(
             "  the languages of {} projects have already been queried",
             previous_results.len()
-        ))?;
+        );
     }
 
     let mut output_file: CSVFile = CSVFile::new(
@@ -262,7 +258,7 @@ pub fn run(
     output_file.write_header(ProjectInfo::header())?;
 
     // Load the cache
-    let cache: HashMap<u32, String> = logger.log_completion("Loading cache", || {
+    let cache: HashMap<u32, String> = logger.run_task("Loading cache", || {
         Ok(match cache_opt {
             Some(cache_path) => {
                 let cache = CSVFile::new(cache_path, FileMode::Read)?;
@@ -272,14 +268,14 @@ pub fn run(
         })
     })?;
 
-    logger.log(&format!("  {} projects found in the cache.", cache.len()))?;
+    info!("  {} projects found in the cache.", cache.len());
 
     // Number of requests that were saved by using the cache.
     let mut request_from_cache: usize = 0;
 
     let gh = Github::new(tokens);
 
-    logger.log("Starting to query the GitHub API...")?;
+    info!("Starting to query the GitHub API...");
 
     // Number of projects to sample.
     let mut n: usize = match sub {
@@ -333,10 +329,7 @@ pub fn run(
                         }
                     };
 
-                    map_err(
-                        writeln!(&mut output_file, "{}", csv_row),
-                        &format!("Could not write to file {}", &output_file_path),
-                    )?;
+                    writeln!(&mut output_file, "{}", csv_row)?;
 
                     progress_bar.inc(1);
                     progress_bar.set_message(request_from_cache.to_string());
@@ -344,10 +337,7 @@ pub fn run(
                 }
             }
             Err(idx) => {
-                map_err(
-                    row,
-                    &format!("Could not parse row {} in the input file", idx),
-                )?;
+                bail!("Could not parse row {} in the input file", idx);
             }
         }
     }
@@ -400,18 +390,13 @@ impl ProjectInfo {
     /// # Panics
     ///
     /// * If the JSON object could not be parsed.
-    fn from_json(
-        json_lang: &json::JsonValue,
-        json_commit: &json::JsonValue,
-    ) -> Result<Self, Error> {
+    fn from_json(json_lang: &json::JsonValue, json_commit: &json::JsonValue) -> Result<Self> {
         let mut languages: HashMap<String, i64> = HashMap::new();
         for (lan, size) in json_lang.entries() {
             languages.insert(
                 lan.to_owned(),
-                ok_or_else(
-                    size.as_i64(),
-                    &format!("Could not parse the size of the language {}", lan),
-                )?,
+                size.as_i64()
+                    .with_context(|| anyhow!("Could not parse the size of the language {}", lan))?,
             );
         }
 
@@ -470,7 +455,7 @@ mod tests {
             "id",
             "name",
             None,
-            &mut Logger::new(),
+            test_logger(),
         );
         assert!(run_scraper.is_ok());
 

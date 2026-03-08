@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use scyros::phases::{
     download, duplicate_files, duplicate_ids, extract_benchmarks, filter_languages,
     filter_metadata, forks, ids, languages, metadata, parse, pull_request,
 };
-use scyros::utils::error::*;
 use scyros::utils::logger::Logger;
+use tracing::{error, info};
 
 fn cli() -> Command {
     Command::new("scyros")
@@ -47,14 +48,14 @@ fn cli() -> Command {
 
 fn main() {
     let cli_args = cli().get_matches();
-    let mut logger = Logger::new();
 
     // Calls to unwrap are safe because the arguments are required.
-    let res: Result<(), Error> =
+    let res: Result<()> =
+        Logger::new().and_then(|logger|
         match cli_args.subcommand_name() {
             Some (subcommand) => {
-                ok_or_else(cli_args.subcommand_matches(subcommand),
-                &format!("The subcommand {} is not available. Run the program with the --help flag to see the list of subcommands", subcommand)).and_then
+                cli_args.subcommand_matches(subcommand).with_context(||
+                format!("The subcommand {} is not available. Run the program with the --help flag to see the list of subcommands", subcommand)).and_then
                 (
                     |cli_subargs| {
                             if subcommand == ids::cli().get_name() {
@@ -67,7 +68,7 @@ fn main() {
                                     cli_subargs.get_one::<usize>("number").copied(),
                                     cli_subargs.get_one::<String>("mode").unwrap(),
                                     cli_subargs.get_flag("force"),
-                                    &mut logger
+                                    &logger
                                 )
                             } else if subcommand == duplicate_ids::cli().get_name() {
                                 duplicate_ids::run(
@@ -76,7 +77,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("column").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
-                                    &mut logger
+                                    &logger
                                 )
                             } else if subcommand == forks::cli().get_name() {
                                 forks::run(
@@ -85,7 +86,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("column").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
-                                    &mut logger
+                                    &logger
                                 )
                             } else if subcommand == metadata::cli().get_name() {
                                 metadata::run(
@@ -98,7 +99,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("ids").unwrap(),
                                     cli_subargs.get_one::<String>("names").unwrap(),
                                     cli_subargs.get_one::<usize>("sub").copied(),
-                                    &mut logger,
+                                    &logger,
                                 )
                             } else if subcommand == filter_metadata::cli().get_name() {
                                 filter_metadata::run(
@@ -110,7 +111,7 @@ fn main() {
                                     cli_subargs.get_flag("non-code"),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
-                                    &mut logger,
+                                    &logger,
                                 )
                             } else if subcommand == languages::cli().get_name() {
                                 languages::run(
@@ -123,7 +124,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("ids").unwrap(),
                                     cli_subargs.get_one::<String>("names").unwrap(),
                                     cli_subargs.get_one::<usize>("sub").copied(),
-                                    &mut logger,
+                                    &logger,
                                 )
                             } else if subcommand == filter_languages::cli().get_name() {
                                 filter_languages::run(
@@ -132,7 +133,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("languages").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
-                                    &mut logger,
+                                    &logger,
                                 )
                             } else if subcommand == download::cli().get_name() {
                                 download::run(
@@ -150,7 +151,7 @@ fn main() {
                                     cli_subargs.get_flag("count"),
                                     cli_subargs.get_flag("force"),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
-                                    &mut logger,
+                                    &logger,
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                 )
                             } else if subcommand == duplicate_files::cli().get_name() {
@@ -162,7 +163,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("similarity").unwrap(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     cli_subargs.get_one::<String>("header").unwrap(),
-                                    &mut logger,
+                                    &logger,
                                 )
                             } else if subcommand == parse::cli().get_name() {
                                 parse::run(
@@ -183,7 +184,7 @@ fn main() {
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     cli_subargs.get_flag("force"),
-                                    &mut logger,
+                                    &logger,
                                 )
                             }
                             else if subcommand == extract_benchmarks::cli().get_name() {
@@ -196,7 +197,7 @@ fn main() {
                                     cli_subargs.get_flag("force"),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     *cli_subargs.get_one::<u64>("timeout").unwrap(),
-                                    &mut logger,
+                                    &logger,
                                 )
                             }
                             else if subcommand == pull_request::cli().get_name() {
@@ -210,17 +211,26 @@ fn main() {
                                     cli_subargs.get_one::<String>("names").unwrap(),
                                     cli_subargs.get_one::<String>("dest").unwrap(),
                                     cli_subargs.get_one::<usize>("sub").copied(),
-                                    &mut logger,
+                                    &logger,
                                 )
                             }
                             else {
-                                Error::new(&format!("The subcommand {} is not available. Run the program with the --help flag to see the list of subcommands", subcommand)).to_res()
+                                Err(anyhow!("The subcommand {} is not available. Run the program with the --help flag to see the list of subcommands", subcommand))
                             }
                     }
                 )
         }
-        None => Error::new("You need to specify a subcommand. Run the program with the --help flag to see the list of subcommands").to_res()
-    };
+        None => Err(anyhow!("You need to specify a subcommand. Run the program with the --help flag to see the list of subcommands"))
+    });
 
-    let _ = logger.log(&res_to_string(res, cli_args.get_flag("debug")));
+    match res {
+        Ok(_) => info!("Operation completed successfully."),
+        Err(e) => {
+            if cli_args.get_flag("debug") {
+                error!("{:?}", e);
+            } else {
+                error!("Error: {}", e);
+            }
+        }
+    }
 }

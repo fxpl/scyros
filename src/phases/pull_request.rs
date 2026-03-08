@@ -26,12 +26,12 @@ use std::path::Path;
 
 use crate::utils::csv::*;
 use crate::utils::dataframes::u32;
-use crate::utils::error::*;
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::*;
 use crate::utils::json::*;
-use crate::utils::logger::Logger;
+use crate::utils::logger::{log_seed, Logger};
+use anyhow::{bail, Context, Error, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -41,6 +41,7 @@ use polars::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
+use tracing::info;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -180,13 +181,13 @@ pub fn run(
     names: &str,
     target: &str,
     sub: Option<usize>,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     // Check if the token file is valid.
     logger.log_tokens(tokens)?;
 
     // Load input file
-    let input_file: DataFrame = logger.log_completion("Loading input file", || {
+    let input_file: DataFrame = logger.run_task("Loading input file", || {
         open_csv(
             input_path,
             Some(Schema::from_iter(vec![
@@ -197,12 +198,12 @@ pub fn run(
         )
     })?;
 
-    logger.log_seed(seed)?;
+    log_seed(seed);
 
     let mut shuffled_idx: Vec<usize> = (0..input_file.height()).collect();
 
     // Load the ids from the input file in random order.
-    logger.log_completion("Loading project IDs in random order", || {
+    logger.run_task("Loading project IDs in random order", || {
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         shuffled_idx.shuffle(&mut rng);
         Ok(())
@@ -220,7 +221,7 @@ pub fn run(
 
     let n_pr: usize = input_file.height();
 
-    logger.log(&format!("  {} projects found.", n_pr))?;
+    info!("  {} projects found.", n_pr);
 
     // Name of the output file.
     let default_output_path: String = format!("{}.pulls.csv", &input_path);
@@ -230,7 +231,7 @@ pub fn run(
     let previous_results: HashSet<u32> = if force {
         HashSet::new()
     } else {
-        logger.log_completion("Resuming progress", || {
+        logger.run_task("Resuming progress", || {
             // Open output file if it exists and load the ids of the projects that have already been processed.
             Ok(if Path::new(output_file_path).exists() {
                 let df_res: DataFrame = open_csv(
@@ -249,10 +250,10 @@ pub fn run(
     };
 
     if !previous_results.is_empty() {
-        logger.log(&format!(
+        info!(
             "  the metadata of {} projects have already been queried",
             previous_results.len()
-        ))?;
+        );
     }
 
     let mut output_file: CSVFile = CSVFile::new(
@@ -268,7 +269,7 @@ pub fn run(
 
     let gh = Github::new(tokens);
 
-    logger.log("Starting to query the GitHub API...")?;
+    info!("Starting to query the GitHub API...");
 
     // Number of projects to sample.
     let mut n: usize = match sub {
@@ -316,29 +317,21 @@ pub fn run(
                     ) {
                         for pr_res in pages {
                             let obj: PRMetadata = pr_res.unwrap_or_default();
-                            map_err(
-                                writeln!(
-                                    &mut pull_requests,
-                                    "{}",
-                                    obj.to_csv((id, full_name.to_string()))
-                                ),
-                                "Could not write to string builder",
+
+                            writeln!(
+                                &mut pull_requests,
+                                "{}",
+                                obj.to_csv((id, full_name.to_string()))
                             )?;
                         }
-                        map_err(
-                            write!(&mut output_file, "{}", pull_requests),
-                            &format!("Could not write to file {}", &output_file_path),
-                        )?;
+                        write!(&mut output_file, "{}", pull_requests)?;
                     }
                     progress_bar.inc(1);
                     n -= 1;
                 }
             }
             Err(idx) => {
-                map_err(
-                    row,
-                    &format!("Could not parse row {} in the input file", idx),
-                )?;
+                bail!("Could not parse row {} in the input file", idx)
             }
         }
     }
@@ -492,24 +485,20 @@ fn scrape_pages<T>(
     let mut is_null: bool = false;
     let mut items: Vec<Result<T, Error>> = Vec::new();
     while !is_null {
-        match gh.request(&request(PER_PAGE, page)) {
-            Ok(json) => {
-                if json.is_empty() {
+        let json: JsonValue = gh
+            .request(&request(PER_PAGE, page))
+            .with_context(|| format!("Error during GitHub request {}", &request(PER_PAGE, page)))?;
+        {
+            if json.is_empty() {
+                is_null = true;
+            } else {
+                items.extend(json.members().map(|item| func(item.clone())));
+                if items.is_empty() {
                     is_null = true;
                 } else {
-                    items.extend(json.members().map(|item| func(item.clone())));
-                    if items.is_empty() {
-                        is_null = true;
-                    } else {
-                        page += 1;
-                    }
+                    page += 1;
                 }
             }
-            Err(e) => map(
-                e,
-                &format!("Error during GitHub request {}", &request(PER_PAGE, page)),
-            )
-            .to_res()?,
         }
     }
     Ok(items)
@@ -633,13 +622,10 @@ impl FromGitHub for PRComment {
 /// # Returns
 ///
 /// Unit if the comments were successfully scraped and saved, or an error message if an error occurred.
-fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<(), Error> {
+fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<()> {
     let mut file_content: String = String::new();
     let mut output_file: CSVFile = CSVFile::new(&pr.file_path, FileMode::Overwrite)?;
-    map_err(
-        writeln!(&mut file_content, "{}", PRComment::header().join(",")),
-        "Could not write headers to string builder",
-    )?;
+    writeln!(&mut file_content, "{}", PRComment::header().join(","))?;
 
     // Body of the PR as the first comment.
     let pr_body: PRComment = PRComment {
@@ -651,10 +637,7 @@ fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<(), 
         body: pr.body.clone(),
     };
 
-    map_err(
-        writeln!(&mut file_content, "{}", pr_body.to_csv(())),
-        "Could not write PR comments to string builder",
-    )?;
+    writeln!(&mut file_content, "{}", pr_body.to_csv(()))?;
 
     // To get all the comments, we need to scrap three different endpoints.
     for t in [
@@ -672,26 +655,24 @@ fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<(), 
             },
             &|json| Ok(PRComment::parse_json(&json, t.0)?.to_csv(())),
         )? {
-            match row_res {
-                Ok(row) => map_err(
-                    writeln!(&mut file_content, "{}", row),
-                    "Could not write PR comments to string builder",
-                )?,
-                Err(_) => {
-                    writeln!(&mut file_content, "{}", PRComment::default().to_csv(())).unwrap()
-                }
-            }
+            writeln!(
+                &mut file_content,
+                "{}",
+                row_res.unwrap_or_else(|_| PRComment::default().to_csv(()))
+            )?;
         }
     }
 
-    map_err(
-        write!(&mut output_file, "{}", file_content),
-        &format!("Could not write to file {}", &pr.file_path),
-    )
+    write!(&mut output_file, "{}", file_content)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+
+    use anyhow::ensure;
+
+    use crate::utils::logger::test_logger;
 
     use super::*;
 
@@ -702,12 +683,12 @@ mod tests {
         output_file: &str,
         target: &str,
         pr_paths: &Vec<String>,
-    ) {
-        assert!(std::path::Path::new(&input_file).exists());
+    ) -> Result<()> {
+        ensure!(std::path::Path::new(&input_file).exists());
 
         let tokens_file: String = "ghtokens.csv".to_string();
 
-        let run_scraper: Result<(), Error> = run(
+        run(
             &input_file,
             Some(&output_file.to_string()),
             &tokens_file,
@@ -717,35 +698,24 @@ mod tests {
             "name",
             &target,
             None,
-            &mut Logger::new(),
-        );
-        assert!(run_scraper.is_ok());
+            test_logger(),
+        )?;
 
         for pr_path in pr_paths {
-            let pr_discussion = open_csv(pr_path, None, None);
-            assert!(pr_discussion.is_ok());
-            let pr_discussion = pr_discussion.unwrap();
-
-            let pr_discussion_expected = open_csv(&format!("{}.expected", pr_path), None, None);
-            assert!(pr_discussion_expected.is_ok());
-            let pr_discussion_expected = pr_discussion_expected.unwrap();
-
+            let pr_discussion = open_csv(pr_path, None, None)?;
+            let pr_discussion_expected = open_csv(&format!("{}.expected", pr_path), None, None)?;
             assert_eq!(pr_discussion, pr_discussion_expected);
-            assert!(delete_file(pr_path, false).is_ok());
+            delete_file(pr_path, false)?;
         }
 
-        let output_df = open_csv(&output_file, None, None);
-        assert!(output_df.is_ok());
-        let output_df = output_df.unwrap();
-        let expected_df = open_csv(&format!("{}.expected", output_file), None, None);
-        assert!(expected_df.is_ok());
-        let expected_df = expected_df.unwrap();
-        assert!(expected_df.equals(&output_df));
-        assert!(delete_file(&output_file, false).is_ok());
+        let output_df = open_csv(&output_file, None, None)?;
+        let expected_df = open_csv(&format!("{}.expected", output_file), None, None)?;
+        assert_eq!(expected_df, output_df);
+        delete_file(&output_file, false)
     }
 
     #[test]
-    fn test_pr_empty_output() {
+    fn test_pr_empty_output() -> Result<()> {
         test_phase_pull_request(
             &format!("{}/repos.csv", TEST_DATA),
             &format!("{}/repos.csv.pulls.csv", TEST_DATA),
@@ -754,51 +724,49 @@ mod tests {
                 format!("{}/prs/5983/1128315983/1128315983_1.csv", TEST_DATA),
                 format!("{}/prs/5983/1128315983/1128315983_2.csv", TEST_DATA),
             ],
-        );
+        )
     }
 
     #[test]
-    fn test_pr_with_output() {
+    fn test_pr_with_output() -> Result<()> {
         let input_path: String = format!("{}/repos2.csv", TEST_DATA);
-        let copy_result: Result<u64, std::io::Error> = std::fs::copy(
+        std::fs::copy(
             &format!("{}/repos_complete.csv.expected", TEST_DATA),
             &format!("{}/repos_complete.csv", TEST_DATA),
-        );
-        assert!(copy_result.is_ok());
+        )?;
         test_phase_pull_request(
             &input_path,
             &format!("{}/repos_complete.csv", TEST_DATA),
             &format!("{}/prs2", TEST_DATA),
             &vec![],
-        );
+        )
     }
 
     #[test]
-    fn test_pr_with_partial_output() {
+    fn test_pr_with_partial_output() -> Result<()> {
         let input_path: String = format!("{}/repos3.csv", TEST_DATA);
         let output_path: String = format!("{}/repos_partial_output.csv.temp", TEST_DATA);
-        let copy_result: Result<u64, std::io::Error> = std::fs::copy(
+        std::fs::copy(
             &format!("{}/repos_partial_output.csv", TEST_DATA),
             &output_path,
-        );
-        assert!(copy_result.is_ok());
-        assert!(std::path::Path::new(&output_path).exists());
+        )?;
+        ensure!(std::path::Path::new(&output_path).exists());
 
         test_phase_pull_request(
             &input_path,
             &output_path,
             &format!("{}/prs3", TEST_DATA),
             &vec![],
-        );
+        )
     }
 
     #[test]
-    fn test_language_scraper_inexistent() {
+    fn test_language_scraper_inexistent() -> Result<()> {
         test_phase_pull_request(
             &format!("{}/invalid.csv", TEST_DATA),
             &format!("{}/invalid.csv.pulls.csv", TEST_DATA),
             &format!("{}/prs_invalid", TEST_DATA),
             &vec![],
-        );
+        )
     }
 }

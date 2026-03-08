@@ -18,6 +18,7 @@
 //! can be restarted and will continue from where it left off. The program can also optionally use a cache file to save requests.
 //! By default, the name of the output file is the same as the input file with the suffix '.metadata.csv'.
 
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Write;
@@ -25,12 +26,12 @@ use std::iter::FromIterator as _;
 use std::path::Path;
 
 use crate::utils::csv::*;
-use crate::utils::error::*;
+use crate::utils::dataframes;
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::Github;
 use crate::utils::json::*;
-use crate::utils::logger::Logger;
+use crate::utils::logger::{log_seed, Logger};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -40,6 +41,7 @@ use polars::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
+use tracing::info;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -175,8 +177,8 @@ pub fn run(
     ids: &str,
     names: &str,
     sub: Option<usize>,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     // Column index of the id in the input and cache files.
     const ID_COL: usize = 0;
 
@@ -184,7 +186,7 @@ pub fn run(
     logger.log_tokens(tokens)?;
 
     // Load input file
-    let input_file: DataFrame = logger.log_completion("Loading input file", || {
+    let input_file: DataFrame = logger.run_task("Loading input file", || {
         open_csv(
             input_path,
             Some(Schema::from_iter(vec![
@@ -195,12 +197,12 @@ pub fn run(
         )
     })?;
 
-    logger.log_seed(seed)?;
+    log_seed(seed);
 
     let mut shuffled_idx: Vec<usize> = (0..input_file.height()).collect();
 
     // Load the ids from the input file in random order.
-    logger.log_completion("Loading project IDs in random order", || {
+    logger.run_task("Loading project IDs in random order", || {
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         shuffled_idx.shuffle(&mut rng);
         Ok(())
@@ -218,7 +220,7 @@ pub fn run(
 
     let n_proj: usize = input_file.height();
 
-    logger.log(&format!("  {} projects found.", n_proj))?;
+    info!("  {} projects found.", n_proj);
 
     // Name of the output file.
     let default_output_path: String = format!("{}.metadata.csv", &input_path);
@@ -228,26 +230,20 @@ pub fn run(
     let previous_results: HashSet<u32> = if force {
         HashSet::new()
     } else {
-        logger.log_completion("Resuming progress", || {
+        logger.run_task("Resuming progress", || {
             Ok(if Path::new(&output_file_path).exists() {
-                map_err(
-                    map_err(
-                        open_csv(
-                            input_path,
-                            Some(Schema::from_iter(vec![Field::new(
-                                ids.into(),
-                                DataType::UInt32,
-                            )])),
-                            Some(vec![ids]),
-                        )?
-                        .column(ids),
-                        "Could not extract the ids from the output file",
-                    )?
-                    .u32(),
-                    "Could not convert the ids to u32",
+                dataframes::u32(
+                    &open_csv(
+                        input_path,
+                        Some(Schema::from_iter(vec![Field::new(
+                            ids.into(),
+                            DataType::UInt32,
+                        )])),
+                        Some(vec![ids]),
+                    )?,
+                    ids,
                 )?
-                .iter()
-                .map(|x| x.unwrap())
+                .into_iter()
                 .collect()
             } else {
                 HashSet::new()
@@ -256,10 +252,10 @@ pub fn run(
     };
 
     if !previous_results.is_empty() {
-        logger.log(&format!(
+        info!(
             "  the metadata of {} projects have already been queried",
             previous_results.len()
-        ))?;
+        );
     }
 
     let mut output_file: CSVFile = CSVFile::new(
@@ -274,7 +270,7 @@ pub fn run(
     output_file.write_header(ProjectMetadata::header())?;
 
     // Load the cache
-    let cache: HashMap<u32, String> = logger.log_completion("Loading cache", || {
+    let cache: HashMap<u32, String> = logger.run_task("Loading cache", || {
         Ok(match cache_opt {
             Some(cache_path) => {
                 let cache = CSVFile::new(cache_path, FileMode::Read)?;
@@ -284,14 +280,14 @@ pub fn run(
         })
     })?;
 
-    logger.log(&format!("  {} projects found in the cache.", cache.len()))?;
+    info!("  {} projects found in the cache.", cache.len());
 
     // Number of requests that were saved by using the cache.
     let mut request_from_cache: usize = 0;
 
     let gh = Github::new(tokens);
 
-    logger.log("Starting to query the GitHub API...")?;
+    info!("Starting to query the GitHub API...");
 
     // Number of projects to sample.
     let mut n: usize = match sub {
@@ -335,10 +331,7 @@ pub fn run(
                         }
                     };
 
-                    map_err(
-                        writeln!(&mut output_file, "{}", csv_row),
-                        &format!("Could not write to file {}", &output_file_path),
-                    )?;
+                    writeln!(&mut output_file, "{}", csv_row)?;
 
                     progress_bar.inc(1);
                     progress_bar.set_message(request_from_cache.to_string());
@@ -346,10 +339,7 @@ pub fn run(
                 }
             }
             Err(idx) => {
-                map_err(
-                    row,
-                    &format!("Could not parse row {} in the input file", idx),
-                )?;
+                bail!("Could not parse row {} in the input file", idx)
             }
         }
     }
@@ -467,7 +457,7 @@ impl ToCSV for ProjectMetadata {
 
 impl FromGitHub for ProjectMetadata {
     type Complement = ();
-    fn parse_json(json: &JsonValue, _complement: ()) -> Result<Self, Error> {
+    fn parse_json(json: &JsonValue, _complement: ()) -> Result<Self> {
         let language: String = if !json["language"].is_null() {
             get_field::<String>(json, "language")?
         } else {
@@ -517,23 +507,26 @@ impl FromGitHub for ProjectMetadata {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::ensure;
+
     use super::*;
-    use crate::utils::dataframes::has_column;
+    use crate::utils::{dataframes::has_column, logger::test_logger};
 
     const TEST_DATA: &str = "tests/data/phases/metadata";
 
     #[test]
-    fn test_language_scraper() {
+    fn test_language_scraper() -> Result<()> {
         let input_file: String = format!("{}/repos.csv", TEST_DATA);
         let output_file: String = format!("{}.metadata.csv", input_file);
-        assert!(std::path::Path::new(&input_file).exists());
-
-        // Remove the output files if they exist.
-        assert!(delete_file(&output_file, true).is_ok());
+        ensure!(
+            std::path::Path::new(&input_file).exists(),
+            "Input file does not exist"
+        );
+        delete_file(&output_file, true)?;
 
         let tokens_file: String = "ghtokens.csv".to_string();
 
-        let run_scraper = run(
+        run(
             &input_file,
             None,
             &tokens_file,
@@ -543,28 +536,25 @@ mod tests {
             "id",
             "name",
             None,
-            &mut Logger::new(),
+            test_logger(),
+        )?;
+
+        let output_df = open_csv(&output_file, None, None)?;
+        ensure!(
+            has_column(&output_df, "name"),
+            "Output does not have 'name' column"
         );
-        assert!(run_scraper.is_ok());
+        let sorted_output_df = output_df.sort(vec!["name"], SortMultipleOptions::new())?;
 
-        let output_df = open_csv(&output_file, None, None);
-        assert!(output_df.is_ok());
-        let output_df = output_df.unwrap();
-        assert!(has_column(&output_df, "name"));
-        let sorted_output_df = output_df
-            .sort(vec!["name"], SortMultipleOptions::new())
-            .unwrap();
-
-        let expected_df = open_csv(&format!("{}.expected", output_file), None, None);
-        assert!(expected_df.is_ok());
-        let expected_df = expected_df.unwrap();
-        assert!(has_column(&expected_df, "name"));
-        let sorted_expected_df = expected_df
-            .sort(vec!["name"], SortMultipleOptions::new())
-            .unwrap();
+        let expected_df = open_csv(&format!("{}.expected", output_file), None, None)?;
+        ensure!(
+            has_column(&expected_df, "name"),
+            "Expected output does not have 'name' column"
+        );
+        let sorted_expected_df = expected_df.sort(vec!["name"], SortMultipleOptions::new())?;
 
         assert_eq!(sorted_expected_df, sorted_output_df);
 
-        assert!(delete_file(&output_file, false).is_ok());
+        delete_file(&output_file, false)
     }
 }

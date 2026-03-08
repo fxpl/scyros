@@ -12,17 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Discards duplicates in a CSV file.
-//! Two entries are considered to be duplicates if they share the same value in
-//! a column specified by the user.
-//! The default column stores repositories ids and has \"id\" as a header.
-//! Prints statistics about the number of duplicates found in the file and write the unique rows to a new CSV file.
-//! By default, the output file name is the same as the input file name with \".unique.csv\" appended.
-//!
+#![doc = include_str!("../docs/duplicate_ids.md")]
+use anyhow::Result;
 use clap::{Arg, ArgAction, Command};
 use polars::frame::DataFrame;
+use tracing::info;
 
-use crate::utils::error::*;
 use crate::utils::fs::*;
 use crate::utils::logger::log_write_output;
 use crate::utils::logger::{log_output_file, Logger};
@@ -31,13 +26,7 @@ use crate::utils::logger::{log_output_file, Logger};
 pub fn cli() -> Command {
     Command::new("duplicate_ids")
         .about("Discards duplicates in a CSV file according to one of the columns (by default repositories ids).")
-        .long_about(
-            "Discards duplicates in a CSV file. Two entries are considered to be duplicates if they share the same value in\
-             a column specified by the user.\nThe default column stores repositories ids and has \"id\" as a header.\
-             Prints statistics about the number of duplicates found in the file and write the unique rows to a new CSV file.\n
-             By default, the output file name is the same as the input file name with \".unique.csv\" appended."
-
-        )
+        .long_about(include_str!("../docs/duplicate_ids.md"))
         .disable_version_flag(true)
         .arg(
             Arg::new("input")
@@ -101,48 +90,39 @@ pub fn run(
     column: &str,
     force: bool,
     no_output: bool,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     let default_output_path = format!("{}.unique.csv", input_path);
     let output_path = output_path.unwrap_or(&default_output_path);
 
-    // Checks if the input file exists
     check_path(input_path)?;
+    log_output_file(output_path, no_output, force)?;
 
-    // Checks if the output file already exists
-    log_output_file(logger, output_path, no_output, force)?;
-
-    // Reads the CSV file into a DataFrame
     let mut ids: DataFrame = open_csv(input_path, None, None)?;
-    let ids_count = ids.height();
+    let ids_count: usize = ids.height();
 
-    logger.log(&format!("{} entries found in the file.", ids_count))?;
+    info!("{} entries found in the file.", ids_count);
 
     // Keeping first occurrence of each id.
     // Unique stable is used to ensure reproducibility.
-    ids = map_err(
-        ids.unique_stable(
-            Some(&[column.to_string()]),
-            polars::frame::UniqueKeepStrategy::First,
-            None,
-        ),
-        "Could not check for duplicate entries.",
+    ids = ids.unique_stable(
+        Some(&[column.to_string()]),
+        polars::frame::UniqueKeepStrategy::First,
+        None,
     )?;
-    let unique_ids_count = ids.height();
-    let unique_ids_percentage = (unique_ids_count as f64 / ids_count as f64) * 100.0;
+    let unique_ids_count: usize = ids.height();
+    let unique_ids_percentage: f64 = (unique_ids_count as f64 / ids_count as f64) * 100.0;
 
-    // Log the number of unique ids and duplicates
-    logger.log(&format!(
+    info!(
         "Unique ids: {} / {:.2} %",
         unique_ids_count, unique_ids_percentage
-    ))?;
-    logger.log(&format!(
+    );
+    info!(
         "Duplicates: {} / {:.2} %",
         ids_count - unique_ids_count,
         100.0 - unique_ids_percentage
-    ))?;
+    );
 
-    // Writes the result to the output CSV file
     log_write_output(logger, output_path, &mut ids, no_output)
 }
 
@@ -150,28 +130,24 @@ pub fn run(
 mod tests {
 
     use super::*;
+    use crate::utils::logger::test_logger;
 
     const TEST_DATA: &str = "tests/data/phases/duplicate_ids/";
 
     #[test]
-    fn test_duplicate_ids() {
+    fn test_duplicate_ids() -> Result<()> {
         let input_path = format!("{}/duplicate_ids.csv", TEST_DATA);
         let default_output_path = format!("{}.unique.csv", input_path);
 
-        assert!(delete_file(&default_output_path, true).is_ok());
-        assert!(run(&input_path, None, "id", false, false, &mut Logger::new()).is_ok());
+        delete_file(&default_output_path, true)?;
+        run(&input_path, None, "id", false, false, test_logger())?;
 
         let expected_output_path = format!("{}.expected", default_output_path);
-        let expected_df = open_csv(&expected_output_path, None, None);
-        assert!(expected_df.is_ok());
-        let expected_df = expected_df.unwrap();
+        let expected_df = open_csv(&expected_output_path, None, None)?;
+        let output_df = open_csv(&default_output_path, None, None)?;
 
-        let output_df = open_csv(&default_output_path, None, None);
-        assert!(output_df.is_ok());
-        let output_df = output_df.unwrap();
+        assert_eq!(expected_df, output_df);
 
-        assert!(expected_df.equals(&output_df));
-
-        assert!(delete_file(&default_output_path, false).is_ok());
+        delete_file(&default_output_path, false)
     }
 }

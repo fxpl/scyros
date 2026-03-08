@@ -14,8 +14,8 @@
 
 //! Utility functions for working with CSV files.
 
-use super::error::*;
 use super::fs::*;
+use anyhow::{anyhow, bail, Context, Result};
 use csv::{Reader, StringRecord};
 use std::collections::HashMap;
 use std::fs::File;
@@ -68,7 +68,7 @@ impl CSVFile {
     /// # Returns
     ///
     /// A CSV file in the specified mode or an error if the file could not be opened.
-    pub fn new(path: &str, mode: FileMode) -> Result<Self, Error> {
+    pub fn new(path: &str, mode: FileMode) -> Result<Self> {
         Ok(Self {
             path: path.to_string(),
             writer: {
@@ -92,18 +92,17 @@ impl CSVFile {
     /// # Returns
     ///
     /// The file in the new mode or an error if the file could not be opened.
-    pub fn switch_mode(self, mode: FileMode) -> Result<Self, Error> {
+    pub fn switch_mode(self, mode: FileMode) -> Result<Self> {
         Self::new(&self.path, mode)
     }
 
     /// Opens a reader for this file
-    fn read(&self) -> Result<Reader<File>, Error> {
+    fn read(&self) -> Result<Reader<File>> {
         if self.writer.is_some() {
-            Error::new(&format!(
+            bail!(
                 "Cannot read from {} since it is in write-only mode",
                 self.path
-            ))
-            .to_res()
+            )
         } else {
             Ok(csv::ReaderBuilder::new()
                 .has_headers(true)
@@ -124,22 +123,17 @@ impl CSVFile {
     /// # Returns
     ///
     /// An error if the header could not be written or if the metadata of the file could not be read.
-    pub fn write_header(&mut self, header: &[&str]) -> Result<(), Error> {
+    pub fn write_header(&mut self, header: &[&str]) -> Result<()> {
         match self.writer.as_mut() {
-            None => Error::new(&format!(
+            None => bail!(
                 "Cannot write to {} since it is in read-only mode",
                 self.path
-            ))
-            .to_res(),
+            ),
             Some(f) => {
-                if map_err(f.get_ref().metadata(), "Could not read metadata of file")?.len() == 0 {
-                    map_err(
-                        writeln!(self, "{}", header.join(",")),
-                        "Error writing header",
-                    )
-                } else {
-                    Ok(())
+                if f.get_ref().metadata()?.len() == 0 {
+                    writeln!(self, "{}", header.join(","))?
                 }
+                Ok(())
             }
         }
     }
@@ -154,15 +148,14 @@ impl CSVFile {
     /// # Returns
     ///
     /// A vector containing the extracted information or an error if the file could not be read or the information could not be extracted.
-    pub fn extract<T, F>(&self, extractor: F) -> Result<Vec<T>, Error>
+    pub fn extract<T, F>(&self, extractor: F) -> Result<Vec<T>>
     where
-        F: Fn(usize, StringRecord) -> Result<T, Error>,
+        F: Fn(usize, StringRecord) -> Result<T>,
     {
         let mut res = Vec::<T>::new();
 
         for (line, x) in self.read()?.records().enumerate() {
-            let record: StringRecord = map_err(x, "Could not read record")?;
-            res.push(extractor(line, record)?);
+            res.push(extractor(line, x?)?);
         }
         Ok(res)
     }
@@ -179,25 +172,26 @@ impl CSVFile {
     ///
     /// A vector containing the values of the specified column or an error if the file could not be read or the column could not be parsed.
     ///
-    pub fn column<T>(&self, i: usize) -> Result<Vec<T>, Error>
+    pub fn column<T>(&self, i: usize) -> Result<Vec<T>>
     where
         T: FromStr,
     {
         self.extract(|line, record| {
-            ok_or_else(
-                record.get(i),
-                &format!(
-                    "Record {}: Record length is {} but the requested column is {}",
-                    line,
-                    record.len(),
-                    i,
-                ),
-            )
-            .and_then(|entry| {
-                entry
-                    .parse::<T>()
-                    .map_err(|_| Error::new(&format!("Could not parse record {}", line)))
-            })
+            record
+                .get(i)
+                .with_context(|| {
+                    format!(
+                        "Record {}: Record length is {} but the requested column is {}",
+                        line,
+                        record.len(),
+                        i,
+                    )
+                })
+                .and_then(|entry| {
+                    entry
+                        .parse::<T>()
+                        .map_err(|_| anyhow!("Could not parse record {}", line))
+                })
         })
     }
 
@@ -213,16 +207,15 @@ impl CSVFile {
     ///
     /// A hash map containing the lines of the file indexed by the specified column or an error if the file could not be parsed.
     ///
-    pub fn indexed_lines<T>(&self, i: usize) -> Result<HashMap<T, String>, Error>
+    pub fn indexed_lines<T>(&self, i: usize) -> Result<HashMap<T, String>>
     where
         T: FromStr + Eq + Hash,
     {
         let keys: Vec<T> = self.column(i)?;
-        let lines: Vec<String> =
-            map_err(std::fs::read_to_string(&self.path), "Could not read file")?
-                .lines()
-                .map(|s| s.to_string())
-                .collect();
+        let lines: Vec<String> = std::fs::read_to_string(&self.path)?
+            .lines()
+            .map(|s| s.to_string())
+            .collect();
         if lines.is_empty() {
             Ok(HashMap::new())
         } else {
@@ -255,105 +248,100 @@ mod tests {
 
     use std::net::IpAddr;
 
+    use anyhow::ensure;
+
     use super::*;
 
     #[test]
-    fn new_test() {
+    fn new_test() -> Result<()> {
         let before = std::fs::read_to_string("tests/data/small_file.csv").unwrap();
-        assert!(CSVFile::new("tests/data/small_file.csv", FileMode::Read).is_ok());
-        assert!(CSVFile::new("tests/data/small_file.csv", FileMode::Append).is_ok());
+        CSVFile::new("tests/data/small_file.csv", FileMode::Read)?;
+        CSVFile::new("tests/data/small_file.csv", FileMode::Append)?;
         let after = std::fs::read_to_string("tests/data/small_file.csv").unwrap();
         assert_eq!(before, after);
-        assert!(CSVFile::new("tests/data/empty.csv", FileMode::Overwrite).is_ok());
-        assert!(CSVFile::new("tests/data/non_existent.csv", FileMode::Read).is_err());
-        assert!(CSVFile::new("tests/data/non_existent.csv", FileMode::Append).is_ok());
-        assert!(delete_file("tests/data/non_existent.csv", false).is_ok());
-        assert!(CSVFile::new("tests/data/non_existent.csv", FileMode::Overwrite).is_ok());
-        assert!(delete_file("tests/data/non_existent.csv", false).is_ok());
+        CSVFile::new("tests/data/empty.csv", FileMode::Overwrite)?;
+        ensure!(CSVFile::new("tests/data/non_existent.csv", FileMode::Read).is_err());
+        CSVFile::new("tests/data/non_existent.csv", FileMode::Append)?;
+        delete_file("tests/data/non_existent.csv", false)?;
+        CSVFile::new("tests/data/non_existent.csv", FileMode::Overwrite)?;
+        delete_file("tests/data/non_existent.csv", false)
     }
 
     #[test]
-    fn read_test() {
-        assert!(CSVFile::new("tests/data/small_file.csv", FileMode::Read)
+    fn read_test() -> Result<()> {
+        CSVFile::new("tests/data/small_file.csv", FileMode::Read)
             .unwrap()
-            .read()
-            .is_ok());
-        assert!(CSVFile::new("tests/data/small_file.csv", FileMode::Append)
-            .unwrap()
-            .read()
-            .is_err());
-        assert!(CSVFile::new("tests/data/empty.csv", FileMode::Overwrite)
+            .read()?;
+        ensure!(CSVFile::new("tests/data/small_file.csv", FileMode::Append)
             .unwrap()
             .read()
             .is_err());
+        ensure!(CSVFile::new("tests/data/empty.csv", FileMode::Overwrite)
+            .unwrap()
+            .read()
+            .is_err());
+        Ok(())
     }
 
     #[test]
-    fn empty_column_test() {
-        let file = CSVFile::new("tests/data/empty.csv", FileMode::Read).unwrap();
+    fn empty_column_test() -> Result<()> {
+        let file = CSVFile::new("tests/data/empty.csv", FileMode::Read)?;
         for i in 0..10 {
-            let ids = file.column::<u64>(i);
-            assert!(ids.is_ok());
-            assert!(ids.unwrap().is_empty());
+            let ids = file.column::<u64>(i)?;
+            ensure!(ids.is_empty());
 
-            let ids = file.column::<u64>(i);
-            assert!(ids.is_ok());
-            assert!(ids.unwrap().is_empty());
+            let ids = file.column::<u64>(i)?;
+            ensure!(ids.is_empty());
         }
+        Ok(())
     }
 
     #[test]
-    fn column_test() {
+    fn column_test() -> Result<()> {
         let file = CSVFile::new("tests/data/small_file.csv", FileMode::Read).unwrap();
 
-        let ids = file.column::<usize>(0);
-        assert!(ids.is_ok());
-        assert_eq!(ids.unwrap(), vec![0, 1, 2, 3]);
+        let ids = file.column::<usize>(0)?;
+        assert_eq!(ids, vec![0, 1, 2, 3]);
 
-        let names = file.column::<String>(1);
-        assert!(names.is_ok());
-        assert_eq!(names.unwrap(), vec!["a", "b", "c", "d"]);
-        let forks = file.column::<u8>(2);
-        assert!(forks.is_ok());
-        assert_eq!(forks.unwrap(), vec![1, 0, 1, 0]);
+        let names = file.column::<String>(1)?;
+        assert_eq!(names, vec!["a", "b", "c", "d"]);
+        let forks = file.column::<u8>(2)?;
+        assert_eq!(forks, vec![1, 0, 1, 0]);
 
         let ips = file.column::<IpAddr>(3);
-        assert!(ips.is_err());
+        ensure!(ips.is_err());
 
         let ids = file.column::<i32>(1);
-        assert!(ids.is_err());
+        ensure!(ids.is_err());
 
         let file = CSVFile::new("tests/data/invalid_csv.csv", FileMode::Read).unwrap();
-        assert!(file.column::<i8>(0).is_err());
+        ensure!(file.column::<i8>(0).is_err());
+        Ok(())
     }
     #[test]
-    fn indexed_lines_test() {
+    fn indexed_lines_test() -> Result<()> {
         let file = CSVFile::new("tests/data/small_file.csv", FileMode::Read).unwrap();
-        let indexed_lines = file.indexed_lines::<i32>(0);
-        assert!(indexed_lines.is_ok());
-        let indexed_lines = indexed_lines.unwrap();
+        let indexed_lines = file.indexed_lines::<i32>(0)?;
         assert_eq!(indexed_lines.len(), 4);
         assert_eq!(indexed_lines.get(&0).unwrap(), "0,a,1");
         assert_eq!(indexed_lines.get(&1).unwrap(), "1,b,0");
         assert_eq!(indexed_lines.get(&2).unwrap(), "2,c,1");
         assert_eq!(indexed_lines.get(&3).unwrap(), "3,d,0");
 
-        let indexed_lines = file.indexed_lines::<String>(1);
-        assert!(indexed_lines.is_ok());
-        let indexed_lines = indexed_lines.unwrap();
+        let indexed_lines = file.indexed_lines::<String>(1)?;
         assert_eq!(indexed_lines.len(), 4);
         assert_eq!(indexed_lines.get(&"a".to_string()).unwrap(), "0,a,1");
         assert_eq!(indexed_lines.get(&"b".to_string()).unwrap(), "1,b,0");
         assert_eq!(indexed_lines.get(&"c".to_string()).unwrap(), "2,c,1");
         assert_eq!(indexed_lines.get(&"d".to_string()).unwrap(), "3,d,0");
 
-        assert!(file.indexed_lines::<bool>(3).is_err());
-        assert!(file.indexed_lines::<u64>(1).is_err());
+        ensure!(file.indexed_lines::<bool>(3).is_err());
+        ensure!(file.indexed_lines::<u64>(1).is_err());
 
         let empty = CSVFile::new("tests/data/empty.csv", FileMode::Read).unwrap();
 
-        let indexed_lines = empty.indexed_lines::<IpAddr>(0);
-        assert!(indexed_lines.is_ok());
-        assert_eq!(indexed_lines.unwrap().len(), 0);
+        let indexed_lines = empty.indexed_lines::<IpAddr>(0)?;
+        assert_eq!(indexed_lines.len(), 0);
+        Ok(())
     }
 }

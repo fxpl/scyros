@@ -16,13 +16,14 @@
 
 use crate::utils::bow::Bow;
 
-use super::error::*;
 use super::fs::*;
 use super::json::*;
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io::BufRead;
 use std::io::BufReader;
+use tracing::warn;
 
 use regex::bytes::Regex;
 
@@ -65,7 +66,7 @@ impl Matcher {
         keywords: I,
         case_sensitive: bool,
         whole_words: bool,
-    ) -> Result<Self, Error>
+    ) -> Result<Self>
     where
         I: IntoIterator<Item = T>,
         T: ToString,
@@ -88,10 +89,7 @@ impl Matcher {
                 format!("(?i){}", new_pattern)
             };
             Ok(Self {
-                regex: Some(map_err(
-                    Regex::new(&new_pattern_with_sensitivity),
-                    &format!("Invalid regex pattern: {}", new_pattern_with_sensitivity),
-                )?),
+                regex: Some(Regex::new(&new_pattern_with_sensitivity)?),
             })
         } else {
             Ok(Self::words_matcher())
@@ -116,7 +114,7 @@ impl Matcher {
         global_keywords: &HashSet<String>,
         case_sensitive: bool,
         whole_words: bool,
-    ) -> Result<HashMap<T, Matcher>, Error>
+    ) -> Result<HashMap<T, Matcher>>
     where
         T: Eq + Hash + Clone,
     {
@@ -162,10 +160,10 @@ impl Matcher {
     /// # Arguments
     ///
     /// * `path` - The path to the file to search for the pattern.
-    pub fn count_matches_in_file(&self, path: &str) -> Result<usize, Error> {
+    pub fn count_matches_in_file(&self, path: &str) -> Result<usize> {
         let mut count: usize = 0;
         for l in BufReader::new(open_file(path, FileMode::Read)?).lines() {
-            let line = map_err(l, &format!("Could not read lines from {}", path))?;
+            let line = l.with_context(|| format!("Could not read lines from {}", path))?;
             count += self.count_matches_in_text(line.as_bytes());
         }
         Ok(count)
@@ -269,11 +267,12 @@ impl KeywordFiles {
     /// # Returns
     /// A new KeywordFiles instance with the added files or an error if any file could not
     /// be processed.
-    pub fn add_files(self, paths: &[&str]) -> Result<KeywordFiles, Error> {
+    pub fn add_files(self, paths: &[&str], warning: bool) -> Result<KeywordFiles> {
         if paths.is_empty() {
             Ok(self)
         } else {
-            self.add_file(paths[0])?.add_files(&paths[1..])
+            self.add_file(paths[0], warning)?
+                .add_files(&paths[1..], warning)
         }
     }
 
@@ -288,7 +287,7 @@ impl KeywordFiles {
     ///
     /// A new KeywordFiles instance with the added file or an error if the file could not
     /// be processed.
-    pub fn add_file(self, path: &str) -> Result<KeywordFiles, Error> {
+    pub fn add_file(self, path: &str, warning: bool) -> Result<KeywordFiles> {
         // Add the argument to the list of paths
         let mut updated_paths: Vec<String> = self.paths.clone();
         updated_paths.push(path.to_string());
@@ -301,40 +300,44 @@ impl KeywordFiles {
         let mut extensions_to_language = self.extensions_to_language.clone();
 
         let cat1 = "languages";
-        let languages = ok_or_else(
-            categories.get(cat1),
-            &format!("Keyword file {} does not contain a {} field", path, cat1),
-        )?;
+        let languages = categories
+            .get(cat1)
+            .with_context(|| format!("Keyword file {} does not contain a {} field", path, cat1))?;
 
         for l in languages.members() {
             let language = json_to_map(l);
 
-            let name = ok_or_else(
-                language.get("name").and_then(|n| n.as_str()),
-                &format!("Keyword file {} contains a language with no name", path),
-            )?;
+            let name: &str = language
+                .get("name")
+                .with_context(|| format!("Keyword file {} contains a language with no name", path))?
+                .as_str()
+                .ok_or_else(|| anyhow!("Language name is not a string"))?;
 
-            let extensions = json_to_set(ok_or_else(
-                language.get("extensions"),
-                &format!("Language {} in {} has no extensions field", name, path),
-            )?);
+            let extensions: HashSet<String> = match language.get("extensions") {
+                Some(ext) => json_to_set(ext),
+                None => {
+                    if warning {
+                        warn!("Language {} in {} has no extensions field", name, path);
+                    }
+                    HashSet::new()
+                }
+            };
 
-            let keywords = json_to_set(ok_or_else(
-                language.get("keywords"),
-                &format!("Language {} in {} has no keywords field", name, path),
-            )?);
+            let keywords: HashSet<String> = language
+                .get("keywords")
+                .map(|json| json_to_set(json))
+                .unwrap_or_default();
 
             for ext in extensions {
                 match extensions_to_language.get(&ext) {
                     Some(value) if value != name => {
-                        Error::new(&format!(
+                        bail!(
                             "Extension {} is associated with both {} and {} when loading {}",
                             &ext,
                             value,
                             name,
                             updated_paths.join(", ")
-                        ))
-                        .to_res()?;
+                        );
                     }
                     None => {
                         extensions_to_language.insert(ext.clone(), name.to_string());
@@ -347,10 +350,10 @@ impl KeywordFiles {
         }
 
         let cat2 = "keywords";
-        let global_kw = json_to_set(ok_or_else(
-            categories.get(cat2),
-            &format!("Keyword file {} does not contain a {} field", path, cat2),
-        )?);
+        let global_kw = categories
+            .get(cat2)
+            .map(|json| json_to_set(json))
+            .unwrap_or_default();
 
         let file_matchers = Matcher::keywords_matchers(&local_kw, &global_kw, false, true)?;
         let mut updated_matchers = self.matchers;
@@ -391,7 +394,7 @@ impl KeywordFiles {
     ///
     /// # Returns
     /// A vector containing the number of matches for each matcher of the given language or an error if the file could not be processed.
-    pub fn count_matches_in_file(&self, lang: &str, path: &str) -> Result<Vec<usize>, Error> {
+    pub fn count_matches_in_file(&self, lang: &str, path: &str) -> Result<Vec<usize>> {
         match self.matchers.get(lang) {
             Some(m) => m.iter().map(|m| m.count_matches_in_file(path)).collect(),
             None => Ok(vec![0, self.paths.len()]),
@@ -434,25 +437,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn count_matches_test() {
+    fn count_matches_test() -> Result<()> {
         let text = b"Parole, parole, parole, paroleParole parole_parole parole_Parole";
 
-        let matcher_lower_unsensitive_whole =
-            Matcher::keywords_matcher(["parole"], false, true).unwrap();
-        let matcher_lower_unsensitive_part =
-            Matcher::keywords_matcher(["parole"], false, false).unwrap();
-        let matcher_lower_sensitive_whole =
-            Matcher::keywords_matcher(["parole"], true, true).unwrap();
-        let matcher_lower_sensitive_part =
-            Matcher::keywords_matcher(["parole"], true, false).unwrap();
-        let matcher_upper_unsensitive_whole =
-            Matcher::keywords_matcher(["Parole"], false, true).unwrap();
-        let matcher_upper_unsensitive_part =
-            Matcher::keywords_matcher(["Parole"], false, false).unwrap();
-        let matcher_upper_sensitive_whole =
-            Matcher::keywords_matcher(["Parole"], true, true).unwrap();
-        let matcher_upper_sensitive_part =
-            Matcher::keywords_matcher(["Parole"], true, false).unwrap();
+        let matcher_lower_unsensitive_whole = Matcher::keywords_matcher(["parole"], false, true)?;
+        let matcher_lower_unsensitive_part = Matcher::keywords_matcher(["parole"], false, false)?;
+        let matcher_lower_sensitive_whole = Matcher::keywords_matcher(["parole"], true, true)?;
+        let matcher_lower_sensitive_part = Matcher::keywords_matcher(["parole"], true, false)?;
+        let matcher_upper_unsensitive_whole = Matcher::keywords_matcher(["Parole"], false, true)?;
+        let matcher_upper_unsensitive_part = Matcher::keywords_matcher(["Parole"], false, false)?;
+        let matcher_upper_sensitive_whole = Matcher::keywords_matcher(["Parole"], true, true)?;
+        let matcher_upper_sensitive_part = Matcher::keywords_matcher(["Parole"], true, false)?;
 
         assert_eq!(
             matcher_lower_unsensitive_whole.count_matches_in_text(text),
@@ -474,23 +469,26 @@ mod tests {
         );
         assert_eq!(matcher_upper_sensitive_whole.count_matches_in_text(text), 1);
         assert_eq!(matcher_upper_sensitive_part.count_matches_in_text(text), 3);
+        Ok(())
     }
 
     #[test]
-    fn count_words_test() {
+    fn count_words_test() -> Result<()> {
         let matcher = Matcher::words_matcher();
         assert_eq!(matcher.count_matches_in_text(b""), 0);
         assert_eq!(matcher.count_matches_in_text(b"word"), 1);
         assert_eq!(matcher.count_matches_in_text(b" word  word word "), 3);
         assert_eq!(matcher.count_matches_in_text(b"word\nword\nword"), 3);
         assert_eq!(matcher.count_matches_in_text(b"<word>"), 1);
+        Ok(())
     }
 
     #[test]
-    fn count_text_lines_test() {
+    fn count_text_lines_test() -> Result<()> {
         assert_eq!(count_text_lines(b""), 0);
         assert_eq!(count_text_lines(b"word"), 1);
         assert_eq!(count_text_lines(b"word\nword\nword"), 3);
+        Ok(())
     }
 
     // #[test]
@@ -507,7 +505,7 @@ mod tests {
     // }
 
     #[test]
-    fn keywords_patterns_test() {
+    fn keywords_patterns_test() -> Result<()> {
         let local_keywords: HashMap<usize, HashSet<String>> = [
             (
                 3,
@@ -531,13 +529,25 @@ mod tests {
             .iter()
             .cloned()
             .collect();
-        let patterns =
-            Matcher::keywords_matchers(&local_keywords, &global_keywords, false, true).unwrap();
+        let patterns = Matcher::keywords_matchers(&local_keywords, &global_keywords, false, true)?;
         assert_eq!(patterns.len(), 2);
 
         let text = b"word1 word2 word3 word4 word5 word6";
 
-        assert_eq!(patterns.get(&3).unwrap().count_matches_in_text(text), 4);
-        assert_eq!(patterns.get(&6).unwrap().count_matches_in_text(text), 4);
+        assert_eq!(
+            patterns
+                .get(&3)
+                .with_context(|| "Pattern for key 3 not found")?
+                .count_matches_in_text(text),
+            4
+        );
+        assert_eq!(
+            patterns
+                .get(&6)
+                .with_context(|| "Pattern for key 6 not found")?
+                .count_matches_in_text(text),
+            4
+        );
+        Ok(())
     }
 }

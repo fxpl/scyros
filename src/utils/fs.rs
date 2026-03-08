@@ -14,13 +14,13 @@
 
 //! Utility functions for file operations and I/O.
 
+use anyhow::{bail, Context, Error, Result};
 use pathdiff::diff_paths;
 use polars::io::SerWriter;
 use polars::prelude::{CsvReadOptions, CsvWriter, Schema};
 use polars::{frame::DataFrame, io::SerReader};
 use walkdir::WalkDir;
 
-use super::error::*;
 use std::fs;
 use std::io::BufWriter;
 use std::path::{Component, PathBuf};
@@ -48,7 +48,7 @@ pub enum FileMode {
 /// # Returns
 ///
 /// A file in the specified mode or an error if the file could not be opened or created.
-pub fn open_file(path: &str, mode: FileMode) -> Result<File, Error> {
+pub fn open_file(path: &str, mode: FileMode) -> Result<File> {
     let file_path = Path::new(path);
 
     if let Some(parent) = file_path.parent() {
@@ -56,29 +56,26 @@ pub fn open_file(path: &str, mode: FileMode) -> Result<File, Error> {
             create_dir(parent_path)?;
         }
     }
-
-    map_err(
-        match mode {
-            FileMode::Read => std::fs::File::open(path),
-            FileMode::Overwrite => std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path),
-            FileMode::Append => std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path),
-        },
-        &format!("Could not open {}", path),
-    )
+    match mode {
+        FileMode::Read => std::fs::File::open(path),
+        FileMode::Overwrite => std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path),
+        FileMode::Append => std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path),
+    }
+    .with_context(|| format!("Could not open {}", path))
 }
 
-pub fn check_path(path: &str) -> Result<PathBuf, Error> {
+pub fn check_path(path: &str) -> Result<PathBuf> {
     if Path::new(path).exists() {
         Ok(PathBuf::from(path))
     } else {
-        Error::new(&format!("File or directory {} not found", path)).to_res()
+        bail!("File or directory {} not found", path)
     }
 }
 
@@ -96,19 +93,16 @@ pub fn check_path(path: &str) -> Result<PathBuf, Error> {
 /// Two kinds of errors are possible:
 /// * If the file size exceeds the memory limit, returns the size of the file.
 /// * If the file could not be read, returns an error.
-pub fn load_file(path: &str, memory_limit: u64) -> Result<Result<Vec<u8>, u64>, Error> {
-    let metadata = map_err(
-        std::fs::metadata(path),
-        &format!("Could not fetch metadata for file {}", path),
-    )?;
+pub fn load_file(path: &str, memory_limit: u64) -> Result<core::result::Result<Vec<u8>, u64>> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("Could not fetch metadata for file {}", path))?;
     let file_size = metadata.len();
     if file_size > memory_limit {
         Ok(Err(file_size))
     } else {
-        map_err(
-            std::fs::read(path).map(Ok),
-            &format!("Could not load file {}", path),
-        )
+        std::fs::read(path)
+            .map(Ok)
+            .with_context(|| format!("Could not read file {}", path))
     }
 }
 
@@ -153,12 +147,11 @@ where
         Ok(_) => Ok(()),
         Err(e) => {
             if e.kind() != std::io::ErrorKind::AlreadyExists {
-                Error::new(&format!(
+                bail!(format!(
                     "Could not create directory {}: {}",
                     path_buf.display(),
                     e
                 ))
-                .to_res()
             } else {
                 Ok(())
             }
@@ -176,7 +169,7 @@ where
 /// # Returns
 ///
 /// An error if the directory could not be deleted.
-pub fn delete_dir<P>(path: P, silent: bool) -> Result<(), Error>
+pub fn delete_dir<P>(path: P, silent: bool) -> Result<()>
 where
     P: AsRef<Path>,
 {
@@ -184,12 +177,11 @@ where
     match std::fs::remove_dir_all(&path_buf) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && silent => Ok(()),
-        Err(e) => Error::new(&format!(
+        Err(e) => bail!(format!(
             "Could not delete directory {}: {}",
             path_buf.display(),
             e
-        ))
-        .to_res(),
+        )),
     }
 }
 
@@ -204,7 +196,7 @@ where
 ///
 /// An error if the file could not be deleted.
 ///
-pub fn delete_file<P>(path: P, silent: bool) -> Result<(), Error>
+pub fn delete_file<P>(path: P, silent: bool) -> Result<()>
 where
     P: AsRef<Path>,
 {
@@ -212,16 +204,23 @@ where
     match std::fs::remove_file(&path_buf) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && silent => Ok(()),
-        Err(e) => Error::new(&format!(
+        Err(e) => bail!(format!(
             "Could not delete file {}: {}",
             path_buf.display(),
             e
-        ))
-        .to_res(),
+        )),
     }
 }
 
-pub fn write_file<P, C>(path: P, content: C) -> Result<(), Error>
+/// Writes content to a file, creating the file and its parent directories if they do not exist.
+///
+/// # Arguments
+/// * `path` - The path to the file.
+/// * `content` - The content to write to the file.
+///
+/// # Returns
+/// An error if the file could not be written.
+pub fn write_file<P, C>(path: P, content: C) -> Result<()>
 where
     P: AsRef<Path>,
     C: AsRef<[u8]>,
@@ -231,41 +230,52 @@ where
     if let Some(parent) = path.parent() {
         create_dir(parent)?;
     }
-    map_err(
-        fs::write(path, content),
-        &format!("Could not write to {}", path.display()),
-    )?;
+    fs::write(path, content)?;
 
     Ok(())
 }
 
+/// Reads a CSV file into a DataFrame.
+///
+/// # Arguments
+/// * `path` - The path to the CSV file.
+/// * `schema` - A schema, i.e., a list of column names and their associated data types.
+///     This list does not need to contain all the columns of the CSV file, nor does it need to strictly contain columns of the CSV file.
+///     The columns of the CSV file that are not in the schema will be read with an inferred data type.
+/// * `columns` - A list of column names to read from the CSV file. If None, reads all columns.
+///
+/// # Returns
+/// A DataFrame containing the data from the CSV file or an error if the file could not be read or if the data could not be parsed according to the schema.
 pub fn open_csv(
     path: &str,
     schema: Option<Schema>,
     columns: Option<Vec<&str>>,
 ) -> Result<DataFrame, Error> {
-    map_err(
-        CsvReadOptions::default()
-            .with_columns(
-                columns
-                    .map(|cols| Arc::from(cols.into_iter().map(|s| s.into()).collect::<Vec<_>>())),
-            )
-            .with_schema_overwrite(schema.map(Arc::new))
-            .with_has_header(true)
-            .into_reader_with_file_handle(BufReader::new(open_file(path, FileMode::Read)?))
-            .finish(),
-        &format!("Could not read {}", path),
-    )
+    CsvReadOptions::default()
+        .with_columns(
+            columns.map(|cols| Arc::from(cols.into_iter().map(|s| s.into()).collect::<Vec<_>>())),
+        )
+        .with_schema_overwrite(schema.map(Arc::new))
+        .with_has_header(true)
+        .into_reader_with_file_handle(BufReader::new(open_file(path, FileMode::Read)?))
+        .finish()
+        .with_context(|| format!("Could not read {}", path))
 }
 
-pub fn write_csv(path: &str, df: &mut DataFrame) -> Result<(), Error> {
-    map_err(
-        CsvWriter::new(BufWriter::new(open_file(path, FileMode::Overwrite)?))
-            .include_header(true)
-            .with_separator(b',')
-            .finish(df),
-        &format!("Could not write to {}", path),
-    )
+/// Writes a DataFrame to a CSV file.
+///
+/// # Arguments
+/// * `path` - The path to the output CSV file.
+/// * `df` - The DataFrame to write to the CSV file.
+///
+/// # Returns
+/// An error if the DataFrame could not be written to the CSV file.
+pub fn write_csv(path: &str, df: &mut DataFrame) -> Result<()> {
+    CsvWriter::new(BufWriter::new(open_file(path, FileMode::Overwrite)?))
+        .include_header(true)
+        .with_separator(b',')
+        .finish(df)
+        .with_context(|| format!("Could not write to {}", path))
 }
 
 /// Returns a list of files with a given extension in a directory and its subdirectories,
@@ -317,31 +327,21 @@ pub fn files_sorted_by_proximity(
     let root_dir = root_dir.as_ref();
 
     if !pivot_file.exists() {
-        Error::new(&format!("Pivot file {:?} does not exist", pivot_file)).to_res()
+        bail!("Pivot file {:?} does not exist", pivot_file)
     } else {
-        let pivot_canon = match pivot_file.canonicalize() {
-            Ok(p) => p,
-            Err(e) => Error::new(&format!(
-                "Could not canonicalize pivot file {:?}: {}",
-                pivot_file, e
-            ))
-            .to_res()?,
-        };
-        let root_canon = match root_dir.canonicalize() {
-            Ok(p) => p,
-            Err(e) => Error::new(&format!(
-                "Could not canonicalize root dir {:?}: {}",
-                root_dir, e
-            ))
-            .to_res()?,
-        };
+        let pivot_canon = pivot_file
+            .canonicalize()
+            .with_context(|| format!("Could not canonicalize pivot file {:?}", pivot_file))?;
+        let root_canon = root_dir
+            .canonicalize()
+            .with_context(|| format!("Could not canonicalize root dir {:?}", root_dir))?;
 
         if !pivot_canon.starts_with(&root_canon) {
-            Error::new(&format!(
+            bail!(
                 "Pivot file {:?} is not in root dir {:?}",
-                pivot_file, root_dir
-            ))
-            .to_res()
+                pivot_file,
+                root_dir
+            )
         } else {
             let mut files: Vec<PathBuf> = WalkDir::new(root_dir)
                 .into_iter()
@@ -383,126 +383,121 @@ mod io_tests {
     use std::io::Write;
     use std::path::Path;
 
+    use anyhow::{ensure, Ok};
+
     use super::*;
 
     #[test]
-    fn read_file_test() {
+    fn read_file_test() -> Result<()> {
         let file = open_file("tests/data/non_existent_file.txt", FileMode::Read);
-        assert!(file.is_err());
+        ensure!(file.is_err());
 
-        let file = open_file("tests/data/empty.csv", FileMode::Read);
-        assert!(file.is_ok());
+        open_file("tests/data/empty.csv", FileMode::Read)?;
+        Ok(())
     }
 
     #[test]
-    fn file_lines_test() {
+    fn file_lines_test() -> Result<()> {
         let path = "tests/data/small_file.csv";
-        let lines = file_lines(path);
-        assert!(lines.is_ok());
-        let mut lines = lines.unwrap();
-        assert_eq!(lines.next().unwrap().unwrap(), "id,name,fork");
-        assert_eq!(lines.next().unwrap().unwrap(), "0,a,1");
-        assert_eq!(lines.next().unwrap().unwrap(), "1,b,0");
-        assert_eq!(lines.next().unwrap().unwrap(), "2,c,1");
-        assert_eq!(lines.next().unwrap().unwrap(), "3,d,0");
-        assert!(lines.next().is_none());
+        let mut lines = file_lines(path)?;
+        assert_eq!(lines.next().unwrap()?, "id,name,fork");
+        assert_eq!(lines.next().unwrap()?, "0,a,1");
+        assert_eq!(lines.next().unwrap()?, "1,b,0");
+        assert_eq!(lines.next().unwrap()?, "2,c,1");
+        assert_eq!(lines.next().unwrap()?, "3,d,0");
+        ensure!(lines.next().is_none());
+        Ok(())
     }
 
     #[test]
-    fn create_delete_dir_test() {
+    fn create_delete_dir_test() -> Result<()> {
         let test_dir = "tests";
-        assert!(create_dir(test_dir).is_ok());
+        create_dir(test_dir)?;
 
-        assert!(delete_dir(&format!("{}/new_dir", test_dir), true).is_ok());
-        assert!(delete_dir(&format!("{}/new_dir", test_dir), false).is_err());
+        delete_dir(&format!("{}/new_dir", test_dir), true)?;
+        ensure!(delete_dir(&format!("{}/new_dir", test_dir), false).is_err());
 
         let new_dir = format!("{}/new_dir/new_dir", test_dir);
-        assert!(!Path::new(&new_dir).exists());
-        assert!(create_dir(&new_dir).is_ok());
-        assert!(Path::new(&new_dir).exists());
+        ensure!(!Path::new(&new_dir).exists());
+        create_dir(&new_dir)?;
+        ensure!(Path::new(&new_dir).exists());
 
-        assert!(delete_dir(&format!("{}/new_dir", test_dir), false).is_ok());
-        assert!(!Path::new(&new_dir).exists());
+        delete_dir(&format!("{}/new_dir", test_dir), false)?;
+        ensure!(!Path::new(&new_dir).exists());
+        Ok(())
     }
 
     #[test]
-    fn create_delete_file_test() {
+    fn create_delete_file_test() -> Result<()> {
         let test_file = "tests/new_file.txt";
 
-        assert!(delete_file(test_file, true).is_ok());
-        assert!(delete_file(test_file, false).is_err());
+        delete_file(test_file, true)?;
+        ensure!(delete_file(test_file, false).is_err());
 
-        assert!(!Path::new(&test_file).exists());
+        ensure!(!Path::new(&test_file).exists());
 
-        assert!(open_file(test_file, FileMode::Overwrite).is_ok());
+        open_file(test_file, FileMode::Overwrite)?;
 
-        assert!(Path::new(&test_file).exists());
+        ensure!(Path::new(&test_file).exists());
 
-        assert!(delete_file(test_file, false).is_ok());
+        delete_file(test_file, false)?;
 
-        assert!(!Path::new(&test_file).exists());
+        ensure!(!Path::new(&test_file).exists());
+        Ok(())
     }
 
     #[test]
-    fn write_file_test() {
+    fn write_file_test() -> Result<()> {
         let path = "tests/data/abc.txt";
 
         {
-            let file = open_file(path, FileMode::Overwrite);
-            assert!(file.is_ok());
-            let mut file = file.unwrap();
-            assert!(write!(file, "abc").is_ok());
+            let file = open_file(path, FileMode::Overwrite)?;
+            write!(&file, "abc")?;
         }
 
-        let content = std::fs::read_to_string(path).unwrap();
+        let content = std::fs::read_to_string(path)?;
         let lines: Vec<&str> = content.lines().collect();
-        assert!(lines.len() == 1);
+        ensure!(lines.len() == 1);
         assert_eq!(lines[0], "abc");
 
         {
-            let file = open_file(path, FileMode::Append);
-            assert!(file.is_ok());
-            let mut file = file.unwrap();
-            assert!(write!(file, "okok").is_ok());
+            let file = open_file(path, FileMode::Append)?;
+            write!(&file, "okok")?;
         }
 
-        let content = std::fs::read_to_string(path).unwrap();
+        let content = std::fs::read_to_string(path)?;
         let lines: Vec<&str> = content.lines().collect();
-        assert!(lines.len() == 1);
+        ensure!(lines.len() == 1);
         assert_eq!(lines[0], "abcokok");
 
         {
-            let file = open_file(path, FileMode::Overwrite);
-            assert!(file.is_ok());
-            let mut file = file.unwrap();
-            assert!(write!(file, "abc").is_ok());
+            let file = open_file(path, FileMode::Overwrite)?;
+            write!(&file, "abc")?;
         }
 
-        let content = std::fs::read_to_string(path).unwrap();
+        let content = std::fs::read_to_string(path)?;
         let lines: Vec<&str> = content.lines().collect();
-        assert!(lines.len() == 1);
+        ensure!(lines.len() == 1);
         assert_eq!(lines[0], "abc");
+        Ok(())
     }
 
     #[test]
-    fn line_count_test() {
-        let count = file_lines_count("tests/data/small_file.csv");
-        assert!(count.is_ok());
-        assert_eq!(count.unwrap(), 5);
+    fn line_count_test() -> Result<()> {
+        let count = file_lines_count("tests/data/small_file.csv")?;
+        assert_eq!(count, 5);
 
-        assert!(file_lines_count("tests/data/non_existent_file.csv").is_err());
+        ensure!(file_lines_count("tests/data/non_existent_file.csv").is_err());
+        Ok(())
     }
 
     #[test]
-    fn files_sorted_by_proximity_test() {
+    fn files_sorted_by_proximity_test() -> Result<()> {
         let root_dir = "tests/data/test_project";
         let pivot_file = "tests/data/test_project/utils/foo.rs";
 
-        let files = files_sorted_by_proximity(root_dir, pivot_file, "rs");
-        println!("{:?}", files);
-        assert!(files.is_ok());
+        let files = files_sorted_by_proximity(root_dir, pivot_file, "rs")?;
         let files = files
-            .unwrap()
             .into_iter()
             .map(|p| p.to_str().unwrap().to_string())
             .collect::<Vec<_>>();
@@ -514,5 +509,6 @@ mod io_tests {
             "tests/data/test_project/io/fs.rs",
         ];
         assert_eq!(files, expected_files);
+        Ok(())
     }
 }

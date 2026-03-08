@@ -13,5 +13,4 @@
 // limitations under the License.
 
 pub mod phases;
-pub mod shell_commands;
 pub mod utils;

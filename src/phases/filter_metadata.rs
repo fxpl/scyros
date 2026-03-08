@@ -15,11 +15,12 @@
 use std::iter::FromIterator;
 use std::vec;
 
+use anyhow::{Context, Result};
 use clap::{value_parser, Arg, ArgAction, Command};
 use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IntoLazy, Schema};
+use tracing::info;
 
-use crate::utils::error::*;
 use crate::utils::fs::*;
 use crate::utils::logger::{log_output_file, log_write_output, Logger};
 
@@ -128,15 +129,15 @@ pub fn run(
     non_code: bool,
     force: bool,
     no_output: bool,
-    logger: &mut Logger,
-) -> Result<(), Error> {
+    logger: &Logger,
+) -> Result<()> {
     let default_output_path = format!("{}.filtered.csv", input_path);
     let output_path = output_path.unwrap_or(&default_output_path);
 
     check_path(input_path)?;
 
     // Checks if the output file already exists
-    log_output_file(logger, output_path, no_output, force)?;
+    log_output_file(output_path, no_output, force)?;
 
     let mut projects: DataFrame = open_csv(
         input_path,
@@ -176,22 +177,20 @@ pub fn run(
     )?;
     let projects_count = projects.height();
 
-    logger.log(&format!("{} ids found in the file", projects_count))?;
+    info!("{} ids found in the file", projects_count);
 
-    projects = map_err(
-        projects
-            .lazy()
-            .filter(col("name").str().starts_with(lit("http/2 ")).not())
-            .with_column((col("pushed") - col("created")).alias("age"))
-            .drop(vec!["created", "pushed"])
-            .with_column(
-                (col("age") / lit(60 * 60 * 24))
-                    .cast(DataType::UInt32)
-                    .alias("age"),
-            )
-            .collect(),
-        "Could not compute the age of the projects",
-    )?;
+    projects = projects
+        .lazy()
+        .filter(col("name").str().starts_with(lit("http/2 ")).not())
+        .with_column((col("pushed") - col("created")).alias("age"))
+        .drop(vec!["created", "pushed"])
+        .with_column(
+            (col("age") / lit(60 * 60 * 24))
+                .cast(DataType::UInt32)
+                .alias("age"),
+        )
+        .collect()
+        .with_context(|| "Could not compute the age of the projects")?;
 
     // Discarding projects that are unreachable (i.e., turned private or deleted)
 
@@ -199,54 +198,50 @@ pub fn run(
     let reachable_projects_percentage =
         (reachable_projects_count as f64 / projects_count as f64) * 100.0;
 
-    logger.log(&format!(
+    info!(
         "{} projects ({:.2}%) are unreachable (turned private or deleted)",
         projects_count - reachable_projects_count,
         100.0 - reachable_projects_percentage
-    ))?;
-    logger.log(&format!(
+    );
+    info!(
         "{} remaining projects ({:.2}%)",
         reachable_projects_count, reachable_projects_percentage
-    ))?;
+    );
 
     // Discarding projects that are not code (e.g., documentation only)
 
     if non_code {
-        projects = map_err(
-            projects
-                .lazy()
-                .filter(col("language").str().len_bytes().neq(lit(0)))
-                .collect(),
-            "Could not filter projects by size",
-        )?;
+        projects = projects
+            .lazy()
+            .filter(col("language").str().len_bytes().neq(lit(0)))
+            .collect()
+            .with_context(|| "Could not filter projects by size")?;
 
         let code_count = projects.height();
         let code_percentage = (code_count as f64 / reachable_projects_count as f64) * 100.0;
 
-        logger.log(&format!(
+        info!(
             "\n{} projects ({:.2}%) contain code",
             code_count, code_percentage
-        ))?;
-        logger.log(&format!(
+        );
+        info!(
             "{} projects ({:.2}%) do not contain code",
             reachable_projects_count - code_count,
             100.0 - code_percentage
-        ))?;
+        );
 
         reachable_projects_count = code_count;
     }
 
     let loc_mask = col("size").gt_eq(lit(loc));
 
-    let loc_filter_count = map_err(
-        projects
-            .clone()
-            .lazy()
-            .filter(loc_mask.clone())
-            .count()
-            .collect(),
-        "Could not filter projects by size",
-    )?;
+    let loc_filter_count = projects
+        .clone()
+        .lazy()
+        .filter(loc_mask.clone())
+        .count()
+        .collect()
+        .with_context(|| "Could not filter projects by size")?;
 
     // Safe unwrap
     let loc_filter_count: usize = loc_filter_count.get(0).unwrap()[0]
@@ -254,28 +249,26 @@ pub fn run(
         .unwrap() as usize;
     let loc_filter_percentage = (loc_filter_count as f64 / reachable_projects_count as f64) * 100.0;
 
-    logger.log(&format!(
+    info!(
         "\nProjects with ≥ {} lines of code: {} / {:.2} %",
         loc, loc_filter_count, loc_filter_percentage
-    ))?;
-    logger.log(&format!(
+    );
+    info!(
         "Projects with < {} lines of code: {} / {:.2} %",
         loc,
         reachable_projects_count - loc_filter_count,
         100.0 - loc_filter_percentage
-    ))?;
+    );
 
     let age_mask = col("age").gt_eq(lit(age));
 
-    let age_filter_count = map_err(
-        projects
-            .clone()
-            .lazy()
-            .filter(age_mask.clone())
-            .count()
-            .collect(),
-        "Could not filter projects by age",
-    )?;
+    let age_filter_count = projects
+        .clone()
+        .lazy()
+        .filter(age_mask.clone())
+        .count()
+        .collect()
+        .with_context(|| "Could not filter projects by age")?;
 
     // Safe unwrap
     let age_filter_count: usize = age_filter_count.get(0).unwrap()[0]
@@ -283,17 +276,17 @@ pub fn run(
         .unwrap() as usize;
     let age_filter_percentage = (age_filter_count as f64 / reachable_projects_count as f64) * 100.0;
 
-    logger.log(&format!(
+    info!(
         "\nProjects ≥ {} days old: {} / {:.2} %",
         age, age_filter_count, age_filter_percentage
-    ))?;
+    );
 
-    logger.log(&format!(
+    info!(
         "Projects < {} days old: {} / {:.2} %",
         age,
         reachable_projects_count - age_filter_count,
         100.0 - age_filter_percentage
-    ))?;
+    );
 
     let disabled_mask = if disabled {
         col("disabled").eq(lit(0))
@@ -302,15 +295,13 @@ pub fn run(
     };
 
     if disabled {
-        let disabled_filter_count = map_err(
-            projects
-                .clone()
-                .lazy()
-                .filter(disabled_mask.clone())
-                .count()
-                .collect(),
-            "Could not filter projects by disabled",
-        )?;
+        let disabled_filter_count = projects
+            .clone()
+            .lazy()
+            .filter(disabled_mask.clone())
+            .count()
+            .collect()
+            .with_context(|| "Could not filter projects by disabled")?;
 
         // Safe unwrap
         let disabled_filter_count: usize = disabled_filter_count.get(0).unwrap()[0]
@@ -319,31 +310,29 @@ pub fn run(
         let disabled_filter_percentage =
             (disabled_filter_count as f64 / reachable_projects_count as f64) * 100.0;
 
-        logger.log(&format!(
+        info!(
             "\nNon-disabled projects: {} / {:.2} %",
             disabled_filter_count, disabled_filter_percentage
-        ))?;
+        );
 
-        logger.log(&format!(
+        info!(
             "Disabled projects:     {} / {:.2} %",
             reachable_projects_count - disabled_filter_count,
             100.0 - disabled_filter_percentage
-        ))?;
+        );
     }
 
-    projects = map_err(
-        projects
-            .lazy()
-            .filter(loc_mask.and(age_mask).and(disabled_mask))
-            .collect(),
-        "Could not filter projects",
-    )?;
+    projects = projects
+        .lazy()
+        .filter(loc_mask.and(age_mask).and(disabled_mask))
+        .collect()
+        .with_context(|| "Could not filter projects")?;
 
     let retained_projects_count = projects.height();
     let retained_projects_percentage =
         (retained_projects_count as f64 / reachable_projects_count as f64) * 100.0;
 
-    logger.log(&format!(
+    info!(
         "\nRetained projects among {}: {} / {:.2} %",
         if non_code {
             "those containing code"
@@ -352,13 +341,13 @@ pub fn run(
         },
         retained_projects_count,
         retained_projects_percentage
-    ))?;
+    );
 
-    logger.log(&format!(
+    info!(
         "Projects that have not been retained:     {} / {:.2} %\n",
         reachable_projects_count - retained_projects_count,
         100.0 - retained_projects_percentage
-    ))?;
+    );
 
     // Writes the result to the output CSV file
     log_write_output(logger, output_path, &mut projects, no_output)
@@ -367,17 +356,20 @@ pub fn run(
 #[cfg(test)]
 mod tests {
 
+    use crate::utils::logger::test_logger;
+
     use super::*;
+    use anyhow::ensure;
 
     const TEST_DATA: &str = "tests/data/phases/filter_metadata";
 
     #[test]
-    fn test_remove_forks() {
+    fn test_remove_forks() -> Result<()> {
         let input_path = format!("{}/filter_metadata.csv", TEST_DATA);
         let default_output_path = format!("{}.filtered.csv", input_path);
 
-        assert!(delete_file(&default_output_path, true).is_ok());
-        assert!(run(
+        delete_file(&default_output_path, true)?;
+        run(
             &input_path,
             None,
             500,
@@ -386,21 +378,18 @@ mod tests {
             true,
             true,
             false,
-            &mut Logger::new()
-        )
-        .is_ok());
+            test_logger(),
+        )?;
 
-        let expected_output_path = format!("{}.expected", default_output_path);
-        let expected_df = open_csv(&expected_output_path, None, None);
-        assert!(expected_df.is_ok());
-        let expected_df = expected_df.unwrap();
+        let expected_df = open_csv(&format!("{}.expected", default_output_path), None, None)?;
 
-        let output_df = open_csv(&default_output_path, None, None);
-        assert!(output_df.is_ok());
-        let output_df = output_df.unwrap();
+        let output_df = open_csv(&default_output_path, None, None)?;
 
-        assert!(expected_df.equals(&output_df));
+        ensure!(
+            expected_df.equals(&output_df),
+            "Filtered DataFrame does not match expected result."
+        );
 
-        assert!(delete_file(&default_output_path, false).is_ok());
+        delete_file(&default_output_path, false)
     }
 }
