@@ -431,21 +431,21 @@ impl ProjectInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::ensure;
 
     const TEST_DATA: &str = "tests/data/phases/languages";
 
     #[test]
-    fn test_language_scraper() {
+    fn test_language_scraper() -> Result<()> {
         let input_file: String = format!("{}/repos.csv", TEST_DATA);
         let output_file: String = format!("{}.languages.csv", input_file);
-        assert!(std::path::Path::new(&input_file).exists());
+        ensure!(std::path::Path::new(&input_file).exists());
 
-        // Remove the output files if they exist.
-        assert!(delete_file(&output_file, true).is_ok());
+        delete_file(&output_file, true)?;
 
         let tokens_file: String = "ghtokens.csv".to_string();
 
-        let run_scraper = run(
+        run(
             &input_file,
             None,
             &tokens_file,
@@ -456,9 +456,8 @@ mod tests {
             "name",
             None,
             test_logger(),
-        );
-        assert!(run_scraper.is_ok());
+        )?;
 
-        assert!(delete_file(&output_file, false).is_ok());
+        delete_file(&output_file, false)
     }
 }

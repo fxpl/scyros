@@ -1467,8 +1467,8 @@ mod tests {
             .is_err());
         }
 
-        assert!(delete_file(&output_file_path, true).is_ok());
-        assert!(delete_file(&logs_file_path, true).is_ok());
+        delete_file(&output_file_path, true)?;
+        delete_file(&logs_file_path, true)?;
 
         for path in input_df {
             delete_dir(&format!("{}.functions", path.unwrap()), true)?;
