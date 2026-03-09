@@ -15,7 +15,7 @@ repository-code: "https://github.com/fxpl/scyros"
 license: Apache-2.0
 preferred-citation:
   type: article
-  title: "A Large-Scale Study of Floating-Point Usage in Statically Typed Languages"
+  title: "Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages"
   authors:
     - family-names: Gilot
       given-names: Andrea
@@ -23,7 +23,7 @@ preferred-citation:
       given-names: Tobias
     - family-names: Darulova
       given-names: Eva
-  year: 2025
+  year: 2026
   archive: arXiv
   archive-prefix: arXiv
   arxiv: "2509.04936"

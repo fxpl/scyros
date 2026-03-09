@@ -74,17 +74,17 @@ GitHub enforces API rate limits. Using multiple tokens from the same account doe
 Scyros is introduced and described in the following large-scale empirical study. If you use Scyros in academic work, please cite:.
 
 ```bibtex
-@misc{gilot2025largescalestudyfloatingpointusage,
-    title={A Large-Scale Study of Floating-Point Usage in Statically Typed Languages}, 
+@misc{gilot2026largescalestudyfloatingpointusage,
+    title={Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages}, 
     author={Andrea Gilot and Tobias Wrigstad and Eva Darulova},
-    year={2025},
+    year={2026},
     eprint={2509.04936},
     archivePrefix={arXiv},
     primaryClass={cs.PL},
     url={https://arxiv.org/abs/2509.04936}, 
 }   
 ```
-> Gilot, A., Wrigstad, T., & Darulova, E. (2025). A Large-Scale Study of Floating-Point Usage in Statically Typed Languages. arXiv. https://arxiv.org/abs/2509.04936
+> Gilot, A., Wrigstad, T., & Darulova, E. (2026). Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages. arXiv. https://arxiv.org/abs/2509.04936
 
 ## License
 This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
