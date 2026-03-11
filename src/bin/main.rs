@@ -229,7 +229,7 @@ fn main() {
             if cli_args.get_flag("debug") {
                 error!("{:?}", e);
             } else {
-                error!("Error: {}", e);
+                error!("{}", e);
             }
         }
     }

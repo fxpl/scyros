@@ -15,12 +15,13 @@
 use std::iter::FromIterator;
 use std::vec;
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::{value_parser, Arg, ArgAction, Command};
 use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IntoLazy, Schema};
 use tracing::info;
 
+use crate::utils::dataframes;
 use crate::utils::fs::*;
 use crate::utils::logger::{log_output_file, log_write_output, Logger};
 
@@ -49,11 +50,11 @@ pub fn cli() -> Command {
                 .required(false),
         )
         .arg(
-            Arg::new("loc")
-                .short('l')
-                .long("loc")
-                .value_name("LOC")
-                .help("The threshold for lines of code under which a project is discarded. Default to 0")
+            Arg::new("size")
+                .short('s')
+                .long("size")
+                .value_name("SIZE (kB)")
+                .help("The threshold for the size of the project under which it is discarded. (in kB)")
                 .value_parser(value_parser!(u64))
                 .required(false)
                 .default_value("0"),
@@ -109,7 +110,7 @@ pub fn cli() -> Command {
 ///
 /// * `input_path` - The path to the input CSV file.
 /// * `output_path` - The optional path to the output CSV file. Defaults to the input path with ".unique.csv" appended.
-/// * `loc` - The threshold for lines of code under which a project is discarded.
+/// * `size` - The threshold for the size of the project under which it is discarded. (in kB)
 /// * `age` - The threshold for the age (in days) of the project under which it is discarded. If `None`, no filtering is applied.
 /// * `disabled` - Whether to discard disabled projects.
 /// * `force` - Whether to override the output file if it already exists.
@@ -123,7 +124,7 @@ pub fn cli() -> Command {
 pub fn run(
     input_path: &str,
     output_path: Option<&str>,
-    loc: u64,
+    size: u64,
     age: u32,
     disabled: bool,
     non_code: bool,
@@ -160,21 +161,11 @@ pub fn run(
             Field::new("size".into(), DataType::UInt64),
             // Field::new("license".into(), DataType::String),
         ])),
-        Some(vec![
-            "id", "name", "language", "created", "pushed", // "updated",
-            // "fork",
-            "disabled",
-            // "archived",
-            // "stars",
-            // "forks",
-            // "issues",
-            // "has_issues",
-            // "watchers_count",
-            // "subscribers",
-            "size",
-            // "license",
-        ]),
+        None,
     )?;
+
+    ensure!(dataframes::has_columns(&projects, ["id", "name", "language", "created", "pushed", "disabled", "size"]), "Input file must contain the following columns: id, name, language, created, pushed, disabled, size");
+
     let projects_count = projects.height();
 
     info!("{} ids found in the file", projects_count);
@@ -233,7 +224,7 @@ pub fn run(
         reachable_projects_count = code_count;
     }
 
-    let loc_mask = col("size").gt_eq(lit(loc));
+    let loc_mask = col("size").gt_eq(lit(size));
 
     let loc_filter_count = projects
         .clone()
@@ -250,12 +241,12 @@ pub fn run(
     let loc_filter_percentage = (loc_filter_count as f64 / reachable_projects_count as f64) * 100.0;
 
     info!(
-        "\nProjects with ≥ {} lines of code: {} / {:.2} %",
-        loc, loc_filter_count, loc_filter_percentage
+        "\nProjects with ≥ {} kB of code: {} / {:.2} %",
+        size, loc_filter_count, loc_filter_percentage
     );
     info!(
-        "Projects with < {} lines of code: {} / {:.2} %",
-        loc,
+        "Projects with < {} kB of code: {} / {:.2} %",
+        size,
         reachable_projects_count - loc_filter_count,
         100.0 - loc_filter_percentage
     );
@@ -364,7 +355,7 @@ mod tests {
     const TEST_DATA: &str = "tests/data/phases/filter_metadata";
 
     #[test]
-    fn test_remove_forks() -> Result<()> {
+    fn test_filter_metadata() -> Result<()> {
         let input_path = format!("{}/filter_metadata.csv", TEST_DATA);
         let default_output_path = format!("{}.filtered.csv", input_path);
 

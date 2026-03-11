@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Collect metadata of GitHub projects. The input file must be a valid CSV file where one of the columns contains the full
-//! names of the projects, and one contains their ids. The program sends requests to the GitHub API to collect metadata about each project. Projects
-//! are chosen randomly without replacement. The metadata is saved in a new CSV file. If the program is interrupted, it
-//! can be restarted and will continue from where it left off. The program can also optionally use a cache file to save requests.
-//! By default, the name of the output file is the same as the input file with the suffix '.metadata.csv'.
+#![doc = include_str!("../docs/metadata.md")]
 
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -47,13 +43,7 @@ use tracing::info;
 pub fn cli() -> Command {
     Command::new("metadata")
         .about("Collect the metadata of GitHub projects")
-        .long_about(
-            "Collect metadata of GitHub projects. The input file must be a valid CSV file where one of the columns (\"name\") contains the full names of the projects, and another one contains their ids.\n\
-            The program sends requests to the GitHub API to collect metadata about each project.\n\
-            Projects are chosen randomly without replacement. The metadata is saved in a new CSV file.\nIf the program is interrupted, it \
-            can be restarted and will continue from where it left off.\nThe program can also optionally use a cache file to save requests.\n\
-            By default, the name of the output file is the same as the input file with the suffix '.metadata.csv'.\n"
-        )
+        .long_about(include_str!("../docs/metadata.md"))
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
         .disable_version_flag(true)
         .arg(

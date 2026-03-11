@@ -59,8 +59,10 @@ pub fn is_valid_token_file(file_path: &str) -> Result<()> {
                     .and_then(|_| easy.http_headers(headers))
             })?;
 
-            if easy.perform().is_err() || easy.response_code()? != 200 {
-                bail!("Token in line {} is invalid", i + 2);
+            let perform = easy.perform();
+
+            if perform.is_err() || easy.response_code()? != 200 {
+                perform.with_context(|| format!("Token in line {} is invalid", i + 2))?
             }
         }
         Ok(())

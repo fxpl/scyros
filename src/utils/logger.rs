@@ -18,7 +18,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::utils::{csv::CSVFile, fs::FileMode, github::is_valid_token_file};
 
@@ -44,11 +44,21 @@ impl Display for TaskStatus {
 }
 
 pub struct TaskLogger {
+    /// The progress bar used to log the progress of the task.
     pb: ProgressBar,
+    /// The message to log for the task.
     msg: String,
 }
 
 impl TaskLogger {
+    /// Creates a new task logger and starts logging the progress of the task.
+    ///
+    /// # Arguments
+    /// * `logger` - A reference to the logger to use for logging the progress of the task.
+    /// * `msg` - The message to log for the task.
+    ///
+    /// # Returns
+    /// The task logger, or an error if the logger could not be created.
     pub fn new(logger: &Logger, msg: impl Into<String>) -> Result<TaskLogger> {
         let msg: String = msg.into();
 
@@ -61,16 +71,19 @@ impl TaskLogger {
         Ok(TaskLogger { pb, msg })
     }
 
+    /// Logs the success of a task
     pub fn success(&self) {
-        self.pb
-            .finish_with_message(format!("{} - {}", self.msg, TaskStatus::Success));
+        self.pb.finish_and_clear();
+        info!("{} - {}", self.msg, TaskStatus::Success);
     }
 
+    /// Logs the failure of a task
     pub fn failure(&self) {
-        self.pb
-            .abandon_with_message(format!("{} - {}", self.msg, TaskStatus::Failure));
+        self.pb.finish_and_clear();
+        error!("{} - {}", self.msg, TaskStatus::Failure);
     }
 
+    /// Updates the message of the task logger.
     pub fn set_message(&self, msg: impl Into<String>) {
         self.pb.set_message(msg.into());
     }
@@ -132,6 +145,10 @@ pub struct Logger {
 }
 
 impl Logger {
+    /// Creates a new logger and sets it as the global default logger.
+    ///
+    /// # Returns
+    /// The logger, or an error if the logger could not be created.
     pub fn new() -> Result<Self> {
         let logger = Self {
             progress: Arc::new(MultiProgress::new()),
@@ -145,6 +162,7 @@ impl Logger {
             .with_writer(writer)
             .with_target(false)
             .without_time()
+            .with_level(true)
             .finish();
 
         tracing::subscriber::set_global_default(subscriber)?;
@@ -152,6 +170,14 @@ impl Logger {
         Ok(logger)
     }
 
+    /// Runs a task and logs its progress, success, or failure.
+    ///
+    /// # Arguments
+    /// * `msg` - The message to log for the task.
+    /// * `f` - The task to run
+    ///
+    /// # Returns
+    /// The result of the task
     pub fn run_task<T, F>(&self, msg: impl Into<String>, f: F) -> anyhow::Result<T>
     where
         F: FnOnce() -> anyhow::Result<T>,
@@ -185,6 +211,7 @@ impl Logger {
 
 static TEST_LOGGER: OnceLock<Logger> = OnceLock::new();
 
+/// Returns a reference to a logger that should be used for testing purposes.
 pub fn test_logger() -> &'static Logger {
     TEST_LOGGER.get_or_init(|| Logger::new().unwrap())
 }

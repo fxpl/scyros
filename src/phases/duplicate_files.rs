@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Detects duplicate files in a dataset, returning only unique files. The input and output are CSV files storing file metadata.
-//! The similarity criterion can be either exact match or token-based (i.e., invariant to token order and whitespaces).
+#![doc = include_str!("../docs/duplicate_files.md")]
 
 use std::collections::HashMap;
 use std::iter::FromIterator;
@@ -35,11 +34,7 @@ use crate::utils::regex::Matcher;
 pub fn cli() -> Command {
     Command::new("duplicate_files")
         .about("Detects duplicate files in a dataset, returning only unique files.")
-        .long_about(
-            "Detects duplicate files in a dataset, returning only unique files. The input and output are CSV files storing file paths.\n\
-            The name of the column storing file paths in the input CSV file can be specified (default is 'name').\n\
-             The similarity criterion can be either exact match or token-based (i.e., invariant to token order and whitespaces)."
-        )
+        .long_about(include_str!("../docs/duplicate_files.md"))
         .disable_version_flag(true)
         .arg(
             Arg::new("input")

@@ -69,15 +69,21 @@ pub fn str<'a>(df: &'a DataFrame, column: &str) -> Result<Vec<&'a str>> {
         .collect())
 }
 
+/// Checks if a DataFrame contains all the specified columns.
+///
+/// # Arguments
+/// * `df` - The DataFrame to check.
+/// * `columns` - An iterable of column names to check for.
+pub fn has_columns<'a>(df: &DataFrame, columns: impl IntoIterator<Item = &'a str>) -> bool {
+    let df_columns: Vec<&str> = df.get_column_names().iter().map(|s| s.as_str()).collect();
+    columns.into_iter().all(|col| df_columns.contains(&col))
+}
+
 /// Checks if a DataFrame contains a column with a given name.
 ///
 /// # Arguments
 /// * `df` - The DataFrame to check.
 /// * `column` - The name of the column to check for.
 pub fn has_column(df: &DataFrame, column: &str) -> bool {
-    df.get_column_names()
-        .iter()
-        .map(|s| s.as_str())
-        .collect::<Vec<&str>>()
-        .contains(&column)
+    has_columns(df, [column])
 }

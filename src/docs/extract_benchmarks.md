@@ -1,0 +1,1 @@
+(Experimental) Extracts self-contained C files containing all the dependencies of specified functions.

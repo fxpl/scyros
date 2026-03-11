@@ -12,14 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Parse all the files in the input file and extract the functions whose body contains one of the provided keywords.
-//! All parsed files repositories are logged in a CSV file where statistics about the functions are stored.
-//! These statistics include the number of lines of code, the number of words, the number of keywords matched, the number of conditional statements, loops,
-//! and the maximum nesting level of these statements.
-//! The name of the log file is the same as the input file with the extension `.functions`.
-//! The functions are stored in a folder with the same name as the file and the extension `_functions`.
-//! The supported languages are C, C++, Java, Python and Fortran.
-
+#![doc = include_str!("../docs/parse.md")]
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -46,15 +39,7 @@ use crate::utils::{
 pub fn cli() -> Command {
     Command::new("parse")
         .about("Parse all the files in the dataset and extract functions whose body contains one of the provided keywords.")
-        .long_about(
-            "Parse all the files in the input file and extract functions whose body contains one of the provided keywords. \
-            All parsed files repositories are logged in a CSV file where statistics about the functions are stored. \
-            These statistics include the number of lines of code, the number of words, the number of keywords matched, the number of conditional statements, loops,
-            and the maximum nesting level of these statements.\n\
-            The name of the log file is the same as the input file with the extension \".functions\". \
-            The functions are stored in a folder with the same name as the file and the extension \"_functions\".\n\
-            The supported languages are C, C++, Java, Python and Fortran."
-        )
+        .long_about(include_str!("../docs/parse.md"))
         .disable_version_flag(true)
         .arg(
             Arg::new("input")

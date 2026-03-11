@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[doc = include_str!("../docs/extract_benchmarks.md")]
 use crate::utils::csv::CSVFile;
 use crate::utils::dataframes;
 use crate::utils::fs::*;
@@ -47,10 +48,7 @@ use tracing::{info, warn};
 pub fn cli() -> Command {
     Command::new("extract_benchmarks")
         .about("(Experimental) Extract self-contained C files containing all the dependencies of specified functions.")
-        .long_about(
-            "(Experimental) Extracts self-contained C files containing all the dependencies of specified functions."
-
-        )
+        .long_about(include_str!("../docs/extract_benchmarks.md"))
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
         .disable_version_flag(true)
         .arg(

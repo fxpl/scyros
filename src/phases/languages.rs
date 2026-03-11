@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Collect all the languages of GitHub projects. A list of ids and full names of projects must be provided
-//! in a CSV file. The program will then make requests to the GitHub API to collect the list of languages of each project and the
-//! number of bytes for each of these languages. In addition the SHA of the latest commit is also saved. Projects
-//! are chosen randomly without replacement. The data are saved in a new CSV file. If the program is interrupted, it
-//! can be restarted and will continue from where it left off. The program can also optionally use a cache file to save requests.
+#![doc = include_str!("../docs/languages.md")]
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -46,14 +42,7 @@ use tracing::info;
 pub fn cli() -> Command {
     Command::new("languages")
         .about("Collect all the languages of GitHub projects along with the hash of their latest commit.")
-        .long_about(
-            "Collect all the languages of GitHub projects. A list of ids and full names of projects must be provided \
-            in a CSV file.\nThe program will then make requests to the GitHub API to collect the list of languages of each project and the \
-            number of bytes for each of these languages. In addition the SHA of the latest commit is also saved.\n\
-            Projects are chosen randomly without replacement. The data are saved in a new CSV file.\nIf the program is interrupted, it \
-            can be restarted and will continue from where it left off.\n The program can also optionally use a cache file to save requests.\n\
-            The name of the output file is the same as the input file with the suffix '.with_lang'.\n"
-        )
+        .long_about(include_str!("../docs/languages.md"))
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
         .disable_version_flag(true)
         .arg(
@@ -70,8 +59,8 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. It must be a valid CSV file where the first column is the id of the project, \
-                       the second column is the full name of the project and the third column is the hash of the latest commit. Other columns are ignored.")
+                .help("Path to the input csv file to use. The file must contain at least two columns: one with the id of the projects and another one with their full name. \
+                       By default, the column containing the ids is named 'id' and the column containing the full names is named 'name'.")
                 .required(true)
         )
         .arg(

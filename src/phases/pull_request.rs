@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Collect pull requests of GitHub projects. The input file must be a valid CSV file where one of the columns (\"name\") contains the full names of the projects, and another one (\"id\") contains their ids.
-//! The program sends requests to the GitHub API to collect metadata about the pull requests of the projects in the input file, as well as the comments in each pull request.
-//! Projects are chosen randomly without replacement. The metadata of the pull requests is saved in a new CSV file. If the program is interrupted, it
-//! can be restarted and will continue from where it left off. The comments of each pull request are saved in separate CSV files in the target directory.
-//! By default, the name of the output file is the same as the input file with the suffix '.pulls.csv'.
+#![doc = include_str!("../docs/pull_request.md")]
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -47,13 +43,7 @@ use tracing::info;
 pub fn cli() -> Command {
     Command::new("pr")
         .about("Collect pull requests of GitHub projects")
-        .long_about(
-            "Collect pull requests of GitHub projects. The input file must be a valid CSV file where one of the columns (\"name\") contains the full names of the projects, and another one (\"id\") contains their ids.\n\
-            The program sends requests to the GitHub API to collect metadata about the pull requests of the projects in the input file, as well as the comments in each pull request.\n\
-            Projects are chosen randomly without replacement. The metadata of the pull requests is saved in a new CSV file.\nIf the program is interrupted, it \
-            can be restarted and will continue from where it left off.\n The comments of each pull request are saved in separate CSV files in the target directory.\n\
-            By default, the name of the output file is the same as the input file with the suffix '.pulls.csv'.\n"
-        )
+        .long_about(include_str!("../docs/pull_request.md"))
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
         .disable_version_flag(true)
         .arg(

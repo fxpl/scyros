@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![doc = include_str!("../docs/filter_languages.md")]
+
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::vec;
@@ -30,11 +32,7 @@ use crate::utils::{dataframes, fs::*};
 pub fn cli() -> Command {
     Command::new("filter_languages")
         .about("Filter out projects that do not contain any code written in a programming language from a list provided by the user.")
-        .long_about(
-            "Filter out projects that do not contain any code written in a programming language from a list provided by the user.\n
-            By default, the name of the output file is the same as the input file with '.filtered_lang.csv' appended.\n
-            
-            The list of languages is provided in a JSON file. "
+        .long_about(include_str!("../docs/filter_languages.md")
         )
         .disable_version_flag(true)
         .arg(
@@ -81,8 +79,7 @@ pub fn cli() -> Command {
         )
 }
 
-/// Filters out projects that do not contain any code written in a programming language from a list provided by the user
-/// in a JSON file.
+/// Entrypoint of the program
 ///
 /// # Arguments
 ///

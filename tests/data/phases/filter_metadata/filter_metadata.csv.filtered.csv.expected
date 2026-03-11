@@ -1,2 +1,2 @@
-id,name,language,disabled,size,age
-141755666,andreitsev/Notebooks,Jupyter Notebook,0,254480,421
+id,name,language,updated,fork,disabled,archived,stars,forks,issues,has_issues,watchers_count,subscribers,size,license,age
+141755666,andreitsev/Notebooks,Jupyter Notebook,1568564510,0,0,0,0,0,0,1,0,1,254480,unknown,421
