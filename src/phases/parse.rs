@@ -75,13 +75,16 @@ pub fn cli() -> Command {
                 .value_name("KEYWORDS_FILES.json")
                 .help("List of files containing the list of extensions and keywords to use. The files must be in JSON format.\n\
                     The extensions should be written without the period (`java` instead of `.java`). The files must have the following structure:\n    \
-                        {\n        \
-                            \"extensions\": {\n            \
-                                \"ext1\": [\"kw11\", \"kw12\", ...],\n            \
-                                \"ext2\": [\"kw21\", \"kw22\", ...],\n            \
-                                ...\n        \
-                            },\n        \
-                            \"keywords\": [\"kw1\", \"kw2\", ...]\n    \
+                        {\n\
+                            \"languages\": [\n\
+                                {\n\
+                                \"name\": \"LanguageName\",\n\
+                                \"extensions\": [\".ext1\", \".ext2\", ...],\n\
+                                \"keywords\": [\"localKeyword1\", \"localKeyword2\", ...]    // optional\n\
+                                },\n\
+                                ...\n\
+                            ],\n\
+                            \"keywords\": [\"globalKeyword1\", \"globalKeyword2\", ...]      // optional\n\
                         }")
                 .required(true)
         )
