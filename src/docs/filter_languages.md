@@ -1,4 +1,13 @@
-Filter out projects that do not contain any code written in a programming language from a list provided by the user.\n
-            By default, the name of the output file is the same as the input file with '.filtered_lang.csv' appended.\n
-            
-            The list of languages is provided in a JSON file.
+Filters a CSV file produced by the 'languages' command to keep only repositories that contain code written in at least one user-specified language.
+
+The languages to keep are read from a JSON file. The format of the JSON file is as follows:
+{
+    "languages": ["lang1", "lang2", ...],    // list of languages to keep
+}
+
+Repositories that are unreachable, such as deleted or private repositories, are discarded before filtering. A repository is retained if its languages field contains at least one language from the provided list.
+
+By default, the filtered data are written to a CSV file whose name is the input file name with the suffix '.filtered_lang.csv'.
+
+Output CSV format:
+  * Same columns as the input file

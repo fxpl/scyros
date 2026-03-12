@@ -132,59 +132,23 @@ pub fn cli() -> Command {
         )
 }
 
-/// Runs the parser.
+/// Entry point of the program
 ///
 /// # Arguments
 ///
-/// * `input_file` - Path to the input csv file to use.
-/// * `output_file` - Path to the output csv file storing the functions statistics.
-/// * `logs_file` - Path to the output csv file storing the files statistics.
+/// * `input_path` - Path to the input csv file to use.
+/// * `output_path` - Path to the output csv file storing the functions statistics.
+/// * `logs_path` - Path to the output csv file storing the files statistics.
 /// * `keywords_file_paths` - Paths to the files containing the list of extensions and keywords to use.
-/// * `threads` - Number of threads to use.
-///
-/// Parses all the files in the input file and extracts the functions whose body contains one of the provided keywords.
-/// All parsed files repositories are logged in a CSV file where statistics about the functions are stored.
-/// These statistics include the number of lines of code, the number of words, the number of keywords matched, the number of conditional statements, loops,
-/// and the maximum nesting level of these statements.
-///
-/// The name of the log file is the same as the input file with the extension `.functions`.
-/// The functions are stored in a folder with the same name as the file and the extension `_functions`.
-///
-/// The input (i.e. the file where the ids are stored) must be a valid CSV file where the first column is the path to the file and
-/// the second column is the extension of the file. Other columns are ignored.
-///
-///
-///
-/// The list of extensions and keywords needs to be stored in a JSON file. The extensions should be written without the period (`java` instead of `.java`).
-/// The file must have the following structure:
-///
-/// ```json
-/// {
-///     "extensions": {
-///         "ext1": ["kw11", "kw12", ...],
-///         "ext2": ["kw21", "kw22", ...],
-///         ...
-///     },
-///     "keywords": ["kw1", "kw2", ...]
-/// }
-/// ```
-///
-/// # Example
-///
-/// The following configuration file will download all the C, Java and TypeScript files that contain floating point types:
-///
-/// ```json
-/// {
-///     "extensions": {
-///         "c": [],
-///         "java": [],
-///         "ts": ["number"],
-///         ...
-///     },
-///     "keywords": ["float", "double"]
-/// }
-/// ```
-///
+/// * `opt_languages` - Optional list of languages to parse. If not specified, all supported languages are parsed.
+/// * `fail_policy` - The policy to apply when a parse error is encountered. It can be one of the following:
+///   * `ignore`: continue parsing and write the statistics of the file or function with parse error as if there was no error.
+///   * `skip-file`: replace the file statistics with an error row in the output file, does not extract any function from the file.
+///   * `skip-function`: replace the function statistics with an error row in the output file.
+/// * `threads` - The number of threads to use.
+/// * `seed` - The seed used to shuffle the input file.
+/// * `force` - Whether to override the output file if it already exists.
+/// * `logger` - The logger to use to display information about the progress of the program.
 pub fn run(
     input_path: &str,
     output_path: Option<&str>,

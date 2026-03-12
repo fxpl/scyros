@@ -120,29 +120,7 @@ pub fn cli() -> Command {
         )
 }
 
-/// Collects pull requests about GitHub projects.
-///
-/// The input must be a valid CSV file where the first column is the id of the project and the second column is the full name of the project.
-/// Other columns are ignored. Such a file can be obtained by running the random-id-sampling program. Ids are chosen in a random order from the file.
-///
-/// The output has the following columns:
-/// * id: the id of the project.
-/// * name: the full name of the project.
-/// * pr_number: the pull request number.
-/// * file_path: the path of the file storing the contents of the pull request.
-/// * user: the user who created the pull request.
-/// * user_id: the id of the user who created the pull request.
-/// * comments: the number of comments on the pull request.
-/// * created_at: the timestamp of the creation of the pull request.
-/// * updated_at: the timestamp of the last update of the pull request.
-/// * closed_at: the timestamp of the closing of the pull request.
-/// * merged_at: the timestamp of the merging of the pull request.
-/// * draft: whether the pull request is a draft.
-/// * state: the state of the pull request.
-/// * commits: the number of commits in the pull request.
-/// * additions: the number of additions in the pull request.
-/// * deletions: the number of deletions in the pull request.
-/// * changed_files: the number of changed files in the pull request.
+/// Entry point of the program.
 ///
 /// # Arguments
 ///

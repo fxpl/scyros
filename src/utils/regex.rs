@@ -201,12 +201,12 @@ pub fn count_text_lines(text: &[u8]) -> usize {
 ///  "languages": [
 ///    {
 ///      "name": "LanguageName",
-///      "extensions": [".ext1", ".ext2", ...],
-///      "keywords": ["localKeyword1", "localKeyword2", ...]
+///      "extensions": [".ext1", ".ext2", ...],     // optional
+///      "keywords": ["localKeyword1", "localKeyword2", ...]    // optional
 ///    },
 ///    ...
 ///  ]
-///  "keywords": ["globalKeyword1", "globalKeyword2", ...]
+///  "keywords": ["globalKeyword1", "globalKeyword2", ...]      // optional
 /// }
 /// ```
 /// The "languages" field contains an array of programming languages, each with a name, a list of file extensions, and a list of local keywords, i.e.,
@@ -305,28 +305,40 @@ impl KeywordFiles {
             .with_context(|| format!("Keyword file {} does not contain a {} field", path, cat1))?;
 
         for l in languages.members() {
-            let language = json_to_map(l);
+            let (name, extensions, keywords) = if l.is_string() {
+                (
+                    l.as_str()
+                        .with_context(|| "Language name is not a string")?,
+                    HashSet::new(),
+                    HashSet::new(),
+                )
+            } else {
+                let language = json_to_map(l);
 
-            let name: &str = language
-                .get("name")
-                .with_context(|| format!("Keyword file {} contains a language with no name", path))?
-                .as_str()
-                .with_context(|| anyhow!("Language name is not a string"))?;
+                let name: &str = language
+                    .get("name")
+                    .with_context(|| {
+                        format!("Keyword file {} contains a language with no name", path)
+                    })?
+                    .as_str()
+                    .with_context(|| anyhow!("Language name is not a string"))?;
 
-            let extensions: HashSet<String> = match language.get("extensions") {
-                Some(ext) => json_to_set(ext),
-                None => {
-                    if warning {
-                        warn!("Language {} in {} has no extensions field", name, path);
+                let extensions: HashSet<String> = match language.get("extensions") {
+                    Some(ext) => json_to_set(ext),
+                    None => {
+                        if warning {
+                            warn!("Language {} in {} has no extensions field", name, path);
+                        }
+                        HashSet::new()
                     }
-                    HashSet::new()
-                }
-            };
+                };
 
-            let keywords: HashSet<String> = language
-                .get("keywords")
-                .map(|json| json_to_set(json))
-                .unwrap_or_default();
+                let keywords: HashSet<String> = language
+                    .get("keywords")
+                    .map(|json| json_to_set(json))
+                    .unwrap_or_default();
+                (name, extensions, keywords)
+            };
 
             for ext in extensions {
                 match extensions_to_language.get(&ext) {

@@ -4,4 +4,7 @@ Two rows are considered duplicates if they share the same value in a user-specif
 
 Prints statistics about the number of duplicates found and writes the deduplicated rows to a new CSV file.
 
-By default, the output file name is the input file name with '.unique.csv' appended. The output format matches the input format, and the header is preserved.
+By default, the output file name is the input file name with '.unique.csv' appended. 
+
+Output CSV file format:
+  * Same columns as the input file

@@ -57,7 +57,7 @@ pub fn cli() -> Command {
                 .long("languages")
                 .alias("lang")
                 .value_name("LANGUAGES.json")
-                .help("Path to the json file storing the languages to keep.")
+                .help("Path to the json file storing the languages to keep with the following format: \n{\n    \"languages\": [\"lang1\", \"lang2\", ...]\n}\n")
                 .required(true)
         )
         .arg(

@@ -148,68 +148,22 @@ pub fn cli() -> Command {
         )
 }
 
-/// Runs the downloader.
+/// Entry point of the program
 ///
 /// # Arguments
 ///
-/// * `input_file` - Path to the input csv file to use.
+/// * `input_file_path` - Path to the input csv file to use.
+/// * `projects_output_path` - Path to the output csv file storing the project statistics. If not specified, the input file name will be used with ".project_log.csv" appended.
+/// * `files_output_path` - Path to the output csv file storing the file statistics. If not specified, the input file name will be used with ".file_log.csv" appended.
 /// * `target` - Path to the directory where projects will be downloaded.
 /// * `tokens_file` - Path to the file containing the GitHub tokens to use.
-/// * `keywords_files` - Path to the files containing the list of extensions and keywords to use.
+/// * `keywords_file_paths` - Path to the files containing the list of extensions and keywords to use.
 /// * `skip` - If true, skip the downloading of the repositories.
 /// * `count` - If true, compute statistics on the downloaded projects without deleting any file.
 /// * `overwrite` - If true, overwrite the log files if they exist.
 /// * `seed` - The seed used to shuffle the projects.
 /// * `logger` - The logger to use to display information about the progress of the program.
-///
-/// Downloads all github repositories from a list and keeps only the files that satisfy the following criteria:
-/// * Their extension is in the list of extensions provided in the command line arguments.
-/// * They contain a keyword related to floating point arithmetic.
-/// * They are not symbolic links.
-///
-/// Furthermore, all empty directories are removed. All downloaded repositories are logged in a CSV file to track progress
-/// and be able to resume the download if the program is interrupted. The name of the log file is the same as the input file
-/// with the extension ".project_log". Every file is also logged in a CSV file with the same name as the input file with the
-/// extension ".file_log".
-///
-/// The input (i.e. the file where the ids are stored) must be a valid CSV file where the first column is the id of the project,
-/// the second column is the full name of the project and the third column is the hash of the latest commit. Other columns are ignored.
-/// Ids are chosen in a random order from the file.
-///
-/// If the target directory does not exist, it will be created.
-///
-/// The tokens file must be a valid CSV file with one column named 'token' and where every line is a valid GitHub token
-///
-/// The lists of extensions and keywords needs to be stored in a JSON file. The extensions should be written without the period (`java` instead of `.java`).
-/// The file must have the following structure:
-///
-/// ```json
-/// {
-///     "extensions": {
-///         "ext1": ["kw11", "kw12", ...],
-///         "ext2": ["kw21", "kw22", ...],
-///         ...
-///     },
-///     "keywords": ["kw1", "kw2", ...]
-/// }
-/// ```
-///
-/// # Example
-///
-/// The following configuration file will download all the C, Java and TypeScript files that contain floating point types:
-///
-/// ```json
-/// {
-///     "extensions": {
-///         "c": [],
-///         "java": [],
-///         "ts": ["number"],
-///         ...
-///     },
-///     "keywords": ["float", "double"]
-/// }
-/// ```
-///
+/// * `thread` - The number of threads to use when not downloading and computing statistic locally instead.
 pub fn run(
     input_file_path: &str,
     projects_output_path: Option<&str>,

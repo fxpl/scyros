@@ -16,6 +16,7 @@ use crate::utils::dataframes;
 
 use super::fs::*;
 use super::json::*;
+use anyhow::ensure;
 use anyhow::{bail, Context, Error, Result};
 use curl::easy::{Easy, List as CurlList};
 use json::JsonValue;
@@ -60,10 +61,15 @@ pub fn is_valid_token_file(file_path: &str) -> Result<()> {
             })?;
 
             let perform = easy.perform();
-
-            if perform.is_err() || easy.response_code()? != 200 {
+            if perform.is_err() {
                 perform.with_context(|| format!("Token in line {} is invalid", i + 2))?
             }
+            ensure!(
+                easy.response_code()? == 200,
+                "Token in line {} is invalid: response code {}",
+                i + 2,
+                easy.response_code()?
+            );
         }
         Ok(())
     }
