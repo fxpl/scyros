@@ -139,6 +139,20 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      - name: Install LLVM/Clang for Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev libclang-dev
+      - name: Set LIBCLANG_PATH
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "LLVM_CONFIG_PATH=$(command -v llvm-config)" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          echo "Using llvm-config at: $(command -v llvm-config)"
+          echo "Using LIBCLANG_PATH=$(llvm-config --libdir)"
+          ls -l "$(llvm-config --libdir)"/libclang.so*
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
