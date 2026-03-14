@@ -5,23 +5,45 @@
 
   outputs = { self, nixpkgs }:
     let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+
+      forAllSystems = nixpkgs.lib.genAttrs systems;
 
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
       version = cargoToml.package.version;
+      pname = cargoToml.package.name;
+      desc = cargoToml.package.description;
     in {
-      packages.${system}.default = pkgs.rustPlatform.buildRustPackage {
-        pname = cargoToml.package.name;
-        inherit version;
+      packages = forAllSystems (system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in {
+          default = pkgs.rustPlatform.buildRustPackage {
+            inherit pname version;
+            src = ./.;
+            cargoLock.lockFile = ./Cargo.lock;
 
-        src = ./.;
-        cargoLock.lockFile = ./Cargo.lock;
+            meta = with pkgs.lib; {
+              description = desc;
+              mainProgram = pname;
+              platforms = platforms.unix;
+            };
+          };
+        });
 
-        meta = with pkgs.lib; {
-          description = cargoToml.package.description;
-          mainProgram = cargoToml.package.name;
+      apps = forAllSystems (system: {
+        default = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/${pname}";
+          meta = {
+            description = desc;
+          };
         };
-      };
+      });
     };
 }
