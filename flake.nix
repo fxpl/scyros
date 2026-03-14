@@ -8,7 +8,6 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
 
@@ -28,6 +27,18 @@
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
+            nativeBuildInputs = with pkgs; [
+              pkg-config
+            ];
+
+            buildInputs = with pkgs; [
+              openssl
+              curl
+            ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+              libiconv
+            ];
+            doCheck = false;
+
             meta = with pkgs.lib; {
               description = desc;
               mainProgram = pname;
@@ -35,15 +46,5 @@
             };
           };
         });
-
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/${pname}";
-          meta = {
-            description = desc;
-          };
-        };
-      });
     };
 }
