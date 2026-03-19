@@ -133,6 +133,13 @@ pub fn cli() -> Command {
             .default_value("ignore")
             .value_parser(["ignore", "skip-file", "skip-function", "abort"]),
         )
+        .arg(
+            Arg::new("ignore-comments")
+            .long("ignore-comments")
+            .help("Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.")
+            .default_value("false")
+            .action(ArgAction::SetTrue),
+        )
 }
 
 /// Entry point of the program
@@ -151,6 +158,7 @@ pub fn cli() -> Command {
 /// * `threads` - The number of threads to use.
 /// * `seed` - The seed used to shuffle the input file.
 /// * `force` - Whether to override the output file if it already exists.
+/// * `ignore_comments` - Whether to ignore comments when extracting functions.
 /// * `logger` - The logger to use to display information about the progress of the program.
 pub fn run(
     input_path: &str,
@@ -162,6 +170,7 @@ pub fn run(
     threads: usize,
     seed: u64,
     force: bool,
+    ignore_comments: bool,
     logger: &Logger,
 ) -> Result<()> {
     let supported_languages: HashSet<&'static str> = vec![
@@ -352,6 +361,7 @@ pub fn run(
                                 language,
                                 &keyword_files,
                                 fail_policy,
+                                ignore_comments,
                                 &word_counter,
                             ) {
                                 Ok(s) => {
@@ -422,6 +432,7 @@ pub fn run(
 /// * `language` - The language of the file.
 /// * `keywords_files` - The files containing the list of keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
+/// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
 /// * `word_counter` - The matcher to use to count the words in the functions.
 /// # Returns
 ///
@@ -441,6 +452,7 @@ fn analyze_file(
     language: &str,
     keywords_files: &KeywordFiles,
     fail_policy: &str,
+    ignore_comments: bool,
     word_counter: &Matcher,
 ) -> Result<(String, Option<String>)> {
     let grammar = language_to_grammar(language)
@@ -477,6 +489,7 @@ fn analyze_file(
                         &source_code,
                         keywords_files,
                         fail_policy,
+                        ignore_comments,
                         word_counter,
                         &mut parser,
                     )?;
@@ -560,6 +573,7 @@ fn file_error_row(
 /// * `source` - The source code of the source file.
 /// * `keyword_files` - The keyword files containing the keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
+/// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
 /// * `word_counter` - The matcher to use to count the words in the functions.
 /// * `parser` - The parser to use to parse the functions.
 ///
@@ -576,6 +590,7 @@ fn extract_functions(
     source: &[u8],
     keyword_files: &KeywordFiles,
     fail_policy: &str,
+    ignore_comments: bool,
     word_counter: &Matcher,
     parser: &mut Parser,
 ) -> Result<(String, usize, usize, Vec<usize>), Error> {
@@ -645,7 +660,14 @@ fn extract_functions(
                         target_folder, function_position.0, function_position.1
                     );
 
-                    std::fs::write(&function_path, function_source_code)?;
+                    std::fs::write(
+                        &function_path,
+                        if ignore_comments {
+                            function_code_with_strings
+                        } else {
+                            function_source_code
+                        },
+                    )?;
 
                     // Count the number of loops, conditionals and parameters if the function
                     let (loops, loop_nesting) = count_nodes_of_kind(&node, &grammar.loop_nodes);
@@ -1305,6 +1327,7 @@ mod tests {
         input_file_path: &str,
         keywords: &[&str],
         languages: Option<Vec<&str>>,
+        ignore_comments: bool,
         should_pass: bool,
     ) -> Result<()> {
         let input_df = open_csv(input_file_path, None, None)?;
@@ -1335,6 +1358,7 @@ mod tests {
                 8,
                 0,
                 false,
+                ignore_comments,
                 test_logger(),
             )?;
 
@@ -1408,6 +1432,7 @@ mod tests {
                 8,
                 0,
                 false,
+                ignore_comments,
                 test_logger()
             )
             .is_err());
@@ -1433,7 +1458,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/to_parse.csv");
 
-        test_parse(&input_file_path, &keywords, None, true)
+        test_parse(&input_file_path, &keywords, None, false, true)
     }
 
     #[test]
@@ -1446,7 +1471,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/parse_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, true)
+        test_parse(&input_file_path, &keywords, None, false, true)
     }
 
     #[test]
@@ -1455,7 +1480,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/invalid.csv");
 
-        test_parse(&input_file_path, &keywords, None, true)
+        test_parse(&input_file_path, &keywords, None, false, true)
     }
 
     #[test]
@@ -1464,7 +1489,13 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/empty.csv");
 
-        test_parse(&input_file_path, &keywords, Some(["rust"].to_vec()), false)
+        test_parse(
+            &input_file_path,
+            &keywords,
+            Some(["rust"].to_vec()),
+            false,
+            false,
+        )
     }
 
     #[test]
@@ -1473,6 +1504,25 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/empty.csv");
 
-        test_parse(&input_file_path, &keywords, Some(["c"].to_vec()), true)
+        test_parse(
+            &input_file_path,
+            &keywords,
+            Some(["c"].to_vec()),
+            false,
+            true,
+        )
+    }
+
+    #[test]
+    fn ignore_comments_go() -> Result<()> {
+        let keywords = vec![
+            "tests/data/keywords/fp_types.json",
+            "tests/data/keywords/fp_transcendental.json",
+            "tests/data/keywords/fp_others.json",
+        ];
+
+        let input_file_path = format!("{TEST_DATA}/fn_comments_go.csv");
+
+        test_parse(&input_file_path, &keywords, None, true, true)
     }
 }

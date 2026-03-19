@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::path::Path;
 use tracing::warn;
 
 use regex::bytes::Regex;
@@ -58,17 +59,15 @@ impl Matcher {
     ///
     /// # Type Parameters
     /// * `T` - A type that can be converted to a string.
-    /// * `I` - An iterable type that yields items of type `T`.
     ///
     ///  # Returns
     ///  A regex pattern looking for any of the keywords or an error if the pattern is invalid.
-    pub fn keywords_matcher<I, T>(
-        keywords: I,
+    pub fn keywords_matcher<T>(
+        keywords: impl IntoIterator<Item = T>,
         case_sensitive: bool,
         whole_words: bool,
     ) -> Result<Self>
     where
-        I: IntoIterator<Item = T>,
         T: ToString,
     {
         let joined_keywords = keywords
@@ -160,10 +159,12 @@ impl Matcher {
     /// # Arguments
     ///
     /// * `path` - The path to the file to search for the pattern.
-    pub fn count_matches_in_file(&self, path: &str) -> Result<usize> {
+    pub fn count_matches_in_file(&self, path: impl AsRef<Path>) -> Result<usize> {
+        let path_ref = path.as_ref();
         let mut count: usize = 0;
-        for l in BufReader::new(open_file(path, FileMode::Read)?).lines() {
-            let line = l.with_context(|| format!("Could not read lines from {path}"))?;
+        for l in BufReader::new(open_file(path_ref, FileMode::Read)?).lines() {
+            let line =
+                l.with_context(|| format!("Could not read lines from {}", path_ref.display()))?;
             count += self.count_matches_in_text(line.as_bytes());
         }
         Ok(count)
@@ -250,6 +251,36 @@ impl KeywordFiles {
     /// Returns the number of keyword files in the collection
     pub fn len(&self) -> usize {
         self.paths.len()
+    }
+
+    /// Returns the list of languages for which there are matchers in the collection
+    pub fn languages(&self) -> Vec<String> {
+        self.matchers.keys().cloned().collect()
+    }
+
+    /// Returns the list of file extensions for which there are matchers in the collection
+    pub fn extensions(&self) -> Vec<String> {
+        self.extensions_to_language.keys().cloned().collect()
+    }
+
+    pub fn debug_regexes(&self) -> HashMap<String, Vec<String>> {
+        self.matchers
+            .iter()
+            .map(|(lang, matchers)| {
+                (
+                    lang.clone(),
+                    matchers
+                        .iter()
+                        .map(|m| {
+                            m.regex
+                                .as_ref()
+                                .map(|r| r.as_str().to_string())
+                                .unwrap_or("None".to_string())
+                        })
+                        .collect(),
+                )
+            })
+            .collect()
     }
 
     /// Checks if there are no keyword files in the collection
@@ -406,9 +437,13 @@ impl KeywordFiles {
     ///
     /// # Returns
     /// A vector containing the number of matches for each matcher of the given language or an error if the file could not be processed.
-    pub fn count_matches_in_file(&self, lang: &str, path: &str) -> Result<Vec<usize>> {
+    pub fn count_matches_in_file(&self, lang: &str, path: impl AsRef<Path>) -> Result<Vec<usize>> {
+        let path_ref = path.as_ref();
         match self.matchers.get(lang) {
-            Some(m) => m.iter().map(|m| m.count_matches_in_file(path)).collect(),
+            Some(m) => m
+                .iter()
+                .map(|m| m.count_matches_in_file(path_ref))
+                .collect(),
             None => Ok(vec![0, self.paths.len()]),
         }
     }

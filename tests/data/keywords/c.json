@@ -1,0 +1,8 @@
+{
+    "languages": [
+        {
+            "name": "c",
+            "extensions": ["c"]
+        }
+    ]
+}

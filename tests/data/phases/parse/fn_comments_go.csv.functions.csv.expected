@@ -1,0 +1,3 @@
+id,path,name,position,language,loc,words,tests/data/keywords/fp_types.json,tests/data/keywords/fp_transcendental.json,tests/data/keywords/fp_others.json,loop_statements,loop_nestings,if_statements,if_nestings,functions_calls,function_calls_nestings,params,param_kw_match,parse_error
+0,tests/data/phases/parse/fn_comments.go.functions/2-1,safeDivision,2:1,go,12,33,2,0,1,0,0,2,1,5,2,2,2,none
+0,tests/data/phases/parse/fn_comments.go.functions/15-1,main,15:1,go,56,168,2,0,1,2,1,1,1,29,3,0,0,none

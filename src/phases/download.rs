@@ -30,17 +30,17 @@ use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io::{copy, BufRead, Write};
 use std::iter::FromIterator as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
-use tracing::info;
+use tracing::{debug, info};
+use walkdir::WalkDir;
 use zip_extensions::zip_extract::zip_extract;
 
 use crate::utils::csv::*;
 use crate::utils::fs::*;
 use crate::utils::regex::*;
-use crate::utils::shell_commands::{FileType, FindCommand, ShellCommand};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -128,6 +128,14 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
         )
         .arg(
+            Arg::new("order")
+                .long("order")
+                .help("Order in which the projects are processed.")
+                .value_parser(["random", "sequential"])
+                .default_value("random")
+        )
+
+        .arg(
             Arg::new("force")
                 .long("force")
                 .help("Overwrite the log files if they exist.")
@@ -168,12 +176,13 @@ pub fn cli() -> Command {
 /// * `seed` - The seed used to shuffle the projects.
 /// * `logger` - The logger to use to display information about the progress of the program.
 /// * `thread` - The number of threads to use when not downloading and computing statistic locally instead.
+/// * `order` - The order in which the projects are processed.
 pub fn run(
     input_file_path: &str,
     projects_output_path: Option<&str>,
     files_output_path: Option<&str>,
     target: &str,
-    tokens_file: &str,
+    tokens_file: Option<&str>,
     keywords_file_paths: &[&str],
     skip: bool,
     count: bool,
@@ -181,15 +190,13 @@ pub fn run(
     seed: u64,
     logger: &Logger,
     thread: usize,
+    order: &str,
 ) -> Result<()> {
-    // Number of columns in the log files
-    const FILE_LOG_COLS: usize = 6;
-
     // Check if the token file is valid and load the tokens.
     let tokens: Vec<String> = if skip {
         (0..thread).map(|n| n.to_string()).collect()
     } else {
-        logger.log_tokens(tokens_file)?
+        logger.log_tokens(tokens_file.unwrap())? // safe unwrap
     };
 
     let input_file: DataFrame = logger.run_task("Loading input file", || {
@@ -211,12 +218,14 @@ pub fn run(
 
     let mut shuffled_idx: Vec<usize> = (0..input_file.height()).collect::<Vec<usize>>();
 
-    // Load the ids from the input file in random order.
-    logger.run_task("Loading project IDs in random order", || {
-        let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
-        shuffled_idx.shuffle(&mut rng);
-        Ok(())
-    })?;
+    if order == "random" {
+        // Load the ids from the input file in random order.
+        logger.run_task("Loading project IDs in random order", || {
+            let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
+            shuffled_idx.shuffle(&mut rng);
+            Ok(())
+        })?;
+    }
 
     let shuffled_rows = shuffled_idx.into_iter().map(|idx| {
         let row = input_file.get_row(idx).unwrap().0;
@@ -280,7 +289,9 @@ pub fn run(
             })
         })?;
 
-    if !previous_results.is_empty() {
+    if previous_results.is_empty() {
+        info!("  No previously downloaded projects found, starting from scratch.",);
+    } else {
         info!(
             "  {} projects have already been downloaded",
             previous_results.len()
@@ -290,6 +301,26 @@ pub fn run(
     let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
         KeywordFiles::new().add_files(keywords_file_paths, true)
     })?;
+
+    info!(
+        "  {} languages found in {} keyword files.",
+        keyword_files.languages().len(),
+        keyword_files.len()
+    );
+    debug!("  Languages: {}", keyword_files.languages().join(", "));
+    debug!(
+        "  File extensions: {}",
+        keyword_files.extensions().join(", ")
+    );
+    debug!(
+        "  Regexes: {}",
+        keyword_files
+            .debug_regexes()
+            .into_iter()
+            .map(|(lang, regexes)| format!("{}:\n{}", lang, regexes.join("\n")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 
     let files_with_kw_headers: String = keyword_files
         .paths
@@ -326,8 +357,6 @@ pub fn run(
     let project_log_headers: Vec<&str> = if skip {
         [
             "path",
-            "name",
-            "latest_commit",
             "files",
             "loc",
             "words",
@@ -375,24 +404,30 @@ pub fn run(
         },
     )?;
 
-    let file_log_headers: [&str; FILE_LOG_COLS] = [
-        "id",
-        "name",
-        "language",
-        "loc",
-        "words",
-        &keyword_match_headers,
-    ];
+    let file_log_headers: Vec<&str> = if skip {
+        ["path", "language", "loc", "words", &keyword_match_headers].to_vec()
+    } else {
+        [
+            "id",
+            "name",
+            "language",
+            "loc",
+            "words",
+            &keyword_match_headers,
+        ]
+        .to_vec()
+    };
 
     file_log.write_header(&file_log_headers)?;
 
     // Iterate over the projects and collect metadata.
     let iter = Mutex::new(shuffled_rows);
 
-    info!("Starting download...\n");
+    info!("Starting download...");
 
     // Numbers of threads to be spawned.
     let n = tokens.len();
+    debug!("Spawning {n} threads for downloading and processing the repositories.");
 
     // Every thread comes with a sender channel.
     // The sender channel is used to send information about the downloaded repository back to the main thread.
@@ -666,7 +701,7 @@ fn download_repo(
         }
 
         // Create output file
-        let mut out: File = open_file(&format!("{project_path}.zip"), FileMode::Overwrite)?;
+        let mut out: File = open_file(format!("{project_path}.zip"), FileMode::Overwrite)?;
 
         // Stream response to file
         match copy(&mut response, &mut out) {
@@ -689,21 +724,33 @@ fn download_repo(
     }
 
     if delete {
-        ShellCommand::Find {
-            builder: FindCommand::new(project_path)
-                .file_type(FileType::File)
-                .not()
-                .file_extensions(keywords_files.extensions_to_language.keys())
-                .delete(),
+        for entry in WalkDir::new(project_path)
+            .contents_first(true)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| {
+                let ext = e.path().extension().and_then(|s| s.to_str());
+                !matches!(ext, Some(ext) if keywords_files.extensions_to_language.contains_key(ext))
+            })
+        {
+            delete_file(entry.path(), false)?;
         }
-        .run();
+        // Delete symbolic links
+        for entry in WalkDir::new(project_path)
+            .contents_first(true)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_symlink())
+        {
+            let path = entry.path();
 
-        ShellCommand::Find {
-            builder: FindCommand::new(project_path)
-                .file_type(FileType::SymbolicLink)
-                .delete(),
+            if path.is_dir() {
+                delete_dir(path, false)?;
+            } else {
+                delete_file(path, false)?;
+            }
         }
-        .run();
     }
 
     let mut dir_loc_before_filter: usize = 0;
@@ -722,28 +769,32 @@ fn download_repo(
     // Remove all files that do not contain the keywords.
     // Repeat the process for every extension.
     for (ext, lang) in keywords_files.extensions_to_language.iter() {
-        let file_list = ShellCommand::Find {
-            builder: FindCommand::new(project_path)
-                .file_type(FileType::File)
-                .file_extension(ext),
-        }
-        .run();
+        let file_list: Vec<PathBuf> = WalkDir::new(project_path)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| {
+                let path = e.path();
+                path.extension().is_some() && path.to_str().is_some_and(|s| s.ends_with(ext))
+            })
+            .map(|e| e.into_path())
+            .collect();
 
-        for path in file_list.lines() {
-            if let Ok(file) = &load_file(path, 1024 * 1024 * 1024) {
+        for path in file_list {
+            if let Ok(file) = &load_file(&path, 1024 * 1024 * 1024) {
                 let words = match file {
                     Ok(content) => word_counter.count_matches_in_text(content),
-                    Err(_) => word_counter.count_matches_in_file(path)?,
+                    Err(_) => word_counter.count_matches_in_file(&path)?,
                 };
 
                 let loc = match file {
                     Ok(content) => content.lines().count(),
-                    Err(_) => file_lines_count(path)?,
+                    Err(_) => file_lines_count(&path)?,
                 };
 
                 let matches: Vec<usize> = match file {
                     Ok(content) => keywords_files.count_matches_in_text(lang, content),
-                    Err(_) => keywords_files.count_matches_in_file(lang, path)?,
+                    Err(_) => keywords_files.count_matches_in_file(lang, &path)?,
                 };
 
                 dir_files_before_filter += 1;
@@ -769,12 +820,18 @@ fn download_repo(
 
                     // Remove commas from the filename to avoid issues with the CSV format.
 
+                    let path_str = &path
+                        .to_str()
+                        .with_context(|| {
+                            format!("Could not convert path to string: {}", &path.display())
+                        })?
+                        .replace(",", "-was_comma-")
+                        .replace("\"", "-was_quote-");
                     writeln!(
                         &mut files_output,
                         "{}{},{},{},{},{}",
                         id_opt.map_or_else(String::new, |i| format!("{},", i)),
-                        path.replace(",", "-was_comma-")
-                            .replace("\"", "-was_quote-"),
+                        path_str,
                         lang,
                         loc,
                         words,
@@ -785,28 +842,32 @@ fn download_repo(
                             .join(",")
                     )?;
                 } else if delete {
-                    delete_file(path, false)?
+                    delete_file(&path, false)?
                 }
             }
         }
     }
 
     if delete {
-        ShellCommand::Find {
-            builder: FindCommand::new(project_path)
-                .file_type(FileType::Directory)
-                .empty()
-                .delete(),
-        }
-        .run();
+        delete_empty_dirs(project_path)?
     }
 
     let project_output = format!(
-        "{}{},{},{},{},{},{},{},{},{},{},{},{},{}",
-        id_opt.map_or_else(String::new, |i| format!("{},", i)),
+        "{}{},{}{}{},{},{},{},{},{},{},{},{},{}",
+        id_opt.map_or_else(String::new, |i| format!("{i},")),
         project_path,
-        full_name,
-        last_commit.unwrap_or_default(),
+        if skip {
+            "".to_string()
+        } else {
+            format!("{full_name},")
+        },
+        if skip {
+            "".to_string()
+        } else {
+            let last_commit = last_commit
+                .with_context(|| format!("Last commit not found for project {full_name}"))?;
+            format!("{last_commit},")
+        },
         dir_files_before_filter,
         dir_loc_before_filter,
         dir_words_before_filter,
@@ -927,7 +988,7 @@ mod tests {
             None,
             None,
             &target_def,
-            &tokens_file,
+            Some(&tokens_file),
             keywords_files,
             skip,
             count,
@@ -935,6 +996,7 @@ mod tests {
             0,
             test_logger(),
             2,
+            "random",
         )?;
 
         assert_eq!(
@@ -975,6 +1037,17 @@ mod tests {
                 "tests/data/keywords/fp_others.json",
                 "tests/data/keywords/std_math.json",
             ],
+            true,
+            true,
+        )
+    }
+
+    #[test]
+    fn download_local() -> Result<()> {
+        download_test(
+            "to_download_local_c.csv",
+            None,
+            &["tests/data/keywords/c.json"],
             true,
             true,
         )

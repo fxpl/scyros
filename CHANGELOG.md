@@ -7,13 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A `--version` flag that prints the version information of the program.
+- The `--debug` flag prints library debug information in the logs. Additional debug information has been added to the `download` subcommand, including the number of threads spawned and the regexes used for keyword matching.
+- A `--ignore-comments` flag for the `parse` subcommand that sets the parser to ignore comments when extracting functions in individual source files.
+- A `--order` flag for every subcommand that allow users to choose whether to process the rows of the input CSV file in sequential order or in random order. By default, rows are processed in random order to minimize the impact of any ordering bias in the input data. 
+
 ### Fixed
 
 - In the `download` subcommand, the github tokens are now optional when the `--skip` flag is used.
 
 ### Changed
 
-- The `download` subcommand does not produce a column `id` in the output logs when the `--skip` flag is used. In addition, 
+- The `download` subcommand does not produce a column `id`, `latest_commit` and `name` in the output logs when the `--skip` flag is used.
 
 ## [0.2.4] - 2026-03-14
 

@@ -48,27 +48,25 @@ pub enum FileMode {
 /// # Returns
 ///
 /// A file in the specified mode or an error if the file could not be opened or created.
-pub fn open_file(path: &str, mode: FileMode) -> Result<File> {
-    let file_path = Path::new(path);
-
-    if let Some(parent) = file_path.parent() {
+pub fn open_file(path: impl AsRef<Path>, mode: FileMode) -> Result<File> {
+    if let Some(parent) = path.as_ref().parent() {
         if let Some(parent_path) = parent.to_str() {
             create_dir(parent_path)?;
         }
     }
     match mode {
-        FileMode::Read => std::fs::File::open(path),
+        FileMode::Read => std::fs::File::open(&path),
         FileMode::Overwrite => std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(path),
+            .open(&path),
         FileMode::Append => std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(path),
+            .open(&path),
     }
-    .with_context(|| format!("Could not open {path}"))
+    .with_context(|| format!("Could not open {}", &path.as_ref().display()))
 }
 
 pub fn check_path(path: &str) -> Result<PathBuf> {
@@ -93,16 +91,23 @@ pub fn check_path(path: &str) -> Result<PathBuf> {
 /// Two kinds of errors are possible:
 /// * If the file size exceeds the memory limit, returns the size of the file.
 /// * If the file could not be read, returns an error.
-pub fn load_file(path: &str, memory_limit: u64) -> Result<core::result::Result<Vec<u8>, u64>> {
-    let metadata = std::fs::metadata(path)
-        .with_context(|| format!("Could not fetch metadata for file {path}"))?;
+pub fn load_file(
+    path: impl AsRef<Path>,
+    memory_limit: u64,
+) -> Result<core::result::Result<Vec<u8>, u64>> {
+    let metadata = std::fs::metadata(&path).with_context(|| {
+        format!(
+            "Could not fetch metadata for file {}",
+            &path.as_ref().display()
+        )
+    })?;
     let file_size = metadata.len();
     if file_size > memory_limit {
         Ok(Err(file_size))
     } else {
-        std::fs::read(path)
+        std::fs::read(&path)
             .map(Ok)
-            .with_context(|| format!("Could not read file {path}"))
+            .with_context(|| format!("Could not read file {}", &path.as_ref().display()))
     }
 }
 
@@ -115,7 +120,7 @@ pub fn load_file(path: &str, memory_limit: u64) -> Result<core::result::Result<V
 /// # Returns
 ///
 /// A vector containing all the lines of the file or an error if the file could not be read.
-pub fn file_lines(path: &str) -> Result<Lines<BufReader<File>>, Error> {
+pub fn file_lines(path: impl AsRef<Path>) -> Result<Lines<BufReader<File>>, Error> {
     Ok(std::io::BufReader::new(open_file(path, FileMode::Read)?).lines())
 }
 
@@ -124,7 +129,7 @@ pub fn file_lines(path: &str) -> Result<Lines<BufReader<File>>, Error> {
 /// # Arguments
 ///
 /// * `path` - The path to the file.
-pub fn file_lines_count(path: &str) -> Result<usize, Error> {
+pub fn file_lines_count(path: impl AsRef<Path>) -> Result<usize, Error> {
     Ok(file_lines(path)?.count())
 }
 
@@ -138,10 +143,7 @@ pub fn file_lines_count(path: &str) -> Result<usize, Error> {
 /// # Returns
 ///
 /// An error if the directory could not be created.
-pub fn create_dir<P>(path: P) -> Result<(), Error>
-where
-    P: AsRef<Path>,
-{
+pub fn create_dir(path: impl AsRef<Path>) -> Result<(), Error> {
     let path_buf = path.as_ref().to_path_buf();
     match std::fs::create_dir_all(&path_buf) {
         Ok(_) => Ok(()),
@@ -169,19 +171,12 @@ where
 /// # Returns
 ///
 /// An error if the directory could not be deleted.
-pub fn delete_dir<P>(path: P, silent: bool) -> Result<()>
-where
-    P: AsRef<Path>,
-{
+pub fn delete_dir(path: impl AsRef<Path>, silent: bool) -> Result<()> {
     let path_buf = path.as_ref().to_path_buf();
     match std::fs::remove_dir_all(&path_buf) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && silent => Ok(()),
-        Err(e) => bail!(format!(
-            "Could not delete directory {}: {}",
-            path_buf.display(),
-            e
-        )),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -196,10 +191,7 @@ where
 ///
 /// An error if the file could not be deleted.
 ///
-pub fn delete_file<P>(path: P, silent: bool) -> Result<()>
-where
-    P: AsRef<Path>,
-{
+pub fn delete_file(path: impl AsRef<Path>, silent: bool) -> Result<()> {
     let path_buf = path.as_ref().to_path_buf();
     match std::fs::remove_file(&path_buf) {
         Ok(_) => Ok(()),
@@ -220,17 +212,11 @@ where
 ///
 /// # Returns
 /// An error if the file could not be written.
-pub fn write_file<P, C>(path: P, content: C) -> Result<()>
-where
-    P: AsRef<Path>,
-    C: AsRef<[u8]>,
-{
-    let path = path.as_ref();
-
-    if let Some(parent) = path.parent() {
+pub fn write_file(path: impl AsRef<Path>, content: impl AsRef<[u8]>) -> Result<()> {
+    if let Some(parent) = path.as_ref().parent() {
         create_dir(parent)?;
     }
-    fs::write(path, content)?;
+    fs::write(&path, content)?;
 
     Ok(())
 }
@@ -276,6 +262,24 @@ pub fn write_csv(path: &str, df: &mut DataFrame) -> Result<()> {
         .with_separator(b',')
         .finish(df)
         .with_context(|| format!("Could not write to {path}"))
+}
+
+pub fn is_empty_dir(path: impl AsRef<Path>) -> Result<bool> {
+    Ok(fs::read_dir(path)?.next().is_none())
+}
+
+pub fn delete_empty_dirs(path: impl AsRef<Path>) -> Result<()> {
+    for entry in WalkDir::new(path)
+        .contents_first(true)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_dir())
+    {
+        if is_empty_dir(entry.path())? {
+            fs::remove_dir(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// Returns a list of files with a given extension in a directory and its subdirectories,

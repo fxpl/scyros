@@ -663,7 +663,7 @@ pub fn run(
         Some(&projects_output),
         None,
         target,
-        tokens_file,
+        Some(tokens_file),
         &["keywords/c_files.json"],
         false,
         false,
@@ -671,6 +671,7 @@ pub fn run(
         seed,
         logger,
         thread,
+        "sequential",
     )?;
 
     let projects_df: DataFrame = logger.run_task("Loading downloaded projects", || {
@@ -836,9 +837,8 @@ pub fn run(
     Ok(())
 }
 
-pub fn run_with_timeout<F, T>(dur: Duration, f: F) -> Result<T>
+pub fn run_with_timeout<T>(dur: Duration, f: impl FnOnce() -> T + Send + 'static) -> Result<T>
 where
-    F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
     let (tx, rx) = mpsc::channel();

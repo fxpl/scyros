@@ -43,6 +43,13 @@ fn cli() -> Command {
                 .help("Print stack trace on error.")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("version")
+                .long("version")
+                .short('v')
+                .help("Print version information.")
+                .action(ArgAction::SetTrue),
+        )
         .disable_version_flag(true)
 }
 
@@ -51,8 +58,16 @@ fn main() {
 
     // Calls to unwrap are safe because the arguments are required.
     let res: Result<()> =
-        Logger::new().and_then(|logger|
+        Logger::new(cli_args.get_flag("debug")).and_then(|logger|
         match cli_args.subcommand_name() {
+            None => {
+                if cli_args.get_flag("version") {
+                    info!("scyros {}", env!("CARGO_PKG_VERSION"));
+                    Ok(())
+                } else {
+                    Err(anyhow!("You need to specify a subcommand. Run the program with the --help flag to see the list of subcommands"))
+                }
+            }
             Some (subcommand) => {
                 cli_args.subcommand_matches(subcommand).with_context(||
                 format!("The subcommand {subcommand} is not available. Run the program with the --help flag to see the list of subcommands")).and_then
@@ -141,7 +156,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("projects").map(|x| x.as_str()),
                                     cli_subargs.get_one::<String>("files").map(|x| x.as_str()),
                                     cli_subargs.get_one::<String>("dest").unwrap(),
-                                    cli_subargs.get_one::<String>("tokens").unwrap(),
+                                    cli_subargs.get_one::<String>("tokens").map(|x| x.as_str()),
                                     &cli_subargs
                                         .get_many::<String>("keywords")
                                         .unwrap()
@@ -153,6 +168,7 @@ fn main() {
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     &logger,
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
+                                    cli_subargs.get_one::<String>("order").unwrap(),
                                 )
                             } else if subcommand == duplicate_files::cli().get_name() {
                                 duplicate_files::run(
@@ -184,6 +200,7 @@ fn main() {
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     cli_subargs.get_flag("force"),
+                                    cli_subargs.get_flag("ignore-comments"),
                                     &logger,
                                 )
                             }
@@ -220,7 +237,6 @@ fn main() {
                     }
                 )
         }
-        None => Err(anyhow!("You need to specify a subcommand. Run the program with the --help flag to see the list of subcommands"))
     });
 
     match res {
