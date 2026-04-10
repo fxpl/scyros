@@ -14,7 +14,7 @@ authors:
 repository-code: "https://github.com/fxpl/scyros"
 license: Apache-2.0
 preferred-citation:
-  type: article
+  type: conference-paper
   title: "Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages"
   authors:
     - family-names: Gilot
@@ -24,7 +24,13 @@ preferred-citation:
     - family-names: Darulova
       given-names: Eva
   year: 2026
-  archive: arXiv
-  archive-prefix: arXiv
-  arxiv: "2509.04936"
-  url: "https://arxiv.org/abs/2509.04936"
+  collection-title: "Proceedings of the ACM on Programming Languages"
+  abbreviation: "OOPSLA"
+  volume: 10
+  issue: "OOPSLA1"
+  article-number: 95
+  pages: 28
+  month: 4
+  publisher: "ACM"
+  doi: "10.1145/3798203"
+  url: "https://doi.org/10.1145/3798203"
