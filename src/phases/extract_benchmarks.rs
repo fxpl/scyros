@@ -668,6 +668,7 @@ pub fn run(
         false,
         false,
         false,
+        None,
         seed,
         logger,
         thread,

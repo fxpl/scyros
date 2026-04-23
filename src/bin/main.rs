@@ -165,6 +165,7 @@ fn main() {
                                     cli_subargs.get_flag("skip"),
                                     cli_subargs.get_flag("count"),
                                     cli_subargs.get_flag("force"),
+                                    cli_subargs.get_one::<usize>("sub").copied(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     &logger,
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
