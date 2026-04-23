@@ -1,6 +1,6 @@
 [package]
 name = "scyros"
-version = "0.2.4"
+version = "0.3.0"
 description = "A framework to design sound, reproducible and scalable mining repositories studies on GitHub."
 authors = ["Andrea Gilot <andrea.gilot@it.uu.se>"]
 edition = "2021"
