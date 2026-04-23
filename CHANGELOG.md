@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `--ignore-comments` flag for the `parse` subcommand that sets the parser to ignore comments when extracting functions in individual source files.
 - A `--order` flag for every subcommand that allow users to choose whether to process the rows of the input CSV file in sequential order or in random order. By default, rows are processed in random order to minimize the impact of any ordering bias in the input data. 
 - A `--sub` flag for the `download` subcommand that allows users to specify the number of repositories to download. By default, all repositories in the input CSV file are downloaded.
+- The `parse` subcommand now outputs a column `return_kw_match` that indicates whether the return type of a function matches any of the keywords present in the keywords JSON files.
+- The `parse` subcommand now accepts Rust source files.
 
 ### Fixed
 

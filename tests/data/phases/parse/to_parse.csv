@@ -5,3 +5,4 @@ id,name,language
 2,tests/data/phases/parse/several_functions.ts,typescript
 2,tests/data/phases/parse/several_functions.cs,c#
 3,tests/data/phases/parse/SeveralFunctions.scala,scala
+4,tests/data/phases/parse/several_functions.rs,rust

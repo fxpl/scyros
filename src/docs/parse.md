@@ -1,6 +1,6 @@
 Parses source files and extracts functions whose bodies contain at least one user-specified keyword. The input file must be a valid CSV file containing the columns 'id', 'name', and 'language', where 'id' identifies the repository, 'name' is the path to the source file, and 'language' is the programming language of the file. Other columns are ignored.
 
-Supported languages are C, C++, C#, Fortran, Go, Java, Python, Scala, and Typescript. By default, all supported languages are parsed, but a subset can be selected with --lang.
+Supported languages are C, C++, C#, Fortran, Go, Java, Python, Scala, Typescript and Rust. By default, all supported languages are parsed, but a subset can be selected with --lang.
 
 Files are processed in random order using a reproducible shuffle controlled by a seed. Each file is parsed with Tree-sitter using the grammar for its language. Functions are retained only if their body contains at least one keyword from the provided keyword JSON files. Keyword matching is performed after removing comments and string literals. The format of the keyword JSON files is as follows:
 
@@ -39,6 +39,7 @@ Output functions CSV format:
   * function_calls_nestings: maximum nesting depth of function or method calls
   * params: number of parameters
   * param_kw_match: number of parameters whose type matches a keyword
+  * return_kw_match: whether the return type matches a keyword
   * parse_error: position of the first parse error relative to the function, or none
 
 Output function logs CSV format:

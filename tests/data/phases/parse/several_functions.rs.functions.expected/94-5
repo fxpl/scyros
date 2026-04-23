@@ -1,0 +1,11 @@
+pub fn special_values_demo() -> Vec<f64> {
+        vec![
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MIN,
+            f64::MAX,
+            0.0,
+            -0.0,
+        ]
+    }

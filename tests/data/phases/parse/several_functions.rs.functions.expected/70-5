@@ -1,0 +1,15 @@
+pub fn sum_until_epsilon(start: f64, epsilon: f64) -> f64 {
+        let mut sum = 0.0_f64;
+        let mut term = start;
+        // This loop continues to add terms until the absolute value of the term
+        // is less than epsilon. The term is halved each iteration,
+        // simulating a converging series.
+        loop {
+            sum += term;
+            term /= 2.0;
+            if term.abs() <= epsilon {
+                break;
+            }
+        }
+        sum
+    }

@@ -1,0 +1,8 @@
+fn process(&self, values: &[f64]) -> f64 {
+        let mut sum = 0.0_f64;
+        // Handle NaN values by treating them as zero
+        for &v in values {
+            sum += if v.is_nan() { 0.0 } else { v };
+        }
+        sum / if values.is_empty() { 1.0 } else { values.len() as f64 }
+    }
