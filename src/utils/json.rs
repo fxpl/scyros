@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::change_char::*;
 use anyhow::{ensure, Context, Error, Result};
 use json::JsonValue;
 use std::collections::{HashMap, HashSet};
@@ -38,7 +39,8 @@ pub fn open_json_from_path(path: &str) -> Result<JsonValue> {
 pub fn json_to_set(json: &JsonValue) -> HashSet<String> {
     let mut set = HashSet::<String>::new();
     json.members().for_each(|x| {
-        set.insert(x.as_str().unwrap().to_owned());
+        let member_string: String = x.as_str().unwrap().to_owned();
+        set.insert(change_char(member_string, '§', '\\'));
     });
     set
 }
@@ -158,6 +160,17 @@ mod tests {
         ensure!(set.contains("a"));
         ensure!(set.contains("b"));
         ensure!(set.contains("c"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_set_with_convert() -> Result<()> {
+        let json = json::parse(r#"["§", "§(", "§t"]"#)?;
+        let set = json_to_set(&json);
+        assert_eq!(set.len(), 3);
+        ensure!(set.contains("\\"));
+        ensure!(set.contains("\\("));
+        ensure!(set.contains("\\t"));
         Ok(())
     }
 }

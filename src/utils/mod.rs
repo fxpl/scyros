@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod bow;
+pub mod change_char;
 pub mod csv;
 pub mod dataframes;
 pub mod fs;
