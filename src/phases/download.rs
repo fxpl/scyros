@@ -116,6 +116,13 @@ pub fn cli() -> Command {
                 .required(true)
         )
         .arg(
+            Arg::new("regex")
+                .long("regex")
+                .help("Whether to interpret the keywords as regular expressions. If not specified, the keywords are interpreted as whole words to match.")
+                .default_value("false")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("skip")
                 .long("skip")
                 .help("Skip the downloading of the repositories.")
@@ -176,6 +183,7 @@ pub fn cli() -> Command {
 /// * `target` - Path to the directory where projects will be downloaded.
 /// * `tokens_file` - Path to the file containing the GitHub tokens to use.
 /// * `keywords_file_paths` - Path to the files containing the list of extensions and keywords to use.
+/// * `regex_syntax` - Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
 /// * `skip` - If true, skip the downloading of the repositories.
 /// * `count` - If true, compute statistics on the downloaded projects without deleting any file.
 /// * `overwrite` - If true, overwrite the log files if they exist.
@@ -191,6 +199,7 @@ pub fn run(
     target: &str,
     tokens_file: Option<&str>,
     keywords_file_paths: &[&str],
+    regex_syntax: bool,
     skip: bool,
     count: bool,
     overwrite: bool,
@@ -315,7 +324,7 @@ pub fn run(
     }
 
     let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
-        KeywordFiles::new().add_files(keywords_file_paths, true)
+        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
     })?;
 
     info!(
@@ -1006,6 +1015,7 @@ mod tests {
             &target_def,
             Some(&tokens_file),
             keywords_files,
+            false,
             skip,
             count,
             false,

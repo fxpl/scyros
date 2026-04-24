@@ -109,7 +109,7 @@ pub fn run(
     // Check if the output file already exists
     log_output_file(output_path, no_output, force)?;
 
-    let languages: HashSet<String> = KeywordFiles::new()
+    let languages: HashSet<String> = KeywordFiles::new(false)
         .add_file(languages_path, false)?
         .matchers
         .keys()

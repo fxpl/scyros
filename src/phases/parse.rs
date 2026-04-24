@@ -89,6 +89,13 @@ pub fn cli() -> Command {
                 .required(true)
         )
         .arg(
+            Arg::new("regex")
+                .long("regex")
+                .help("Whether to interpret the keywords as regular expressions. If not specified, the keywords are interpreted as whole words to match.")
+                .default_value("false")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("lang")
                 .long("lang")
                 .num_args(1..)
@@ -150,6 +157,7 @@ pub fn cli() -> Command {
 /// * `output_path` - Path to the output csv file storing the functions statistics.
 /// * `logs_path` - Path to the output csv file storing the files statistics.
 /// * `keywords_file_paths` - Paths to the files containing the list of extensions and keywords to use.
+/// * `regex_syntax` - Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
 /// * `opt_languages` - Optional list of languages to parse. If not specified, all supported languages are parsed.
 /// * `fail_policy` - The policy to apply when a parse error is encountered. It can be one of the following:
 ///   * `ignore`: continue parsing and write the statistics of the file or function with parse error as if there was no error.
@@ -165,6 +173,7 @@ pub fn run(
     output_path: Option<&str>,
     logs_path: Option<&str>,
     keywords_file_paths: &[&str],
+    regex_syntax: bool,
     opt_languages: Option<Vec<&str>>,
     fail_policy: &str,
     threads: usize,
@@ -287,7 +296,7 @@ pub fn run(
     const LOGS_COLS: usize = 7;
 
     let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
-        KeywordFiles::new().add_files(keywords_file_paths, true)
+        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
     })?;
 
     let keyword_match_headers: String = keyword_files.paths.join(",");
@@ -1423,6 +1432,7 @@ mod tests {
                 None,
                 None,
                 keywords,
+                false,
                 languages,
                 "ignore",
                 8,
@@ -1497,6 +1507,7 @@ mod tests {
                 None,
                 None,
                 keywords,
+                false,
                 languages,
                 "ignore",
                 8,

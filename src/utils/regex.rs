@@ -53,19 +53,21 @@ impl Matcher {
     /// Takes a sequence of keywords and returns a regex pattern that looks for any of them.
     ///
     /// # Arguments
-    /// * `keywords` - A sequence of keywords to look for.
+    /// * `keywords` - A sequence of keywords or regex patterns to look for.
     /// * `case_sensitive` - Whether the search should be case sensitive.
     /// * `whole_words` - Whether substrings should be matched or only whole words.
+    /// * `regex_syntax` - Whether the keywords are regex patterns or plain words.
     ///
     /// # Type Parameters
     /// * `T` - A type that can be converted to a string.
     ///
     ///  # Returns
-    ///  A regex pattern looking for any of the keywords or an error if the pattern is invalid.
+    ///  A regex pattern looking for any of the keywords or subpatterns, or an error if the pattern is invalid.
     pub fn keywords_matcher<T>(
         keywords: impl IntoIterator<Item = T>,
         case_sensitive: bool,
         whole_words: bool,
+        regex_syntax: bool,
     ) -> Result<Self>
     where
         T: ToString,
@@ -73,6 +75,7 @@ impl Matcher {
         let joined_keywords = keywords
             .into_iter()
             .filter_map(|s| Some(s.to_string()).filter(|s| !s.is_empty()))
+            .map(|s| if !regex_syntax { regex::escape(&s) } else { s })
             .collect::<Vec<String>>()
             .join("|");
         if !joined_keywords.is_empty() {
@@ -113,6 +116,7 @@ impl Matcher {
         global_keywords: &HashSet<String>,
         case_sensitive: bool,
         whole_words: bool,
+        regex_syntax: bool,
     ) -> Result<HashMap<T, Matcher>>
     where
         T: Eq + Hash + Clone,
@@ -123,6 +127,7 @@ impl Matcher {
                 kw.iter().chain(global_keywords.iter()).cloned(),
                 case_sensitive,
                 whole_words,
+                regex_syntax,
             )?;
             res.insert(ext.clone(), joined_keywords);
         }
@@ -229,22 +234,18 @@ pub struct KeywordFiles {
     pub matchers: HashMap<String, Vec<Matcher>>,
     /// A mapping from file extensions to programming languages
     pub extensions_to_language: HashMap<String, String>,
-}
-
-impl Default for KeywordFiles {
-    /// Creates a default, empty KeywordFiles instance.
-    fn default() -> Self {
-        KeywordFiles::new()
-    }
+    /// Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
+    pub regex_syntax: bool,
 }
 
 impl KeywordFiles {
     /// Creates a new, empty KeywordFiles instance.
-    pub fn new() -> KeywordFiles {
+    pub fn new(regex_syntax: bool) -> KeywordFiles {
         KeywordFiles {
             paths: Vec::new(),
             matchers: HashMap::new(),
             extensions_to_language: HashMap::new(),
+            regex_syntax,
         }
     }
 
@@ -398,7 +399,8 @@ impl KeywordFiles {
             .map(|json| json_to_set(json))
             .unwrap_or_default();
 
-        let file_matchers = Matcher::keywords_matchers(&local_kw, &global_kw, false, true)?;
+        let file_matchers =
+            Matcher::keywords_matchers(&local_kw, &global_kw, false, true, self.regex_syntax)?;
         let mut updated_matchers = self.matchers;
 
         for (lang, entry) in updated_matchers.iter_mut() {
@@ -426,6 +428,7 @@ impl KeywordFiles {
             paths: updated_paths,
             matchers: updated_matchers,
             extensions_to_language,
+            regex_syntax: self.regex_syntax,
         })
     }
 
@@ -487,14 +490,22 @@ mod tests {
     fn count_matches_test() -> Result<()> {
         let text = b"Parole, parole, parole, paroleParole parole_parole parole_Parole";
 
-        let matcher_lower_unsensitive_whole = Matcher::keywords_matcher(["parole"], false, true)?;
-        let matcher_lower_unsensitive_part = Matcher::keywords_matcher(["parole"], false, false)?;
-        let matcher_lower_sensitive_whole = Matcher::keywords_matcher(["parole"], true, true)?;
-        let matcher_lower_sensitive_part = Matcher::keywords_matcher(["parole"], true, false)?;
-        let matcher_upper_unsensitive_whole = Matcher::keywords_matcher(["Parole"], false, true)?;
-        let matcher_upper_unsensitive_part = Matcher::keywords_matcher(["Parole"], false, false)?;
-        let matcher_upper_sensitive_whole = Matcher::keywords_matcher(["Parole"], true, true)?;
-        let matcher_upper_sensitive_part = Matcher::keywords_matcher(["Parole"], true, false)?;
+        let matcher_lower_unsensitive_whole =
+            Matcher::keywords_matcher(["parole"], false, true, false)?;
+        let matcher_lower_unsensitive_part =
+            Matcher::keywords_matcher(["parole"], false, false, false)?;
+        let matcher_lower_sensitive_whole =
+            Matcher::keywords_matcher(["parole"], true, true, false)?;
+        let matcher_lower_sensitive_part =
+            Matcher::keywords_matcher(["parole"], true, false, false)?;
+        let matcher_upper_unsensitive_whole =
+            Matcher::keywords_matcher(["Parole"], false, true, false)?;
+        let matcher_upper_unsensitive_part =
+            Matcher::keywords_matcher(["Parole"], false, false, false)?;
+        let matcher_upper_sensitive_whole =
+            Matcher::keywords_matcher(["Parole"], true, true, false)?;
+        let matcher_upper_sensitive_part =
+            Matcher::keywords_matcher(["Parole"], true, false, false)?;
 
         assert_eq!(
             matcher_lower_unsensitive_whole.count_matches_in_text(text),
@@ -576,10 +587,11 @@ mod tests {
             .iter()
             .cloned()
             .collect();
-        let patterns = Matcher::keywords_matchers(&local_keywords, &global_keywords, false, true)?;
+        let patterns =
+            Matcher::keywords_matchers(&local_keywords, &global_keywords, false, true, false)?;
         assert_eq!(patterns.len(), 2);
 
-        let text = b"word1 word2 word3 word4 word5 word6";
+        let text = b"word1 word2 word3 word4 word5 word6 word1w word4w word6w";
 
         assert_eq!(
             patterns
@@ -592,6 +604,55 @@ mod tests {
             patterns
                 .get(&6)
                 .with_context(|| "Pattern for key 6 not found")?
+                .count_matches_in_text(text),
+            4
+        );
+
+        let patterns_not_whole =
+            Matcher::keywords_matchers(&local_keywords, &global_keywords, false, false, false)?;
+
+        assert_eq!(
+            patterns_not_whole
+                .get(&3)
+                .with_context(|| "Pattern for key 3 not found")?
+                .count_matches_in_text(text),
+            6
+        );
+        assert_eq!(
+            patterns_not_whole
+                .get(&6)
+                .with_context(|| "Pattern for key 6 not found")?
+                .count_matches_in_text(text),
+            6
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keywords_regex_test() -> Result<()> {
+        let local_keywords: HashMap<usize, HashSet<String>> = [(
+            3,
+            [
+                r"^use\s+[\w:]+(?:::\{[^}]+\})?;".to_string(),
+                "word2".to_string(),
+            ]
+            .iter()
+            .cloned()
+            .collect(),
+        )]
+        .iter()
+        .cloned()
+        .collect();
+        let global_keywords: HashSet<String> = [].iter().cloned().collect();
+        let patterns_not_whole =
+            Matcher::keywords_matchers(&local_keywords, &global_keywords, false, false, true)?;
+
+        let text = b"use std::io;\nuse std::collections::{HashMap, HashSet};\nword2 word2word2";
+
+        assert_eq!(
+            patterns_not_whole
+                .get(&3)
+                .with_context(|| "Pattern for key 3 not found")?
                 .count_matches_in_text(text),
             4
         );
