@@ -162,6 +162,7 @@ fn main() {
                                         .unwrap()
                                         .map(|s| s.as_str())
                                         .collect::<Vec<&str>>(),
+                                        cli_subargs.get_flag("regex"),
                                     cli_subargs.get_flag("skip"),
                                     cli_subargs.get_flag("count"),
                                     cli_subargs.get_flag("force"),
@@ -192,6 +193,7 @@ fn main() {
                                         .unwrap()
                                         .map(|s| s.as_str())
                                         .collect::<Vec<&str>>(),
+                                    cli_subargs.get_flag("regex"),
                                         cli_subargs
                                         .get_many::<String>("lang")
                                         .map(|v|

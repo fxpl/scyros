@@ -2,7 +2,8 @@ Parses source files and extracts functions whose bodies contain at least one use
 
 Supported languages are C, C++, C#, Fortran, Go, Java, Python, Scala, Typescript and Rust. By default, all supported languages are parsed, but a subset can be selected with --lang.
 
-Files are processed in random order using a reproducible shuffle controlled by a seed. Each file is parsed with Tree-sitter using the grammar for its language. Functions are retained only if their body contains at least one keyword from the provided keyword JSON files. Keyword matching is performed after removing comments and string literals. The format of the keyword JSON files is as follows:
+Files are processed in random order using a reproducible shuffle controlled by a seed. Each file is parsed with Tree-sitter using the grammar for its language. Functions are retained only if their body contains at least one keyword from the provided keyword JSON files. Keyword matching is performed after removing comments and string literals. Keywords can be interpreted as regular expressions or whole words according to the --regex flag. 
+The format of the keyword JSON files is as follows:
 
 {
   "languages": [

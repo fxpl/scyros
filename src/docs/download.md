@@ -2,7 +2,8 @@ Downloads GitHub repositories from a CSV file and filters their contents using u
 
 In normal mode, the input file must contain the columns 'id', 'name', and 'latest_commit'. With --skip, it must instead contain 'id' and 'path' for repositories that already exist locally. Other columns are ignored.
 
-Repositories are processed in random order using a reproducible seed. In download mode, each repository is fetched from GitHub at the specified commit, extracted locally, and scanned for files whose extensions match those defined in one or more keyword JSON files. Files that do not match the allowed extensions are removed, and files that do not contain any of the specified keywords can also be discarded.
+Repositories are processed in random order using a reproducible seed. In download mode, each repository is fetched from GitHub at the specified commit, extracted locally, and scanned for files whose extensions match those defined in one or more keyword JSON files. Keywords are either interpreted as regular expressions or whole words according to the --regex flag.
+Files that do not match the allowed extensions are removed, and files that do not contain any of the specified keywords can also be discarded.
 
 The command writes two CSV files: a project-level log with aggregate statistics and a file-level log with one row per retained file. By default, their names are the input file name with the suffixes '.project_log.csv' and '.file_log.csv'.
 
