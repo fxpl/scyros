@@ -160,4 +160,15 @@ mod tests {
         ensure!(set.contains("c"));
         Ok(())
     }
+
+    #[test]
+    fn test_json_to_set_with_convert() -> Result<()> {
+        let json = json::parse(r#"["\\", "\\(", "\\t"]"#)?;
+        let set = json_to_set(&json);
+        assert_eq!(set.len(), 3);
+        ensure!(set.contains("\\"));
+        ensure!(set.contains("\\("));
+        ensure!(set.contains("\\t"));
+        Ok(())
+    }
 }

@@ -89,6 +89,13 @@ pub fn cli() -> Command {
                 .required(true)
         )
         .arg(
+            Arg::new("regex")
+                .long("regex")
+                .help("Whether to interpret the keywords as regular expressions. If not specified, the keywords are interpreted as whole words to match.")
+                .default_value("false")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("lang")
                 .long("lang")
                 .num_args(1..)
@@ -150,6 +157,7 @@ pub fn cli() -> Command {
 /// * `output_path` - Path to the output csv file storing the functions statistics.
 /// * `logs_path` - Path to the output csv file storing the files statistics.
 /// * `keywords_file_paths` - Paths to the files containing the list of extensions and keywords to use.
+/// * `regex_syntax` - Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
 /// * `opt_languages` - Optional list of languages to parse. If not specified, all supported languages are parsed.
 /// * `fail_policy` - The policy to apply when a parse error is encountered. It can be one of the following:
 ///   * `ignore`: continue parsing and write the statistics of the file or function with parse error as if there was no error.
@@ -165,6 +173,7 @@ pub fn run(
     output_path: Option<&str>,
     logs_path: Option<&str>,
     keywords_file_paths: &[&str],
+    regex_syntax: bool,
     opt_languages: Option<Vec<&str>>,
     fail_policy: &str,
     threads: usize,
@@ -183,6 +192,7 @@ pub fn run(
         "typescript",
         "go",
         "scala",
+        "rust",
     ]
     .into_iter()
     .collect::<HashSet<_>>();
@@ -202,6 +212,8 @@ pub fn run(
             supported_languages.into_iter().collect()
         }
     };
+
+    info!("Selected languages: {}", languages.join(", "));
 
     let languages_series = Series::new(
         "language_filter".into(),
@@ -249,9 +261,9 @@ pub fn run(
         "  {} files found after filtering ({:.2} %)",
         n_files,
         if n_files_before == 0 {
-            0
+            0.0
         } else {
-            n_files / n_files_before * 100
+            n_files as f64 / n_files_before as f64 * 100.0
         }
     );
 
@@ -280,11 +292,11 @@ pub fn run(
     });
 
     // Number of columns in the output file.
-    const OUTPUT_COLS: usize = 17;
+    const OUTPUT_COLS: usize = 18;
     const LOGS_COLS: usize = 7;
 
     let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
-        KeywordFiles::new().add_files(keywords_file_paths, true)
+        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
     })?;
 
     let keyword_match_headers: String = keyword_files.paths.join(",");
@@ -312,6 +324,7 @@ pub fn run(
         "function_calls_nestings",
         "params",
         "param_kw_match",
+        "return_kw_match",
         "parse_error",
     ];
 
@@ -709,9 +722,23 @@ fn extract_functions(
                         n_param += count_nodes_of_kind(&params, &grammar.param_nodes).0;
                         param_match += matches;
                     }
+
+                    let return_type_match = match grammar.return_type_field {
+                        Some(field) => {
+                            // Safe unwrap: whole source code was read as utf8 before
+                            // Safe unwrap: the pattern is already checked above
+                            find_first_field(&node, field)
+                                .map(|x| node_source_code(&x, source))
+                                .filter(|x| keyword_files.has_matches_in_text(language, x))
+                                .map(|_| 1)
+                                .unwrap_or(0)
+                        }
+                        None => 0,
+                    };
+
                     writeln!(
                         &mut builder,
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                         project_id,
                         &function_path
                             .replace(",", "-was_comma-")
@@ -735,6 +762,7 @@ fn extract_functions(
                         calls_nesting,
                         n_param,
                         param_match,
+                        return_type_match,
                         error_position,
                     )?;
                     functions_with_kw += 1;
@@ -807,6 +835,9 @@ struct Grammar {
     /// The field name of the parameter type.
     param_type_field: Option<&'static str>,
 
+    /// The field name of the return type.
+    return_type_field: Option<&'static str>,
+
     /// The field name of the function or method name.
     name_field: &'static str,
 }
@@ -828,6 +859,7 @@ fn c_grammar() -> Grammar {
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration"].into_iter().collect(),
         param_type_field: Some("type"),
+        return_type_field: Some("type"),
         name_field: "declarator",
     }
 }
@@ -853,6 +885,7 @@ fn cpp_grammar() -> Grammar {
             .into_iter()
             .collect(),
         param_type_field: Some("type"),
+        return_type_field: Some("type"),
         name_field: "declarator",
     }
 }
@@ -886,6 +919,7 @@ fn cs_grammar() -> Grammar {
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
         param_type_field: Some("type"),
+        return_type_field: Some("returns"),
         name_field: "name",
     }
 }
@@ -917,6 +951,7 @@ fn ts_grammar() -> Grammar {
             .into_iter()
             .collect(),
         param_type_field: Some("type"),
+        return_type_field: Some("return_type"),
         name_field: "name",
     }
 }
@@ -946,6 +981,7 @@ fn go_grammar() -> Grammar {
             .into_iter()
             .collect(),
         param_type_field: Some("type"),
+        return_type_field: Some("result"),
         name_field: "name",
     }
 }
@@ -976,6 +1012,7 @@ fn java_grammar() -> Grammar {
         param_seq_nodes: vec!["formal_parameters"].into_iter().collect(),
         param_nodes: vec!["formal_parameter"].into_iter().collect(),
         param_type_field: Some("type"),
+        return_type_field: Some("type"),
         name_field: "name",
     }
 }
@@ -997,6 +1034,7 @@ fn scala_grammar() -> Grammar {
         param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
         param_type_field: Some("type"),
+        return_type_field: Some("return_type"),
         name_field: "name",
     }
 }
@@ -1032,6 +1070,7 @@ fn fortran_grammar() -> Grammar {
         param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["identifier"].into_iter().collect(),
         param_type_field: None,
+        return_type_field: None,
         name_field: "name",
     }
 }
@@ -1053,6 +1092,35 @@ fn python_grammar() -> Grammar {
         param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
         param_type_field: None,
+        return_type_field: None,
+        name_field: "name",
+    }
+}
+
+/// Returns the grammar for the Rust programming language.
+fn rust_grammar() -> Grammar {
+    Grammar {
+        lang: tree_sitter_rust::LANGUAGE.into(),
+        comment_nodes: vec!["comment"].into_iter().collect(),
+        string_literal_nodes: vec!["string_literal", "raw_string_literal"]
+            .into_iter()
+            .collect(),
+        loop_nodes: vec!["for_expression", "loop", "while_expression"]
+            .into_iter()
+            .collect(),
+        cond_nodes: vec!["if_expression", "let_condition", "match_expression"]
+            .into_iter()
+            .collect(),
+        function_nodes: vec!["function_item", "closure_expression"]
+            .into_iter()
+            .collect(),
+        function_call_nodes: vec!["call_expression"].into_iter().collect(),
+        param_seq_nodes: vec!["parameters", "closure_parameters"]
+            .into_iter()
+            .collect(),
+        param_nodes: vec!["parameter"].into_iter().collect(),
+        param_type_field: Some("type"),
+        return_type_field: Some("return_type"),
         name_field: "name",
     }
 }
@@ -1067,7 +1135,7 @@ fn python_grammar() -> Grammar {
 ///
 /// The grammar corresponding to the language or `None` if the language is not supported.
 fn language_to_grammar(lang: &str) -> Option<Grammar> {
-    match lang {
+    match lang.to_lowercase().as_str() {
         "c" => Some(c_grammar()),
         "c++" => Some(cpp_grammar()),
         "c#" => Some(cs_grammar()),
@@ -1077,6 +1145,7 @@ fn language_to_grammar(lang: &str) -> Option<Grammar> {
         "typescript" => Some(ts_grammar()),
         "go" => Some(go_grammar()),
         "scala" => Some(scala_grammar()),
+        "rust" => Some(rust_grammar()),
         _ => None,
     }
 }
@@ -1245,6 +1314,16 @@ fn find_fields<'a>(root: &Node<'a>, field: &str) -> Vec<Node<'a>> {
     res
 }
 
+/// Finds the first field with the given name in the tree
+///
+/// # Arguments
+///
+/// * `root` - The root node of the tree.
+/// * `field` - The name of the field to find.
+///
+/// # Returns
+///
+/// The first node found with the given field name, or `None` if no such node is found.
 fn find_first_field<'a>(root: &Node<'a>, field: &str) -> Option<Node<'a>> {
     let mut cursor = root.walk();
 
@@ -1353,6 +1432,7 @@ mod tests {
                 None,
                 None,
                 keywords,
+                false,
                 languages,
                 "ignore",
                 8,
@@ -1427,6 +1507,7 @@ mod tests {
                 None,
                 None,
                 keywords,
+                false,
                 languages,
                 "ignore",
                 8,
@@ -1492,7 +1573,7 @@ mod tests {
         test_parse(
             &input_file_path,
             &keywords,
-            Some(["rust"].to_vec()),
+            Some(["javascript"].to_vec()),
             false,
             false,
         )

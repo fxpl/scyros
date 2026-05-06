@@ -1,0 +1,3 @@
+pub fn transcendental_ops(x: f64) -> f64 {
+        x.exp() + x.cos() - x.tanh()
+    }

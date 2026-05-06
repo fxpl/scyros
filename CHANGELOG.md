@@ -9,10 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A `--regex` flag for the `download` and `parse` subcommands that allows users to specify whether the keywords in the keywords JSON files should be interpreted as regular expressions or as whole words to match. By default, keywords are interpreted as whole words to match. ([#1](https://github.com/fxpl/scyros/pull/1) by [@Smexykex](https://github.com/Smexykex))
+
+
+## [0.3.1] - 2026-04-23
+
+### Fixed
+
+- Issue that prevented the Nix flake from working correctly.
+
+## [0.3.0] - 2026-04-23
+
+### Added
+
 - A `--version` flag that prints the version information of the program.
 - The `--debug` flag prints library debug information in the logs. Additional debug information has been added to the `download` subcommand, including the number of threads spawned and the regexes used for keyword matching.
 - A `--ignore-comments` flag for the `parse` subcommand that sets the parser to ignore comments when extracting functions in individual source files.
 - A `--order` flag for every subcommand that allow users to choose whether to process the rows of the input CSV file in sequential order or in random order. By default, rows are processed in random order to minimize the impact of any ordering bias in the input data. 
+- A `--sub` flag for the `download` subcommand that allows users to specify the number of repositories to download. By default, all repositories in the input CSV file are downloaded.
+- The `parse` subcommand now outputs a column `return_kw_match` that indicates whether the return type of a function matches any of the keywords present in the keywords JSON files.
+- The `parse` subcommand now accepts Rust source files.
 
 ### Fixed
 
@@ -21,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The `download` subcommand does not produce a column `id`, `latest_commit` and `name` in the output logs when the `--skip` flag is used.
+- The short flag for the `--threads` argument in the `download` subcommand has been removed to avoid confusion with the new `--sub` flag.
 
 ## [0.2.4] - 2026-03-14
 

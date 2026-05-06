@@ -103,20 +103,28 @@ GitHub enforces API rate limits. Using multiple tokens from the same account doe
 
 ## Citing Scyros
 
-Scyros is introduced and described in the following large-scale empirical study. If you use Scyros in academic work, please cite:.
+Scyros is introduced and described in the following large-scale empirical study. If you use Scyros in academic work, please cite:
 
 ```bibtex
-@misc{gilot2026largescalestudyfloatingpointusage,
-    title={Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages}, 
-    author={Andrea Gilot and Tobias Wrigstad and Eva Darulova},
-    year={2026},
-    eprint={2509.04936},
-    archivePrefix={arXiv},
-    primaryClass={cs.PL},
-    url={https://arxiv.org/abs/2509.04936}, 
-}   
+@article{gilot2026largescalestudyfloatingpointusage,
+author = {Gilot, Andrea and Wrigstad, Tobias and Darulova, Eva},
+title = {Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages},
+year = {2026},
+issue_date = {April 2026},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+volume = {10},
+number = {OOPSLA1},
+url = {https://doi.org/10.1145/3798203},
+doi = {10.1145/3798203},
+journal = {Proc. ACM Program. Lang.},
+month = apr,
+articleno = {95},
+numpages = {28},
+keywords = {floating-point arithmetic, large-scale code analysis, repository mining}
+} 
 ```
-> Gilot, A., Wrigstad, T., & Darulova, E. (2026). Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages. arXiv. https://arxiv.org/abs/2509.04936
+> Andrea Gilot, Tobias Wrigstad, and Eva Darulova. 2026. Floating-Point Usage on GitHub: A Large-Scale Study of Statically Typed Languages. Proc. ACM Program. Lang. 10, OOPSLA1, Article 95 (April 2026), 28 pages. https://doi.org/10.1145/3798203
 
 ## License
 This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.

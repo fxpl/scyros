@@ -116,6 +116,13 @@ pub fn cli() -> Command {
                 .required(true)
         )
         .arg(
+            Arg::new("regex")
+                .long("regex")
+                .help("Whether to interpret the keywords as regular expressions. If not specified, the keywords are interpreted as whole words to match.")
+                .default_value("false")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("skip")
                 .long("skip")
                 .help("Skip the downloading of the repositories.")
@@ -142,8 +149,14 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
         )
         .arg(
+            Arg::new("sub")
+                .long("sub")
+                .value_name("NUMBER_OF_PROJECTS")
+                .help("Number of projects to sample from the input file. \
+                       If not specified, all remaining projects in the input file are used.")
+        )
+        .arg(
             Arg::new("threads")
-                .short('n')
                 .help("Number of threads to use when not downloading and computing statistic locally instead.")
                 .requires("skip")
                 .default_value("1")
@@ -170,9 +183,11 @@ pub fn cli() -> Command {
 /// * `target` - Path to the directory where projects will be downloaded.
 /// * `tokens_file` - Path to the file containing the GitHub tokens to use.
 /// * `keywords_file_paths` - Path to the files containing the list of extensions and keywords to use.
+/// * `regex_syntax` - Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
 /// * `skip` - If true, skip the downloading of the repositories.
 /// * `count` - If true, compute statistics on the downloaded projects without deleting any file.
 /// * `overwrite` - If true, overwrite the log files if they exist.
+/// * `sub` - Number of projects to sample from the input file. If not specified, all remaining projects in the input file are used.
 /// * `seed` - The seed used to shuffle the projects.
 /// * `logger` - The logger to use to display information about the progress of the program.
 /// * `thread` - The number of threads to use when not downloading and computing statistic locally instead.
@@ -184,9 +199,11 @@ pub fn run(
     target: &str,
     tokens_file: Option<&str>,
     keywords_file_paths: &[&str],
+    regex_syntax: bool,
     skip: bool,
     count: bool,
     overwrite: bool,
+    sub: Option<usize>,
     seed: u64,
     logger: &Logger,
     thread: usize,
@@ -227,23 +244,31 @@ pub fn run(
         })?;
     }
 
-    let shuffled_rows = shuffled_idx.into_iter().map(|idx| {
-        let row = input_file.get_row(idx).unwrap().0;
+    let shuffled_rows = shuffled_idx
+        .into_iter()
+        .map(|idx| {
+            let row = input_file.get_row(idx).unwrap().0;
 
-        if skip {
-            match row[0].clone() {
-                AnyValue::String(path) => Ok((idx, None, path, None)),
-                _ => Err(idx),
-            }
-        } else {
-            match (row[0].clone(), row[1].clone(), row[2].clone()) {
-                (AnyValue::UInt32(id), AnyValue::String(name), AnyValue::String(latest_commit)) => {
-                    Ok((idx, Some(id), name, Some(latest_commit)))
+            if skip {
+                match row[0].clone() {
+                    AnyValue::String(path) => Ok((idx, None, path, None)),
+                    _ => Err(idx),
                 }
-                _ => Err(idx),
+            } else {
+                match (row[0].clone(), row[1].clone(), row[2].clone()) {
+                    (
+                        AnyValue::UInt32(id),
+                        AnyValue::String(name),
+                        AnyValue::String(latest_commit),
+                    ) => Ok((idx, Some(id), name, Some(latest_commit))),
+                    _ => Err(idx),
+                }
             }
-        }
-    });
+        })
+        .take(match sub {
+            Some(n) => n,
+            None => usize::MAX,
+        });
 
     let n_proj = input_file.height();
     info!("  {} projects found.", n_proj);
@@ -299,7 +324,7 @@ pub fn run(
     }
 
     let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
-        KeywordFiles::new().add_files(keywords_file_paths, true)
+        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
     })?;
 
     info!(
@@ -990,9 +1015,11 @@ mod tests {
             &target_def,
             Some(&tokens_file),
             keywords_files,
+            false,
             skip,
             count,
             false,
+            None,
             0,
             test_logger(),
             2,

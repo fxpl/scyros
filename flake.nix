@@ -45,7 +45,7 @@
               platforms = platforms.unix;
             };
           };
-          default = scyros;
+          default = self.packages.${system}.scyros;
         });
     };
 }

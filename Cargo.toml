@@ -1,6 +1,6 @@
 [package]
 name = "scyros"
-version = "0.2.4"
+version = "0.3.1"
 description = "A framework to design sound, reproducible and scalable mining repositories studies on GitHub."
 authors = ["Andrea Gilot <andrea.gilot@it.uu.se>"]
 edition = "2021"
@@ -57,6 +57,7 @@ tree-sitter-typescript = "0.23.2"
 tree-sitter-c-sharp = "0.23.1"
 tree-sitter-go = "0.23.4"
 tree-sitter-scala = "0.24.0"
+tree-sitter-rust = "0.24.2"
 walkdir = "2.5.0"
 zip = "6.0.0"
 zip-extensions = "0.13.0"

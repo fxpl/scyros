@@ -1,0 +1,3 @@
+pub fn find_first_negative(xs: &[f64]) -> Option<f64> {
+        xs.iter().copied().find(|&x| x < 0.0)
+    }

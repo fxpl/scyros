@@ -1,0 +1,15 @@
+fn compute(&self, x: f64) -> f64 {
+        if x == f64::INFINITY {
+            0.0
+        } else if x == f64::NEG_INFINITY {
+            0.0
+        } else if x.is_nan() {
+            -1.0
+        } else if x > 0.0 {
+            x.sqrt() + x.ln()
+        } else if x < 0.0 {
+            x.abs() * x.sin()
+        } else {
+            0.0
+        }
+    }
