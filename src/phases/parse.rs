@@ -455,7 +455,6 @@ fn analyze_file(
     ignore_comments: bool,
     word_counter: &Matcher,
 ) -> Result<(String, Option<String>)> {
-    info!("analyze_file called with path: {path}");
     let grammar = language_to_grammar(language)
         .with_context(|| format!("Unsupported language: {language}"))?;
     // Initializes the parser
@@ -463,7 +462,6 @@ fn analyze_file(
     parser.set_language(&grammar.lang)?;
     match load_file(path, 1024 * 1024 * 1024)? {
         Ok(source_code) => {
-            info!("File {path} loaded successfully");
             // Creates a folder to store the functions of the file
             let target_folder: String = format!("{path}.functions");
             create_dir(&target_folder)?;

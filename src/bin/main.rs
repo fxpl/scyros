@@ -272,6 +272,8 @@ fn main() {
                                     *cli_subargs.get_one::<usize>("p_prefix").unwrap(),
                                     *cli_subargs.get_one::<f64>("threshold").unwrap(),
                                     cli_subargs.get_one::<String>("example_word"),
+                                    cli_subargs.get_flag("force"),
+                                    cli_subargs.get_one::<String>("header").unwrap(),
                                     &logger,
                                 )
                             }

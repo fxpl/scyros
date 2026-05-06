@@ -149,15 +149,24 @@ pub fn run(input_path: &str, example_word: &str, _logger: &Logger) -> Result<()>
 } */
 
 pub fn global_counter(input_file: &DataFrame) -> Result<Bow> {
+    use indicatif::ProgressBar;
+    use std::time::Instant;
+    info!("Building global Bag of Words from the functions in the input file...");
+    let bow_start = Instant::now();
+    let paths_column = input_file.column("path").and_then(|c| c.str())?;
+    let total_files = paths_column.len();
+
+    let bow_progress = ProgressBar::new(total_files as u64);
+    bow_progress.set_style(
+        indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
+    );
+    bow_progress.set_message("Building global bag-of-words...");
+
     let word_matcher: Matcher = Matcher::words_matcher();
     let mut global_bow: Bow = Bow::new();
 
-    for row in input_file
-        .column("path")
-        .and_then(|c| c.str())
-        .unwrap()
-        .into_iter()
-    {
+    for row in paths_column.into_iter() {
+        bow_progress.inc(1);
         match row {
             Some(path) => {
                 //let function_code = std::fs::read_to_string(path)?;
@@ -168,7 +177,7 @@ pub fn global_counter(input_file: &DataFrame) -> Result<Bow> {
                         global_bow.merge(local_bow);
                     }
                     Ok(Err(_e)) => {
-                        info!("  Warning: File to large at path {}", path);
+                        info!("  Warning: File too large at path {}", path);
                     }
                     Err(_e) => {
                         info!("  Warning: Could not load file at path {}", path);
@@ -180,6 +189,10 @@ pub fn global_counter(input_file: &DataFrame) -> Result<Bow> {
             }
         }
     }
+
+    bow_progress.finish_and_clear();
+    let bow_duration = bow_start.elapsed();
+    info!("BOW building took: {:.2}s", bow_duration.as_secs_f64());
 
     Ok(global_bow)
 }

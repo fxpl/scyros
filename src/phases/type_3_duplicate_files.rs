@@ -2,16 +2,19 @@ use crate::phases::tokenizer::global_counter;
 use crate::utils::candidate_map::*;
 use crate::utils::fs::*;
 use crate::utils::inverted_index::*;
-use crate::utils::logger::Logger;
+use crate::utils::logger::{log_output_file, log_write_output, Logger};
 use crate::utils::regex::*;
 use anyhow::{/* Error,  */ Result};
 use blake3;
+use clap::ArgAction;
 use clap::{Arg, Command};
 use core::f64;
 use either::Either;
+use indicatif::ProgressBar;
 use polars::prelude::*;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use std::vec;
 use tracing::{debug, info, warn};
 
@@ -60,7 +63,7 @@ pub fn cli() -> Command {
         .arg(
             Arg::new("threads")
                 .short('n')
-                .help("Number of threads to use, default is 1.")
+                .help("Number of threads to use, default is 1.  CURRENT VERSION IS SINGLE THREADED")
                 .default_value("1")
                 .value_parser(clap::value_parser!(usize))
         )
@@ -87,6 +90,20 @@ pub fn cli() -> Command {
                 .help("An example word to check the global Bag of Words for.")
                 .required(false),
         )
+        .arg(
+            Arg::new("force")
+                .short('f')
+                .long("force")
+                .help("Override the output CSV file if it already exists.")
+                .default_value("false")
+                .action(ArgAction::SetTrue)
+        )
+        .arg(
+            Arg::new("header")
+                .long("header")
+                .help("Name of column storing file paths in the input CSV file.")
+                .default_value("path"),
+        )
 }
 
 pub fn run(
@@ -100,11 +117,14 @@ pub fn run(
     p_prefix: usize,               //number of tokens to consider for the prefix, default is 1
     threshold: f64,                //threshold for the prefix length, default is 0.8
     example_word: Option<&String>, //an example word to check the global Bag of Words for, optional
+    force: bool,                   //whether to override the output CSV file if it already exists
+    input_header: &str,            //name of column storing file paths in the input CSV file
     _logger: &Logger,
 ) -> Result<()> {
     //let language = "java";
     let language = opt_language.unwrap_or("java"); //default to java currently
-    let minimum_loc = 2; //temporary
+    let minimum_loc = 0; //temporary
+    let total_start = Instant::now();
     let mut input_file = open_csv(
         input_path,
         Some(Schema::from_iter(vec![
@@ -156,18 +176,8 @@ pub fn run(
 
     let n_functions_after_loc = input_file.height();
 
-    info!(
-        "{} functions found after filtering  ({:.2} %)", //something is weird with the percentage calculation here.
-        n_functions_after_loc,
-        if n_functions_before_loc == 0 {
-            0
-        } else {
-            (n_functions_after_loc as f64 / n_functions_before_loc as f64 * 100.0) as usize
-        }
-    );
-
     //moved here from detect_clones
-    let paths_column = input_file.column("path")?.str()?;
+    let paths_column = input_file.column(input_header)?.str()?;
     let words_column = input_file.column("words")?.u32()?;
     let rows: Vec<(&str, usize)> = paths_column
         .into_iter()
@@ -185,6 +195,7 @@ pub fn run(
 
     let global_bow = global_counter(&input_file)?;
     let token_rankings = global_bow.token_rankings();
+    let index_start = Instant::now();
     let vector_of_indices_plus_min_max = index_builder(
         &input_file,
         &token_rankings,
@@ -192,6 +203,8 @@ pub fn run(
         threshold,
         &function_paths_and_lengths,
     )?;
+    let index_duration = index_start.elapsed();
+    info!("Index building took: {:.2}s", index_duration.as_secs_f64());
     // Maximum and minimum 'words' in input file
     let vector_of_indices = vector_of_indices_plus_min_max.0;
     let min_words = vector_of_indices_plus_min_max.1 .0;
@@ -238,16 +251,110 @@ pub fn run(
     }
 
     //go through input file again? Means i can grab 'words' from the file. Could do something like just checking candidates
+    let verify_start = Instant::now();
     let clone_map = detect_clones(
         &token_rankings,
         &vector_of_indices,
         threshold,
         &function_paths_and_lengths,
     )?;
+    let verify_duration = verify_start.elapsed();
+    info!("Verification took: {:.2}s", verify_duration.as_secs_f64());
+
+    // Ok() is kept at the end of the function
+    // Prepare CSV outputs: map of clone -> origin, and unique files list
+    let default_output_path: String = format!("{input_path}.unique.csv");
+    let default_map_path: String = format!("{input_path}.duplicates_map.csv");
+    let output_path: &str = _output_path.unwrap_or(&default_output_path);
+    let map_path: &str = _map_path.unwrap_or(&default_map_path);
+
+    // Build clone -> origin mapping
+    let mut clone_to_origin: HashMap<blake3::Hash, blake3::Hash> = HashMap::new();
+    for (k, v) in clone_map.iter() {
+        match v {
+            Either::Left(set) => {
+                for c in set.iter() {
+                    clone_to_origin.insert(*c, *k);
+                }
+            }
+            Either::Right(origin) => {
+                clone_to_origin.insert(*k, *origin);
+            }
+        }
+    }
+
+    // Map CSV rows
+    let mut map_names: Vec<String> = Vec::new();
+    let mut map_originals: Vec<String> = Vec::new();
+    for (clone_hash, origin_hash) in clone_to_origin.iter() {
+        let clone_path = function_paths_and_lengths
+            .get(clone_hash)
+            .map(|(p, _)| *p)
+            .unwrap_or("Unknown")
+            .to_string();
+        let origin_path = function_paths_and_lengths
+            .get(origin_hash)
+            .map(|(p, _)| *p)
+            .unwrap_or("Unknown")
+            .to_string();
+        map_names.push(clone_path);
+        map_originals.push(origin_path);
+    }
+
+    let mut map_df = DataFrame::new(vec![
+        polars::prelude::Column::new("name".into(), map_names),
+        polars::prelude::Column::new("original".into(), map_originals),
+    ])?;
+
+    // Unique files: those that are not listed as clones
+    let mut unique_paths: Vec<String> = Vec::new();
+    let mut unique_words: Vec<u32> = Vec::new();
+    for (hash, (path, words)) in function_paths_and_lengths.iter() {
+        if !clone_to_origin.contains_key(hash) {
+            unique_paths.push(path.to_string());
+            unique_words.push(*words as u32);
+        }
+    }
+
+    let mut output_df = DataFrame::new(vec![
+        polars::prelude::Column::new("path".into(), unique_paths),
+        polars::prelude::Column::new("words".into(), unique_words),
+    ])?;
+
+    // Check output files and write
+    log_output_file(output_path, false, force)?;
+    log_write_output(_logger, map_path, &mut map_df, false)?;
+    log_write_output(_logger, output_path, &mut output_df, false)?;
+
     info!(
-        "Finished detecting clones. {} clones found.",
-        clone_map.len()
+        "Remaining files: {} / {:.2} %", //something is weird with the percentage calculation here.
+        n_functions_after_loc,
+        if n_functions_before_loc == 0 {
+            0
+        } else {
+            (n_functions_after_loc as f64 / n_functions_before_loc as f64 * 100.0) as usize
+        }
     );
+
+    let unique_files = output_df.height();
+    let unique_file_percentage = (unique_files as f64 / n_functions_after_loc as f64) * 100.0;
+
+    info!(
+        "Unique files: {} / {:.2} %",
+        unique_files, unique_file_percentage
+    );
+
+    let duplicate_files = n_functions_after_loc - unique_files;
+    let duplicate_file_percentage = (duplicate_files as f64 / n_functions_after_loc as f64) * 100.0;
+
+    info!(
+        "Duplicate files: {} / {:.2} %",
+        duplicate_files, duplicate_file_percentage
+    );
+
+    let total_duration = total_start.elapsed();
+    info!("Total runtime: {:.2}s", total_duration.as_secs_f64());
+
     Ok(())
 }
 
@@ -258,6 +365,11 @@ fn index_builder(
     threshold: f64,
     function_paths_and_lengths: &HashMap<blake3::Hash, (&str, usize)>,
 ) -> Result<(Vec<InvertedIndex>, (usize, usize))> {
+    info!("Building indices...");
+    let index_progress = ProgressBar::new(function_paths_and_lengths.len() as u64);
+    index_progress.set_style(
+        indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
+    );
     let word_matcher: Matcher = Matcher::words_matcher();
 
     let mut vector_of_indices: Vec<InvertedIndex> = Vec::new();
@@ -274,6 +386,7 @@ fn index_builder(
         .into_iter()
         .flatten()
     {
+        index_progress.inc(1);
         match load_file(path, 1024 * 1024 * 1024) {
             Ok(Ok(function_code)) => {
                 let local_bow = word_matcher.bag_of_words(&function_code.to_ascii_lowercase());
@@ -326,6 +439,7 @@ fn index_builder(
             }
         }
     }
+    index_progress.finish();
     info!("Finished building indices.");
     Ok((vector_of_indices, (min_words, max_words)))
 }
@@ -378,8 +492,15 @@ fn detect_clones(
 
     let word_matcher: Matcher = Matcher::words_matcher();
     let p_prefix = vector_of_indices.len();
+    info!("Detecting clones");
+    let detection_progress = ProgressBar::new(function_paths_and_lengths.len() as u64);
+    detection_progress.set_style(
+        indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
+    );
+
     for (path, origin_word_count) in function_paths_and_lengths.values() {
         debug!("-----------------------------------------------------------------------------");
+        detection_progress.inc(1);
         // info!("Path: {}, Words: {}", path, origin_word_count);
         match load_file(path, 1024 * 1024 * 1024) {
             Ok(Ok(function_code)) => {
@@ -398,7 +519,10 @@ fn detect_clones(
                 let prefix_length = origin_word_count
                     - ((*origin_word_count as f64) * threshold).round() as usize
                     + 1;
-
+                debug!(
+                    "Prefix length: {}, origin word count: {}, threshold: {}",
+                    prefix_length, origin_word_count, threshold
+                );
                 let init_prefix_end = weighted_prefix_end(&origin_vectored_bow, prefix_length);
                 let mut filter_cost_vector: Vec<usize> = Vec::new();
                 filter_cost_vector.push(0); //cost of prefix scheme 1 is calculated from an empty prefix, so the initial cost is 0
@@ -419,14 +543,17 @@ fn detect_clones(
                         && origin_token_position < origin_vectored_bow.len()
                     {
                         let token_tuple = origin_vectored_bow.get(origin_token_position).unwrap();
+                        //debug!("Processing token {} at position {} in the origin prefix vector for prefix scheme {}.", String::from_utf8_lossy(&token_tuple.0), origin_token_position, p);
                         //loop through the prefix vector of the current scheme, for the first scheme this is just the original prefix vector, for the next schemes this includes additional tokens
                         let is_new = origin_token_position + 1 == prefix_end;
                         origin_cumulative_count += token_tuple.1;
                         filter_cost += delta_filter_cost(token_tuple, vector_of_indices, p, is_new);
+                        debug!("Origin    ID {}, count {}, token {}, index {}, tok_pos {}, wordpos {}.", origin_function_id, token_tuple.1, String::from_utf8_lossy(&token_tuple.0), p, origin_token_position, origin_cumulative_count);
                         for candidate in vector_of_indices[p - 1]
                             .get(&token_tuple.0)
                             .unwrap_or(&Vec::new())
                         {
+                            debug!("Candidate ID {}, count {}, token {}, index {}, tok_pos {}, wordpos {}.", candidate.0, candidate.1, String::from_utf8_lossy(&token_tuple.0), p, candidate.2.0, candidate.2.1);
                             /* if candidate_id_lt_origin_id(&candidate.0, &origin_function_id) {
                                 info!("DClone: SKIPPING candidate at path '{}' since it has a lower function ID than the origin.", function_paths_and_lengths.get(&candidate.0).map(|(path, _)| *path).unwrap_or("Unknown"));
                                 continue; //skip candidates that have already been processed as origins
@@ -443,6 +570,7 @@ fn detect_clones(
                             if candidate_word_count
                                 < ((*origin_word_count as f64) * threshold).round() as usize
                             {
+                                debug!("DClone: SKIPPING candidate at path '{}' since its word count {} is below the threshold for clones with the origin ({} words, threshold {}).", function_paths_and_lengths.get(&candidate.0).map(|(path, _)| *path).unwrap_or("Unknown"), candidate_word_count, origin_word_count, threshold);
                                 continue; //skip candidates that are too small to reach the threshold
                             }
 
@@ -454,9 +582,11 @@ fn detect_clones(
                                     .round() as usize;
                             let upper_bound = min(
                                 *origin_word_count - origin_cumulative_count,
-                                candidate_word_count - last_token_seen_pos.1 + new_matches, //candidate.2.1 is the number of words seen up to and including this token including duplicates
+                                candidate_word_count - last_token_seen_pos.1, //candidate.2.1 is the number of words seen up to and including this token including duplicates
                             );
-                            if candidate_map.get_token_matches(&function_id) + upper_bound
+                            if candidate_map.get_token_matches(&function_id)
+                                + upper_bound
+                                + new_matches
                                 >= current_threshold
                             {
                                 candidate_map.add_pending_update(
@@ -487,7 +617,7 @@ fn detect_clones(
                             (origin_token_position, origin_cumulative_count),
                             &mut candidate_map,
                             &mut clone_map,
-                            p_prefix,
+                            p - 1,
                             token_rankings,
                             threshold,
                             function_paths_and_lengths,
@@ -497,6 +627,7 @@ fn detect_clones(
                         //apply updates
                         candidate_map.apply_pending_updates(function_paths_and_lengths);
                         if p == p_prefix {
+                            debug!("Best prefix scheme is {} with estimated total cost of {}, filter cost: {}, verification cost: {}. This is the last prefix scheme, moving on to verification phase.", p, total_cost_vector[p], filter_cost_vector[p], verification_cost_vector[p]);
                             //return verify_candidates(candidate_map, path, function_code, p);
                             verify_candidates(
                                 origin_function_id,
@@ -525,7 +656,7 @@ fn detect_clones(
             }
         }
     }
-
+    detection_progress.finish();
     Ok(clone_map)
 }
 
@@ -609,7 +740,7 @@ fn verify_candidates(
                 let mut new_matches = 0usize;
                 let prefix_matches = candidate_map.get_token_matches(&candidate_id);
                 while origin_last_token_seen_pos.0 < origin_token_count
-                    && candidate_last_token_seen_pos.0 < candidate_token_count
+                    && candidate_last_token_seen_pos.0 + 1 < candidate_token_count
                 {
                     let upper_bound = min(
                         origin_word_count - origin_last_token_seen_pos.1,
@@ -618,7 +749,12 @@ fn verify_candidates(
                     let current_matches = prefix_matches + new_matches;
                     let origin_token_tuple = &origin_vectored_bow[origin_last_token_seen_pos.0];
                     let candidate_token_tuple =
-                        &vectored_candidate_bow[candidate_last_token_seen_pos.0];
+                        &vectored_candidate_bow[candidate_last_token_seen_pos.0 + 1];
+
+                    let candidate_current_token_pos = (
+                        candidate_last_token_seen_pos.0 + 1,
+                        candidate_last_token_seen_pos.1 + candidate_token_tuple.1,
+                    );
 
                     debug!("Current threshold: {}", current_threshold);
                     debug!(
@@ -643,7 +779,7 @@ fn verify_candidates(
                         origin_last_token_seen_pos.0,
                         String::from_utf8_lossy(&candidate_token_tuple.0),
                         candidate_rank,
-                        candidate_last_token_seen_pos.0
+                        candidate_current_token_pos.0
                     );
 
                     if current_matches >= current_threshold {
@@ -658,15 +794,13 @@ fn verify_candidates(
                             //it's a match
                             debug!("MATCHING!");
                             new_matches += min(origin_token_tuple.1, candidate_token_tuple.1);
-                            candidate_last_token_seen_pos.0 += 1;
-                            candidate_last_token_seen_pos.1 += candidate_token_tuple.1;
+                            candidate_last_token_seen_pos = candidate_current_token_pos;
                             origin_last_token_seen_pos.0 += 1;
                             origin_last_token_seen_pos.1 += origin_token_tuple.1;
                         } else if origin_rank > candidate_rank {
                             //origin token is more frequent than candidate token, so we move in the candidate vector
                             debug!("origin_count > candidate_count");
-                            candidate_last_token_seen_pos.0 += 1;
-                            candidate_last_token_seen_pos.1 += origin_token_tuple.1;
+                            candidate_last_token_seen_pos = candidate_current_token_pos;
                         } else {
                             //candidate token is more frequent than origin token, so we move in the origin vector
                             debug!("candidate_count > origin_count");
