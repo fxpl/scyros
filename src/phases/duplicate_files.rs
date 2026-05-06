@@ -178,7 +178,9 @@ pub fn run(
                             let hash = if similarity == "exact" {
                                 blake3::hash(&file_content)
                             } else {
-                                blake3::hash(&word_matcher.bag_of_words(&file_content).serialize())
+                                blake3::hash(
+                                    &word_matcher.bag_of_words(&file_content, true).serialize(),
+                                )
                             };
                             let _ = my_tx.send(Some(Ok((idx, name.to_owned(), Some(hash)))));
                         }
@@ -267,7 +269,7 @@ pub fn run(
             hash_map.values().map(|v| (v.1.clone(), v.2)).unzip();
 
         let clusters = DataFrame::new(vec![
-            polars::prelude::Column::new("name".into(), clusters_column.0),
+            polars::prelude::Column::new(input_header.into(), clusters_column.0),
             polars::prelude::Column::new("count".into(), clusters_column.1),
         ])?;
 
@@ -277,7 +279,7 @@ pub fn run(
             .unzip();
 
         let mut map_df = DataFrame::new(vec![
-            polars::prelude::Column::new("name".into(), map_columns.0),
+            polars::prelude::Column::new(input_header.into(), map_columns.0),
             polars::prelude::Column::new("original".into(), map_columns.1),
         ])?;
 
@@ -297,8 +299,8 @@ pub fn run(
 
         let mut output_df = files.join(
             &clusters,
-            ["name"],
-            ["name"],
+            [input_header],
+            [input_header],
             polars::prelude::JoinType::Inner.into(),
             None,
         )?;

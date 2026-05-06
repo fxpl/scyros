@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A `--regex` flag for the `download` and `parse` subcommands that allows users to specify whether the keywords in the keywords JSON files should be interpreted as regular expressions or as whole words to match. By default, keywords are interpreted as whole words to match. ([#1](https://github.com/fxpl/scyros/pull/1) by [@Smexykex](https://github.com/Smexykex))
 
+### Fixed
+
+- An issue with the `--header` flag in the `duplicate_files` subcommand that did not produce any output when the specified header was different from 'name'. 
+
+### Changed
+
+- In `bow` similarity mode, the `duplicate_files` subcommand now computes the bag of words of the file content by converting all words to lower case.
 
 ## [0.3.1] - 2026-04-23
 

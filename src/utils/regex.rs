@@ -180,8 +180,9 @@ impl Matcher {
     /// # Arguments
     ///
     /// * `text` - The text to analyze.
-    pub fn bag_of_words(&self, text: &[u8]) -> Bow {
-        let mut bow: Bow = Bow::new();
+    /// * `to_lower_case` - Whether to convert the words to lower case before adding them to the bag of words.
+    pub fn bag_of_words(&self, text: &[u8], to_lower_case: bool) -> Bow {
+        let mut bow: Bow = Bow::new(to_lower_case);
         if let Some(re) = &self.regex {
             bow.add_all(re.find_iter(text).map(|w| w.as_bytes()));
         }
