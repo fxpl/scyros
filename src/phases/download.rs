@@ -36,7 +36,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use tracing::{debug, info};
 use walkdir::WalkDir;
-use zip_extensions::zip_extract::zip_extract;
+use zip::ZipArchive;
 
 use crate::utils::csv::*;
 use crate::utils::fs::*;
@@ -154,6 +154,7 @@ pub fn cli() -> Command {
                 .value_name("NUMBER_OF_PROJECTS")
                 .help("Number of projects to sample from the input file. \
                        If not specified, all remaining projects in the input file are used.")
+                .value_parser(clap::value_parser!(usize))
         )
         .arg(
             Arg::new("threads")
@@ -739,13 +740,16 @@ fn download_repo(
             }
         }
 
-        zip_extract(
-            &format!("{project_path}.zip").into(),
-            &Path::new(project_path).to_path_buf(),
+        let zip_path: String = format!("{project_path}.zip");
+        let mut archive: ZipArchive<File> = ZipArchive::new(
+            File::open(&zip_path).with_context(|| format!("Failed to open archive {zip_path}"))?,
         )
-        .with_context(|| format!("Failed to extract archive to {project_path}"))?;
+        .with_context(|| format!("Failed to read archive {zip_path}"))?;
+        archive
+            .extract(Path::new(project_path))
+            .with_context(|| format!("Failed to extract archive to {project_path}"))?;
 
-        delete_file(format!("{project_path}.zip"), true)?;
+        delete_file(zip_path, true)?;
     }
 
     if delete {
@@ -1040,6 +1044,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn download_java_scala_float_double() -> Result<()> {
         download_test(
             "to_download.csv",
@@ -1077,6 +1082,18 @@ mod tests {
             &["tests/data/keywords/c.json"],
             true,
             true,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires network access, valid GitHub tokens, and is fragile (depends on live repository counts)"]
+    fn download_github_repos_count() -> Result<()> {
+        download_test(
+            "to_download_fragile.csv",
+            Some("github_repos"),
+            &["tests/data/keywords/rust.json"],
+            true,
+            false,
         )
     }
 }

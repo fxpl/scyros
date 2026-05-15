@@ -352,17 +352,80 @@ mod tests {
     use super::*;
     use anyhow::ensure;
 
-    const TEST_DATA: &str = "tests/data/phases/filter_metadata";
+    const INPUT: &str = "tests/data/phases/filter_metadata/filter_metadata.csv";
+    const EXPECTED: &str =
+        "tests/data/phases/filter_metadata/filter_metadata.csv.filtered.csv.expected";
 
     #[test]
     fn test_filter_metadata() -> Result<()> {
-        let input_path = format!("{TEST_DATA}/filter_metadata.csv");
-        let default_output_path = format!("{input_path}.filtered.csv");
-
-        delete_file(&default_output_path, true)?;
+        let output = "tests/data/phases/filter_metadata/out_filter.csv";
+        delete_file(output, true)?;
         run(
-            &input_path,
+            INPUT,
+            Some(output),
+            500,
+            3,
+            true,
+            true,
+            false,
+            false,
+            test_logger(),
+        )?;
+
+        let expected_df = open_csv(EXPECTED, None, None)?;
+        let output_df = open_csv(output, None, None)?;
+
+        ensure!(
+            expected_df.equals(&output_df),
+            "Filtered DataFrame does not match expected result."
+        );
+
+        delete_file(output, false)
+    }
+
+    #[test]
+    fn missing_input_filter_metadata() {
+        assert!(run(
+            "nonexistent.csv",
             None,
+            0,
+            0,
+            false,
+            false,
+            false,
+            false,
+            test_logger()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn output_exists_no_force_filter_metadata() -> Result<()> {
+        let output = "tests/data/phases/filter_metadata/out_no_force.csv";
+        write_file(output, b"")?;
+        let result = run(
+            INPUT,
+            Some(output),
+            0,
+            0,
+            false,
+            false,
+            false,
+            false,
+            test_logger(),
+        );
+        delete_file(output, false)?;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn force_overwrites_filter_metadata() -> Result<()> {
+        let output = "tests/data/phases/filter_metadata/out_force.csv";
+        write_file(output, b"")?;
+        run(
+            INPUT,
+            Some(output),
             500,
             3,
             true,
@@ -371,16 +434,30 @@ mod tests {
             false,
             test_logger(),
         )?;
-
-        let expected_df = open_csv(&format!("{default_output_path}.expected"), None, None)?;
-
-        let output_df = open_csv(&default_output_path, None, None)?;
-
+        let expected_df = open_csv(EXPECTED, None, None)?;
+        let output_df = open_csv(output, None, None)?;
         ensure!(
             expected_df.equals(&output_df),
-            "Filtered DataFrame does not match expected result."
+            "Overwritten output does not match expected."
         );
+        delete_file(output, false)
+    }
 
-        delete_file(&default_output_path, false)
+    #[test]
+    fn no_output_filter_metadata() -> Result<()> {
+        let output = "tests/data/phases/filter_metadata/out_no_output.csv";
+        run(
+            INPUT,
+            Some(output),
+            0,
+            0,
+            false,
+            false,
+            false,
+            true,
+            test_logger(),
+        )?;
+        assert!(!std::path::Path::new(output).exists());
+        Ok(())
     }
 }

@@ -116,6 +116,7 @@ pub fn cli() -> Command {
                 .value_name("NUMBER_OF_PROJECTS")
                 .help("Number of projects to sample from the input file. \
                        If not specified, all remaining projects in the input file are used.")
+                .value_parser(clap::value_parser!(usize))
         )
 }
 
@@ -504,6 +505,7 @@ mod tests {
     const TEST_DATA: &str = "tests/data/phases/metadata";
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_language_scraper() -> Result<()> {
         let input_file: String = format!("{TEST_DATA}/repos.csv");
         let output_file: String = format!("{input_file}.metadata.csv");
@@ -545,5 +547,22 @@ mod tests {
         assert_eq!(sorted_expected_df, sorted_output_df);
 
         delete_file(&output_file, false)
+    }
+
+    #[test]
+    fn missing_tokens_metadata() {
+        let result = run(
+            &format!("{TEST_DATA}/repos.csv"),
+            None,
+            "nonexistent_tokens.csv",
+            None,
+            0,
+            false,
+            "id",
+            "name",
+            None,
+            test_logger(),
+        );
+        assert!(result.is_err());
     }
 }

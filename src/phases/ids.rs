@@ -378,6 +378,7 @@ mod tests {
     const SEED: u64 = 113722657;
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_random_ids() -> Result<()> {
         let id_half = format!("{TEST_DATA}/id_random_1.csv");
         let id_full = format!("{TEST_DATA}/id_random_2.csv");
@@ -459,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_linear_ids() -> Result<()> {
         let id_half = format!("{TEST_DATA}/id_linear_1.csv");
         let id_full = format!("{TEST_DATA}/id_linear_2.csv");
@@ -537,5 +539,22 @@ mod tests {
         delete_file(&id_half, false)?;
         delete_file(&id_full, false)?;
         delete_file(&id_force, false)
+    }
+
+    #[test]
+    fn missing_tokens_ids() {
+        let output = format!("{TEST_DATA}/out_missing_tokens.csv");
+        let result = run(
+            &output,
+            "nonexistent_tokens.csv",
+            SEED,
+            0,
+            1000,
+            Some(1),
+            "random",
+            false,
+            test_logger(),
+        );
+        assert!(result.is_err());
     }
 }

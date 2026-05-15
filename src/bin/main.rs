@@ -19,6 +19,7 @@ use scyros::phases::{
     filter_metadata, forks, ids, languages, metadata, parse, pull_request,
 };
 use scyros::utils::logger::Logger;
+use std::io::IsTerminal as _;
 use tracing::{error, info};
 
 fn cli() -> Command {
@@ -245,11 +246,18 @@ fn main() {
     match res {
         Ok(_) => info!("Operation completed successfully."),
         Err(e) => {
-            if cli_args.get_flag("debug") {
-                error!("{:?}", e);
+            let msg = if cli_args.get_flag("debug") {
+                format!("{:?}", e)
             } else {
-                error!("{}", e);
+                format!("{}", e)
+            };
+            error!("{}", msg);
+            // indicatif suppresses output when stderr is not a TTY (pipes, scripts, tests),
+            // so also write directly to stderr in that case.
+            if !std::io::stderr().is_terminal() {
+                eprintln!("{}", msg);
             }
+            std::process::exit(1);
         }
     }
 }

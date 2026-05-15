@@ -116,6 +116,7 @@ pub fn cli() -> Command {
                 .value_name("NUMBER_OF_PROJECTS")
                 .help("Number of projects to sample from the input file. \
                        If not specified, all remaining projects in the input file are used.")
+                .value_parser(clap::value_parser!(usize))
         )
 }
 
@@ -395,15 +396,13 @@ impl ProjectInfo {
 
     /// Returns a string representation of the language map. Each entry is separated by a semicolon to avoid conflicts with the CSV format.\
     ///
+    /// # Arguments
+    ///
+    /// * `languages` - The map from the name of each language to the total size of the files written in that language.
+    ///
     /// # Example
-    ///
-    /// ```ignore
-    /// let mut languages = HashMap::<String, i64>::new();
-    /// languages.insert("Rust".to_owned(), 1000);
-    /// languages.insert("Python".to_owned(), 2000);
-    ///
-    /// assert_eq!(ProjectInfo::print_languages(&languages), "Rust:1000;Python:2000");
-    /// ```
+    ///     
+    /// `languages = {"Rust": 1000, "Python": 500} -> "Rust:1000;Python:500"`
     fn print_languages(languages: &HashMap<String, i64>) -> String {
         languages
             .iter()
@@ -421,6 +420,7 @@ mod tests {
     const TEST_DATA: &str = "tests/data/phases/languages";
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_language_scraper() -> Result<()> {
         let input_file: String = format!("{TEST_DATA}/repos.csv");
         let output_file: String = format!("{input_file}.languages.csv");
@@ -444,5 +444,22 @@ mod tests {
         )?;
 
         delete_file(&output_file, false)
+    }
+
+    #[test]
+    fn missing_tokens_languages() {
+        let result = run(
+            &format!("{TEST_DATA}/repos.csv"),
+            None,
+            "nonexistent_tokens.csv",
+            None,
+            0,
+            false,
+            "id",
+            "name",
+            None,
+            test_logger(),
+        );
+        assert!(result.is_err());
     }
 }

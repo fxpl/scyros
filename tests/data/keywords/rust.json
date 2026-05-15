@@ -1,0 +1,8 @@
+{
+    "languages": [
+        {
+            "name": "rust",
+            "extensions": [".rs", ".toml"]
+        }
+    ]
+}

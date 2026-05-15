@@ -129,6 +129,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn valid_tokens() -> Result<()> {
         let token_path = Path::new("ghtokens.csv");
         ensure!(token_path.exists(), "Token file does not exist");

@@ -5,11 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- More extensive tests for all subcommands.
+
+### Fixed
+
+- A parsing error in the `download` subcommand when the `--sub` flag was used ([#6](https://github.com/fxpl/scyros/issues/6), reported by @Michago6).
+
 ## [0.3.2] - 2026-05-07
 
 ### Added
 
-- A `--regex` flag for the `download` and `parse` subcommands that allows users to specify whether the keywords in the keywords JSON files should be interpreted as regular expressions or as whole words to match. By default, keywords are interpreted as whole words to match. ([#1](https://github.com/fxpl/scyros/pull/1) by [@Smexykex](https://github.com/Smexykex))
+- A `--regex` flag for the `download` and `parse` subcommands that allows users to specify whether the keywords in the keywords JSON files should be interpreted as regular expressions or as whole words to match. By default, keywords are interpreted as whole words to match. (PR [#1](https://github.com/fxpl/scyros/pull/1) by [@Smexykex](https://github.com/Smexykex))
 
 ### Fixed
 

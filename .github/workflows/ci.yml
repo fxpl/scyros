@@ -23,14 +23,18 @@ jobs:
           sudo apt-get install -y clang llvm-dev libclang-dev
     - name: Build
       run: cargo build --verbose
+    - name: Run local tests
+      env:
+        RUST_BACKTRACE: 1
+      run: cargo test --verbose
     - name: Create token
       run: echo -e "token\n$GH_TOKEN" > ghtokens.csv
       env:
         GH_TOKEN: ${{ secrets.GH_TOKEN }}
-    - name: Run tests
+    - name: Run network tests
       env:
         RUST_BACKTRACE: 1
-      run: cargo test --verbose
+      run: cargo test --verbose -- --ignored
     - name: Run Clippy
       run: |
           cargo clippy --message-format=json | jq -r '
