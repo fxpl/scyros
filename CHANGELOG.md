@@ -9,13 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- More extensive tests for all subcommands.
-- A `--no-output` (or `--count`) flag for the `parse` subcommand that allows users to skip writing the extracted functions to disk and only collect their statistics ([[#5](https://github.com/fxpl/scyros/issues/5)], reported by [@Michago6](https://github.com/Michago6)).
+- A `--no-output` (or `--count`) flag for the `parse` subcommand that allows users to skip writing the extracted functions to disk and only collect their statistics ([#5](https://github.com/fxpl/scyros/issues/5), reported by [@Michago6](https://github.com/Michago6)).
 
 ### Fixed
 
 - An issue with the `--regex` flag in the `download` and `parse` subcommands that added word delimiters to the regexes when the flag was used (reported by [@Smexykex](https://github.com/Smexykex)).
 - A parsing error in the `download` subcommand when the `--sub` flag was used ([#6](https://github.com/fxpl/scyros/issues/6), reported by [@Michago6](https://github.com/Michago6)).
+
+## Removed
+
+- The `extract_benchmarks` subcommand has been removed as it was too brittle.
 
 ## [0.3.2] - 2026-05-07
 

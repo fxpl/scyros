@@ -15,8 +15,8 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use scyros::phases::{
-    download, duplicate_files, duplicate_ids, extract_benchmarks, filter_languages,
-    filter_metadata, forks, ids, languages, metadata, parse, pull_request,
+    download, duplicate_files, duplicate_ids, filter_languages, filter_metadata, forks, ids,
+    languages, metadata, parse, pull_request,
 };
 use scyros::utils::logger::Logger;
 use std::io::IsTerminal as _;
@@ -37,7 +37,7 @@ fn cli() -> Command {
         .subcommand(download::cli())
         .subcommand(duplicate_files::cli())
         .subcommand(parse::cli())
-        .subcommand(extract_benchmarks::cli())
+        // .subcommand(extract_benchmarks::cli())
         .arg(
             Arg::new("debug")
                 .long("debug")
@@ -209,19 +209,19 @@ fn main() {
                                     &logger,
                                 )
                             }
-                            else if subcommand == extract_benchmarks::cli().get_name() {
-                                extract_benchmarks::run(
-                                    cli_subargs.get_one::<String>("input").unwrap(),
-                                    cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
-                                    cli_subargs.get_one::<String>("dest").unwrap(),
-                                    cli_subargs.get_one::<String>("tokens").unwrap(),
-                                    *cli_subargs.get_one::<u64>("seed").unwrap(),
-                                    cli_subargs.get_flag("force"),
-                                    *cli_subargs.get_one::<usize>("threads").unwrap(),
-                                    *cli_subargs.get_one::<u64>("timeout").unwrap(),
-                                    &logger,
-                                )
-                            }
+                            // else if subcommand == extract_benchmarks::cli().get_name() {
+                            //     extract_benchmarks::run(
+                            //         cli_subargs.get_one::<String>("input").unwrap(),
+                            //         cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                            //         cli_subargs.get_one::<String>("dest").unwrap(),
+                            //         cli_subargs.get_one::<String>("tokens").unwrap(),
+                            //         *cli_subargs.get_one::<u64>("seed").unwrap(),
+                            //         cli_subargs.get_flag("force"),
+                            //         *cli_subargs.get_one::<usize>("threads").unwrap(),
+                            //         *cli_subargs.get_one::<u64>("timeout").unwrap(),
+                            //         &logger,
+                            //     )
+                            // }
                             else if subcommand == pull_request::cli().get_name() {
                                 pull_request::run(
                                     cli_subargs.get_one::<String>("input").unwrap(),
