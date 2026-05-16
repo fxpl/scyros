@@ -1448,8 +1448,10 @@ mod tests {
         let logs_file_path = format!("{input_file_path}.function_logs.csv");
         delete_file(&logs_file_path, true)?;
 
-        for path in input_df.iter() {
-            delete_dir(format!("{path}.functions"), true)?;
+        if write_out {
+            for path in input_df.iter() {
+                delete_dir(format!("{path}.functions"), true)?;
+            }
         }
 
         if should_pass {
@@ -1564,8 +1566,10 @@ mod tests {
         delete_file(&output_file_path, true)?;
         delete_file(&logs_file_path, true)?;
 
-        for path in input_df {
-            delete_dir(format!("{path}.functions"), true)?;
+        if write_out {
+            for path in input_df {
+                delete_dir(format!("{path}.functions"), true)?;
+            }
         }
         Ok(())
     }
