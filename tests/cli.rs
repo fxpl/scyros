@@ -174,6 +174,7 @@ fn download_sub_flag_does_not_panic() {
             "--keywords",
             "tests/data/keywords/c.json",
             "--skip",
+            "--count",
             "--sub",
             "1",
         ])

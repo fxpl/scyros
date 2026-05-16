@@ -145,7 +145,15 @@ pub fn cli() -> Command {
             .long("ignore-comments")
             .help("Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.")
             .default_value("false")
-            .action(ArgAction::SetTrue),
+            .action(ArgAction::SetTrue)
+            .conflicts_with("count"),
+        )
+        .arg(
+            Arg::new("count")
+                .long("count")
+                .alias("no-output")
+                .help("Compute statistics on the functions without writing the functions to files.") 
+                .action(ArgAction::SetTrue)
         )
 }
 
@@ -167,6 +175,7 @@ pub fn cli() -> Command {
 /// * `seed` - The seed used to shuffle the input file.
 /// * `force` - Whether to override the output file if it already exists.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions.
+/// * `write_out` - Whether to write the extracted functions to files. If false, only the statistics are computed and written to the output file.
 /// * `logger` - The logger to use to display information about the progress of the program.
 pub fn run(
     input_path: &str,
@@ -180,6 +189,7 @@ pub fn run(
     seed: u64,
     force: bool,
     ignore_comments: bool,
+    write_out: bool,
     logger: &Logger,
 ) -> Result<()> {
     let supported_languages: HashSet<&'static str> = vec![
@@ -375,6 +385,7 @@ pub fn run(
                                 &keyword_files,
                                 fail_policy,
                                 ignore_comments,
+                                write_out,
                                 &word_counter,
                             ) {
                                 Ok(s) => {
@@ -446,6 +457,7 @@ pub fn run(
 /// * `keywords_files` - The files containing the list of keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
+/// * `write_out` - Whether to write the extracted functions to files. If false, only the statistics are computed and written to the output file.
 /// * `word_counter` - The matcher to use to count the words in the functions.
 /// # Returns
 ///
@@ -466,6 +478,7 @@ fn analyze_file(
     keywords_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
+    write_out: bool,
     word_counter: &Matcher,
 ) -> Result<(String, Option<String>)> {
     let grammar = language_to_grammar(language)
@@ -477,7 +490,9 @@ fn analyze_file(
         Ok(source_code) => {
             // Creates a folder to store the functions of the file
             let target_folder: String = format!("{path}.functions");
-            create_dir(&target_folder)?;
+            if write_out {
+                create_dir(&target_folder)?;
+            }
 
             // Parses the source code of the file
             let tree: Tree = parser
@@ -496,13 +511,14 @@ fn analyze_file(
                     extract_functions(
                         project_id,
                         &root,
-                        &target_folder,
+                        path,
                         language,
                         &grammar,
                         &source_code,
                         keywords_files,
                         fail_policy,
                         ignore_comments,
+                        write_out,
                         word_counter,
                         &mut parser,
                     )?;
@@ -580,7 +596,7 @@ fn file_error_row(
 ///
 /// * project_id - The id of the project to which the file belongs.
 /// * `root` - The root node of the subtree.
-/// * `target_folder` - The folder where the functions are stored.
+/// * `file_path` - The path to the file where the functions are extracted from.
 /// * `language` - The language of the source file.
 /// * `grammar` - The grammar of the language.
 /// * `source` - The source code of the source file.
@@ -588,6 +604,7 @@ fn file_error_row(
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
 /// * `word_counter` - The matcher to use to count the words in the functions.
+/// * `write_out` - Whether to write the extracted functions to files.
 /// * `parser` - The parser to use to parse the functions.
 ///
 /// # Returns
@@ -597,16 +614,19 @@ fn file_error_row(
 fn extract_functions(
     project_id: u32,
     root: &Node,
-    target_folder: &str,
+    file_path: &str,
     language: &str,
     grammar: &Grammar,
     source: &[u8],
     keyword_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
+    write_out: bool,
     word_counter: &Matcher,
     parser: &mut Parser,
 ) -> Result<(String, usize, usize, Vec<usize>), Error> {
+    let target_folder = format!("{file_path}.functions");
+
     // Initializes the builder to store the statistics of the functions in the file
     let mut builder: String = String::new();
     let mut functions: usize = 0;
@@ -654,7 +674,7 @@ fn extract_functions(
                 let tree_without_comments: Tree = parser
                     .parse(function_code_with_strings, None)
                     .with_context(|| {
-                        format!("Error parsing code for function {target_folder}/{functions}")
+                        format!("Error parsing code for function at line {}, column {} in file {file_path}", function_position.0, function_position.1)
                     })?;
 
                 // Remove string literals from the function code
@@ -668,19 +688,24 @@ fn extract_functions(
                     keyword_files.count_matches_in_text(language, function_code);
 
                 if matches.iter().any(|x| *x > 0) {
-                    let function_path: String = format!(
-                        "{}/{}-{}",
-                        target_folder, function_position.0, function_position.1
-                    );
-
-                    std::fs::write(
-                        &function_path,
-                        if ignore_comments {
-                            function_code_with_strings
-                        } else {
-                            function_source_code
-                        },
-                    )?;
+                    let function_path: String = if write_out {
+                        format!(
+                            "{}/{}-{}",
+                            target_folder, function_position.0, function_position.1
+                        )
+                    } else {
+                        file_path.to_string()
+                    };
+                    if write_out {
+                        std::fs::write(
+                            &function_path,
+                            if ignore_comments {
+                                function_code_with_strings
+                            } else {
+                                function_source_code
+                            },
+                        )?;
+                    }
 
                     // Count the number of loops, conditionals and parameters if the function
                     let (loops, loop_nesting) = count_nodes_of_kind(&node, &grammar.loop_nodes);
@@ -1407,6 +1432,7 @@ mod tests {
         keywords: &[&str],
         languages: Option<Vec<&str>>,
         ignore_comments: bool,
+        write_out: bool,
         should_pass: bool,
     ) -> Result<()> {
         let input_df = open_csv(input_file_path, None, None)?;
@@ -1439,6 +1465,7 @@ mod tests {
                 0,
                 false,
                 ignore_comments,
+                write_out,
                 test_logger(),
             )?;
 
@@ -1470,36 +1497,50 @@ mod tests {
                 has_column(&output_df, "path"),
                 "Output dataframe must have a 'path' column"
             );
-            let sorted_output_df = output_df.sort(vec!["path"], SortMultipleOptions::new())?;
 
-            let expected_df = open_csv(&format!("{output_file_path}.expected"), None, None)?;
-            ensure!(
-                has_column(&expected_df, "path"),
-                "Expected dataframe must have a 'path' column"
-            );
-            let sorted_expected_df = expected_df.sort(vec!["path"], SortMultipleOptions::new())?;
-
-            assert_eq!(sorted_expected_df, sorted_output_df);
-
-            for path in dataframes::str(&sorted_output_df, "path")? {
-                let path = Path::new(path);
-                ensure!(path.exists(), "Parsed file not found: {}", path.display());
-                let expected_path_name = format!(
-                    "{}.expected/{}",
-                    path.parent()
-                        .with_context(|| "Failed to get parent directory")?
-                        .to_str()
-                        .with_context(|| "Failed to convert parent directory to string")?,
-                    path.file_name()
-                        .with_context(|| "Failed to get file name")?
-                        .to_str()
-                        .with_context(|| "Failed to convert file name to string")?
+            if write_out {
+                let sorted_output_df = output_df.sort(vec!["path"], SortMultipleOptions::new())?;
+                let expected_df = open_csv(&format!("{output_file_path}.expected"), None, None)?;
+                ensure!(
+                    has_column(&expected_df, "path"),
+                    "Expected dataframe must have a 'path' column"
                 );
-                let expected_path = Path::new(&expected_path_name);
-                assert_eq!(
-                    std::fs::read_to_string(path)?,
-                    std::fs::read_to_string(expected_path)?
+                let sorted_expected_df =
+                    expected_df.sort(vec!["path"], SortMultipleOptions::new())?;
+                assert_eq!(sorted_expected_df, sorted_output_df);
+
+                for path in dataframes::str(&sorted_output_df, "path")? {
+                    let path = Path::new(path);
+                    ensure!(path.exists(), "Parsed file not found: {}", path.display());
+                    let expected_path_name = format!(
+                        "{}.expected/{}",
+                        path.parent()
+                            .with_context(|| "Failed to get parent directory")?
+                            .to_str()
+                            .with_context(|| "Failed to convert parent directory to string")?,
+                        path.file_name()
+                            .with_context(|| "Failed to get file name")?
+                            .to_str()
+                            .with_context(|| "Failed to convert file name to string")?
+                    );
+                    let expected_path = Path::new(&expected_path_name);
+                    assert_eq!(
+                        std::fs::read_to_string(path)?,
+                        std::fs::read_to_string(expected_path)?
+                    );
+                }
+            } else {
+                let sorted_output_df =
+                    output_df.sort(vec!["path", "name"], SortMultipleOptions::new())?;
+                let expected_df =
+                    open_csv(&format!("{output_file_path}.count.expected"), None, None)?;
+                ensure!(
+                    has_column(&expected_df, "path"),
+                    "Expected dataframe must have a 'path' column"
                 );
+                let sorted_expected_df =
+                    expected_df.sort(vec!["path", "name"], SortMultipleOptions::new())?;
+                assert_eq!(sorted_expected_df, sorted_output_df);
             }
         } else {
             ensure!(run(
@@ -1514,6 +1555,7 @@ mod tests {
                 0,
                 false,
                 ignore_comments,
+                write_out,
                 test_logger()
             )
             .is_err());
@@ -1539,7 +1581,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/to_parse.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true)
     }
 
     #[test]
@@ -1552,7 +1594,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/parse_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true)
     }
 
     #[test]
@@ -1561,7 +1603,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/invalid.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true)
     }
 
     #[test]
@@ -1575,6 +1617,7 @@ mod tests {
             &keywords,
             Some(["javascript"].to_vec()),
             false,
+            true,
             false,
         )
     }
@@ -1591,6 +1634,7 @@ mod tests {
             Some(["c"].to_vec()),
             false,
             true,
+            true,
         )
     }
 
@@ -1604,6 +1648,19 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/fn_comments_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, true, true)
+        test_parse(&input_file_path, &keywords, None, true, true, true)
+    }
+
+    #[test]
+    fn parse_go_count() -> Result<()> {
+        let keywords = vec![
+            "tests/data/keywords/fp_types.json",
+            "tests/data/keywords/fp_transcendental.json",
+            "tests/data/keywords/fp_others.json",
+        ];
+
+        let input_file_path = format!("{TEST_DATA}/parse_go_count.csv");
+
+        test_parse(&input_file_path, &keywords, None, false, false, true)
     }
 }

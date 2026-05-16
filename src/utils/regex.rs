@@ -400,8 +400,13 @@ impl KeywordFiles {
             .map(|json| json_to_set(json))
             .unwrap_or_default();
 
-        let file_matchers =
-            Matcher::keywords_matchers(&local_kw, &global_kw, false, true, self.regex_syntax)?;
+        let file_matchers = Matcher::keywords_matchers(
+            &local_kw,
+            &global_kw,
+            false,
+            !self.regex_syntax,
+            self.regex_syntax,
+        )?;
         let mut updated_matchers = self.matchers;
 
         for (lang, entry) in updated_matchers.iter_mut() {
