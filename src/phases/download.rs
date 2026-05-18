@@ -499,7 +499,7 @@ pub fn run(
                                     let path_opt = if skip {
                                         Some(project_path.clone())
                                     } else {
-                                        id_opt.map(|id| id.to_string())
+                                        None
                                     };
 
                                     if (!skip || Path::new(&project_path).exists())
@@ -1095,5 +1095,141 @@ mod tests {
             true,
             false,
         )
+    }
+
+    #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
+    fn download_live_resumes() -> Result<()> {
+        let input_file = format!("{TEST_DATA}/to_download.csv");
+        let output_file_project = format!("{input_file}.resume_test.project_log.csv");
+        let output_file_file = format!("{input_file}.resume_test.file_log.csv");
+        let keywords_files = &[
+            "tests/data/keywords/java_float.json",
+            "tests/data/keywords/scala_float.json",
+        ];
+        let tokens_file = "ghtokens.csv";
+        let target = "target/tests/live_resume_test";
+
+        delete_file(&output_file_project, true)?;
+        delete_file(&output_file_file, true)?;
+        delete_dir(target, true)?;
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            target,
+            Some(tokens_file),
+            keywords_files,
+            false,
+            false,
+            false,
+            true,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_first = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<u32>(0)?
+            .len();
+        assert!(rows_after_first > 0, "First run produced no rows");
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            target,
+            Some(tokens_file),
+            keywords_files,
+            false,
+            false,
+            false,
+            false,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_second = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<u32>(0)?
+            .len();
+
+        assert_eq!(
+            rows_after_first, rows_after_second,
+            "Second run re-processed already-downloaded repos: expected {rows_after_first} rows, got {rows_after_second}"
+        );
+
+        delete_file(&output_file_project, false)?;
+        delete_file(&output_file_file, false)?;
+        delete_dir(target, false)
+    }
+
+    #[test]
+    fn download_local_resumes() -> Result<()> {
+        let input_file = format!("{TEST_DATA}/to_download_local_c.csv");
+        let output_file_project = format!("{input_file}.resume_test.project_log.csv");
+        let output_file_file = format!("{input_file}.resume_test.file_log.csv");
+        let keywords_files = &["tests/data/keywords/c.json"];
+
+        delete_file(&output_file_project, true)?;
+        delete_file(&output_file_file, true)?;
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            "",
+            None,
+            keywords_files,
+            false,
+            true,
+            true,
+            true,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_first = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<String>(0)?
+            .len();
+        assert!(rows_after_first > 0, "First run produced no rows");
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            "",
+            None,
+            keywords_files,
+            false,
+            true,
+            true,
+            false,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_second = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<String>(0)?
+            .len();
+
+        assert_eq!(
+            rows_after_first, rows_after_second,
+            "Second run re-processed already-logged repos: expected {rows_after_first} rows, got {rows_after_second}"
+        );
+
+        delete_file(&output_file_project, false)?;
+        delete_file(&output_file_file, false)
     }
 }
