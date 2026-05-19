@@ -149,6 +149,13 @@ pub fn cli() -> Command {
             .conflicts_with("count"),
         )
         .arg(
+            Arg::new("lambdas")
+            .long("lambdas")
+            .help("Whether to extract lambda functions as well. By default, only named functions are extracted.")
+            .default_value("false")
+            .action(ArgAction::SetTrue)
+        )
+        .arg(
             Arg::new("count")
                 .long("count")
                 .alias("no-output")
@@ -175,6 +182,7 @@ pub fn cli() -> Command {
 /// * `seed` - The seed used to shuffle the input file.
 /// * `force` - Whether to override the output file if it already exists.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions.
+/// * `lambdas` - Whether to extract lambda functions as well.
 /// * `write_out` - Whether to write the extracted functions to files. If false, only the statistics are computed and written to the output file.
 /// * `logger` - The logger to use to display information about the progress of the program.
 pub fn run(
@@ -189,6 +197,7 @@ pub fn run(
     seed: u64,
     force: bool,
     ignore_comments: bool,
+    lambdas: bool,
     write_out: bool,
     logger: &Logger,
 ) -> Result<()> {
@@ -385,6 +394,7 @@ pub fn run(
                                 &keyword_files,
                                 fail_policy,
                                 ignore_comments,
+                                lambdas,
                                 write_out,
                                 &word_counter,
                             ) {
@@ -457,6 +467,7 @@ pub fn run(
 /// * `keywords_files` - The files containing the list of keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
+/// * `lambdas` - Whether to extract lambda functions as well.
 /// * `write_out` - Whether to write the extracted functions to files. If false, only the statistics are computed and written to the output file.
 /// * `word_counter` - The matcher to use to count the words in the functions.
 /// # Returns
@@ -478,6 +489,7 @@ fn analyze_file(
     keywords_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
+    lambdas: bool,
     write_out: bool,
     word_counter: &Matcher,
 ) -> Result<(String, Option<String>)> {
@@ -518,6 +530,7 @@ fn analyze_file(
                         keywords_files,
                         fail_policy,
                         ignore_comments,
+                        lambdas,
                         write_out,
                         word_counter,
                         &mut parser,
@@ -603,6 +616,7 @@ fn file_error_row(
 /// * `keyword_files` - The keyword files containing the keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
+/// * `lambdas` - Whether to extract lambda functions as well.
 /// * `word_counter` - The matcher to use to count the words in the functions.
 /// * `write_out` - Whether to write the extracted functions to files.
 /// * `parser` - The parser to use to parse the functions.
@@ -621,6 +635,7 @@ fn extract_functions(
     keyword_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
+    lambdas: bool,
     write_out: bool,
     word_counter: &Matcher,
     parser: &mut Parser,
@@ -639,7 +654,7 @@ fn extract_functions(
     let mut cursor = root.walk();
 
     while let Some(node) = call_stack.pop() {
-        if grammar.function_nodes.contains(node.kind()) {
+        if grammar.function_nodes(lambdas).contains(node.kind()) {
             let has_error: bool = node.has_error();
 
             if (has_error && fail_policy == "skip-function")
@@ -845,8 +860,11 @@ struct Grammar {
     /// Nodes representing conditional statements.
     cond_nodes: HashSet<&'static str>,
 
-    /// Nodes representing functions or methods.
-    function_nodes: HashSet<&'static str>,
+    /// Nodes representing named functions or methods.
+    named_function_nodes: HashSet<&'static str>,
+
+    /// Nodes representing anonymours functions or lambdas.
+    anon_function_nodes: HashSet<&'static str>,
 
     /// Nodes representing function or method calls.
     function_call_nodes: HashSet<&'static str>,
@@ -867,6 +885,20 @@ struct Grammar {
     name_field: &'static str,
 }
 
+impl Grammar {
+    /// Returns the set of nodes representing functions or methods in the grammar.
+    ///
+    /// # Arguments
+    /// * `with_lambdas` - Whether to include lambda functions in the returned set. If false, only named functions are included.
+    fn function_nodes(&self, with_lambdas: bool) -> HashSet<&'static str> {
+        let mut functions = self.named_function_nodes.clone();
+        if with_lambdas {
+            functions.extend(self.anon_function_nodes.clone());
+        }
+        functions
+    }
+}
+
 /// Returns the grammar for the C programming language.
 fn c_grammar() -> Grammar {
     Grammar {
@@ -879,7 +911,8 @@ fn c_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition"].into_iter().collect(),
+        named_function_nodes: vec!["function_definition"].into_iter().collect(),
+        anon_function_nodes: HashSet::new(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration"].into_iter().collect(),
@@ -901,9 +934,10 @@ fn cpp_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition", "template_declaration"]
+        named_function_nodes: vec!["function_definition", "template_declaration"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration", "variadic_parameter_declaration"]
@@ -933,13 +967,16 @@ fn cs_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec![
+        named_function_nodes: vec![
             "method_declaration",
             "constructor_declaration",
             "operator_declaration",
         ]
         .into_iter()
         .collect(),
+        anon_function_nodes: vec!["lambda_expression", "anonymous_method_expression"]
+            .into_iter()
+            .collect(),
         function_call_nodes: vec!["invocation_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
@@ -961,9 +998,10 @@ fn ts_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "ternary_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_declaration", "method_definition"]
+        named_function_nodes: vec!["function_declaration", "method_definition"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["arrow_function"].into_iter().collect(),
         function_call_nodes: vec![
             "new_expression",
             "call_expression",
@@ -997,9 +1035,10 @@ fn go_grammar() -> Grammar {
         ]
         .into_iter()
         .collect(),
-        function_nodes: vec!["function_declaration", "method_declaration"]
+        named_function_nodes: vec!["function_declaration", "method_declaration"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["func_literal"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration", "variadic_parameter_declaration"]
@@ -1028,9 +1067,10 @@ fn java_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "ternary_expression", "switch_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["method_declaration", "compact_constructor_declaration"]
+        named_function_nodes: vec!["method_declaration", "compact_constructor_declaration"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["method_invocation", "explicit_constructor_invocation"]
             .into_iter()
             .collect(),
@@ -1054,7 +1094,8 @@ fn scala_grammar() -> Grammar {
         cond_nodes: vec!["if_expression", "match_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition"].into_iter().collect(),
+        named_function_nodes: vec!["function_definition"].into_iter().collect(),
+        anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
@@ -1088,7 +1129,8 @@ fn fortran_grammar() -> Grammar {
         ]
         .into_iter()
         .collect(),
-        function_nodes: vec!["function", "subroutine"].into_iter().collect(),
+        named_function_nodes: vec!["function", "subroutine"].into_iter().collect(),
+        anon_function_nodes: HashSet::new(),
         function_call_nodes: vec!["call_expression", "subroutine_call"]
             .into_iter()
             .collect(),
@@ -1112,7 +1154,8 @@ fn python_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "conditional_expression", "match_statement"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition", "lambda"].into_iter().collect(),
+        named_function_nodes: vec!["function_definition"].into_iter().collect(),
+        anon_function_nodes: vec!["lambda"].into_iter().collect(),
         function_call_nodes: vec!["call"].into_iter().collect(),
         param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
@@ -1136,9 +1179,8 @@ fn rust_grammar() -> Grammar {
         cond_nodes: vec!["if_expression", "let_condition", "match_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_item", "closure_expression"]
-            .into_iter()
-            .collect(),
+        named_function_nodes: vec!["function_item"].into_iter().collect(),
+        anon_function_nodes: vec!["closure_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameters", "closure_parameters"]
             .into_iter()
@@ -1432,6 +1474,7 @@ mod tests {
         keywords: &[&str],
         languages: Option<Vec<&str>>,
         ignore_comments: bool,
+        lambdas: bool,
         write_out: bool,
         should_pass: bool,
     ) -> Result<()> {
@@ -1467,6 +1510,7 @@ mod tests {
                 0,
                 false,
                 ignore_comments,
+                lambdas,
                 write_out,
                 test_logger(),
             )?;
@@ -1558,6 +1602,7 @@ mod tests {
                 false,
                 ignore_comments,
                 write_out,
+                lambdas,
                 test_logger()
             )
             .is_err());
@@ -1585,7 +1630,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/to_parse.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true, true)
     }
 
     #[test]
@@ -1598,7 +1643,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/parse_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true, true)
     }
 
     #[test]
@@ -1607,7 +1652,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/invalid.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true, true)
     }
 
     #[test]
@@ -1621,6 +1666,7 @@ mod tests {
             &keywords,
             Some(["javascript"].to_vec()),
             false,
+            true,
             true,
             false,
         )
@@ -1639,6 +1685,7 @@ mod tests {
             false,
             true,
             true,
+            true,
         )
     }
 
@@ -1652,7 +1699,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/fn_comments_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, true, true, true)
+        test_parse(&input_file_path, &keywords, None, true, true, true, true)
     }
 
     #[test]
@@ -1665,6 +1712,6 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/parse_go_count.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, false, true)
+        test_parse(&input_file_path, &keywords, None, false, true, false, true)
     }
 }

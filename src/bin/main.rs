@@ -205,6 +205,7 @@ fn main() {
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("ignore-comments"),
+                                    cli_subargs.get_flag("lambdas"),
                                     cli_subargs.get_flag("count"),
                                     &logger,
                                 )
