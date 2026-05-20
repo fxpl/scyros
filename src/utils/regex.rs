@@ -374,18 +374,20 @@ impl KeywordFiles {
             };
 
             for ext in extensions {
-                match extensions_to_language.get(&ext) {
+                let ext_without_dot: &str = ext.trim_start_matches('.');
+                match extensions_to_language.get(ext_without_dot) {
                     Some(value) if value != name => {
                         bail!(
                             "Extension {} is associated with both {} and {} when loading {}",
-                            &ext,
+                            &ext_without_dot,
                             value,
                             name,
                             updated_paths.join(", ")
                         );
                     }
                     None => {
-                        extensions_to_language.insert(ext.clone(), name.to_string());
+                        extensions_to_language
+                            .insert(ext_without_dot.to_string(), name.to_string());
                     }
                     _ => (),
                 }

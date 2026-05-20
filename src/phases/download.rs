@@ -798,13 +798,17 @@ fn download_repo(
     // Remove all files that do not contain the keywords.
     // Repeat the process for every extension.
     for (ext, lang) in keywords_files.extensions_to_language.iter() {
+        let extension_pattern = format!(".{ext}");
         let file_list: Vec<PathBuf> = WalkDir::new(project_path)
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
             .filter(|e| {
                 let path = e.path();
-                path.extension().is_some() && path.to_str().is_some_and(|s| s.ends_with(ext))
+                path.extension().is_some()
+                    && path
+                        .to_str()
+                        .is_some_and(|s| s.ends_with(extension_pattern.as_str()))
             })
             .map(|e| e.into_path())
             .collect();

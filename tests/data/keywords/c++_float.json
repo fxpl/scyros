@@ -3,7 +3,8 @@
         {
             "name": "c++",
             "extensions" : [
-                "cpp"
+                "cpp",
+                "cc"
             ],
             "keywords" : []
         }

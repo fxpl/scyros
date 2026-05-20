@@ -1,3 +1,4 @@
 name,language,loc,words,tests/data/keywords/fp_types.json,tests/data/keywords/fp_transcendental.json,tests/data/keywords/fp_others.json,tests/data/keywords/std_math.json
 tests/data/phases/download/local_repo/tuto.c,c,21,60,1,0,5,1
 tests/data/phases/download/local_repo/tuto.c++,c++,6,16,0,1,0,2
+tests/data/phases/download/local_repo/test.cc,c++,6,15,1,0,0,0
