@@ -132,22 +132,70 @@ mod tests {
     use super::*;
     use crate::utils::logger::test_logger;
 
-    const TEST_DATA: &str = "tests/data/phases/duplicate_ids/";
+    const INPUT: &str = "tests/data/phases/duplicate_ids/duplicate_ids.csv";
+    const EXPECTED: &str = "tests/data/phases/duplicate_ids/duplicate_ids.csv.unique.csv.expected";
 
     #[test]
     fn test_duplicate_ids() -> Result<()> {
-        let input_path = format!("{TEST_DATA}/duplicate_ids.csv");
-        let default_output_path = format!("{input_path}.unique.csv");
+        let output = "tests/data/phases/duplicate_ids/out_dedup.csv";
+        delete_file(output, true)?;
+        run(INPUT, Some(output), "id", false, false, test_logger())?;
 
-        delete_file(&default_output_path, true)?;
-        run(&input_path, None, "id", false, false, test_logger())?;
-
-        let expected_output_path = format!("{default_output_path}.expected");
-        let expected_df = open_csv(&expected_output_path, None, None)?;
-        let output_df = open_csv(&default_output_path, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None)?;
+        let output_df = open_csv(output, None, None)?;
 
         assert_eq!(expected_df, output_df);
 
-        delete_file(&default_output_path, false)
+        delete_file(output, false)
+    }
+
+    #[test]
+    fn missing_input_duplicate_ids() {
+        assert!(run("nonexistent.csv", None, "id", false, false, test_logger()).is_err());
+    }
+
+    #[test]
+    fn output_exists_no_force_duplicate_ids() -> Result<()> {
+        let output = "tests/data/phases/duplicate_ids/out_no_force.csv";
+        write_file(output, b"")?;
+        let result = run(INPUT, Some(output), "id", false, false, test_logger());
+        delete_file(output, false)?;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn force_overwrites_duplicate_ids() -> Result<()> {
+        let output = "tests/data/phases/duplicate_ids/out_force.csv";
+        write_file(output, b"")?;
+        run(INPUT, Some(output), "id", true, false, test_logger())?;
+        let expected_df = open_csv(EXPECTED, None, None)?;
+        let output_df = open_csv(output, None, None)?;
+        assert_eq!(expected_df, output_df);
+        delete_file(output, false)
+    }
+
+    #[test]
+    fn no_output_duplicate_ids() -> Result<()> {
+        let output = "tests/data/phases/duplicate_ids/out_no_output.csv";
+        run(INPUT, Some(output), "id", false, true, test_logger())?;
+        assert!(!std::path::Path::new(output).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_column_duplicate_ids() -> Result<()> {
+        let output = "tests/data/phases/duplicate_ids/out_wrong_col.csv";
+        let result = run(
+            INPUT,
+            Some(output),
+            "nonexistent_col",
+            false,
+            false,
+            test_logger(),
+        );
+        delete_file(output, true)?;
+        assert!(result.is_err());
+        Ok(())
     }
 }

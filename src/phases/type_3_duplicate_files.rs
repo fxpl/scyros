@@ -389,7 +389,7 @@ fn index_builder(
         index_progress.inc(1);
         match load_file(path, 1024 * 1024 * 1024) {
             Ok(Ok(function_code)) => {
-                let local_bow = word_matcher.bag_of_words(&function_code.to_ascii_lowercase());
+                let local_bow = word_matcher.bag_of_words(&function_code, true);
                 let mut vectored_bow = local_bow.vectorize();
                 vectored_bow.sort_by_key(|(token, _)| {
                     token_rankings
@@ -504,7 +504,7 @@ fn detect_clones(
         // info!("Path: {}, Words: {}", path, origin_word_count);
         match load_file(path, 1024 * 1024 * 1024) {
             Ok(Ok(function_code)) => {
-                let local_bow = word_matcher.bag_of_words(&function_code.to_ascii_lowercase());
+                let local_bow = word_matcher.bag_of_words(&function_code, true);
                 let mut origin_vectored_bow = local_bow.vectorize();
                 origin_vectored_bow.sort_by_key(|(token, _)| {
                     token_rankings
@@ -717,7 +717,7 @@ fn verify_candidates(
                 // Handle successful file load
                 // load function, sort tokens by global frequency, calculate similarity, if above threshold add to clone map
                 debug!("Candidate loaded: {}, length: {}", path, length);
-                let candidate_bow = word_matcher.bag_of_words(&candidate_code.to_ascii_lowercase());
+                let candidate_bow = word_matcher.bag_of_words(&candidate_code, true);
                 let mut vectored_candidate_bow = candidate_bow.vectorize();
                 vectored_candidate_bow.sort_by_key(|(token, _)| {
                     token_rankings

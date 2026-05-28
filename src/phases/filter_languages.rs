@@ -237,32 +237,62 @@ mod tests {
         Ok(())
     }
 
-    const TEST_DATA: &str = "tests/data/phases/filter_languages";
+    const INPUT: &str = "tests/data/phases/filter_languages/filter_languages.csv";
+    const LANGS: &str = "tests/data/keywords/scala_float.json";
+    const EXPECTED: &str =
+        "tests/data/phases/filter_languages/filter_languages.csv.filtered_lang.csv.expected";
 
     #[test]
     fn test_filter_languages() -> Result<()> {
-        let input_path = format!("{TEST_DATA}/filter_languages.csv");
-        let default_output_path = format!("{input_path}.filtered_lang.csv");
-        let language_path = "tests/data/keywords/scala_float.json";
+        let output = "tests/data/phases/filter_languages/out_filter.csv";
+        delete_file(output, true)?;
+        run(INPUT, Some(output), LANGS, false, false, test_logger())?;
 
-        delete_file(&default_output_path, true)?;
-        run(
-            &input_path,
-            None,
-            language_path,
-            false,
-            false,
-            test_logger(),
-        )?;
-
-        let expected_df = open_csv(&format!("{default_output_path}.expected"), None, None)?;
-        let output_df = open_csv(&default_output_path, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None)?;
+        let output_df = open_csv(output, None, None)?;
 
         ensure!(
             expected_df.equals(&output_df),
             "Filtered DataFrame does not match expected result."
         );
 
-        delete_file(&default_output_path, false)
+        delete_file(output, false)
+    }
+
+    #[test]
+    fn missing_input_filter_languages() {
+        assert!(run("nonexistent.csv", None, LANGS, false, false, test_logger()).is_err());
+    }
+
+    #[test]
+    fn output_exists_no_force_filter_languages() -> Result<()> {
+        let output = "tests/data/phases/filter_languages/out_no_force.csv";
+        write_file(output, b"")?;
+        let result = run(INPUT, Some(output), LANGS, false, false, test_logger());
+        delete_file(output, false)?;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn force_overwrites_filter_languages() -> Result<()> {
+        let output = "tests/data/phases/filter_languages/out_force.csv";
+        write_file(output, b"")?;
+        run(INPUT, Some(output), LANGS, true, false, test_logger())?;
+        let expected_df = open_csv(EXPECTED, None, None)?;
+        let output_df = open_csv(output, None, None)?;
+        ensure!(
+            expected_df.equals(&output_df),
+            "Overwritten output does not match expected."
+        );
+        delete_file(output, false)
+    }
+
+    #[test]
+    fn no_output_filter_languages() -> Result<()> {
+        let output = "tests/data/phases/filter_languages/out_no_output.csv";
+        run(INPUT, Some(output), LANGS, false, true, test_logger())?;
+        assert!(!std::path::Path::new(output).exists());
+        Ok(())
     }
 }

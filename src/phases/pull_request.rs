@@ -117,6 +117,7 @@ pub fn cli() -> Command {
                 .value_name("NUMBER_OF_PROJECTS")
                 .help("Number of projects to sample from the input file. \
                        If not specified, all remaining projects in the input file are used.")
+                .value_parser(clap::value_parser!(usize))
         )
 }
 
@@ -683,6 +684,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_pr_empty_output() -> Result<()> {
         test_phase_pull_request(
             &format!("{TEST_DATA}/repos.csv"),
@@ -696,6 +698,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_pr_with_output() -> Result<()> {
         let input_path: String = format!("{TEST_DATA}/repos2.csv");
         std::fs::copy(
@@ -711,6 +714,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_pr_with_partial_output() -> Result<()> {
         let input_path: String = format!("{TEST_DATA}/repos3.csv");
         let output_path: String = format!("{TEST_DATA}/repos_partial_output.csv.temp");
@@ -729,6 +733,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn test_language_scraper_inexistent() -> Result<()> {
         test_phase_pull_request(
             &format!("{TEST_DATA}/invalid.csv"),

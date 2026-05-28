@@ -178,7 +178,9 @@ pub fn run(
                             let hash = if similarity == "exact" {
                                 blake3::hash(&file_content)
                             } else {
-                                blake3::hash(&word_matcher.bag_of_words(&file_content).serialize())
+                                blake3::hash(
+                                    &word_matcher.bag_of_words(&file_content, true).serialize(),
+                                )
                             };
                             let _ = my_tx.send(Some(Ok((idx, name.to_owned(), Some(hash)))));
                         }
@@ -267,7 +269,7 @@ pub fn run(
             hash_map.values().map(|v| (v.1.clone(), v.2)).unzip();
 
         let clusters = DataFrame::new(vec![
-            polars::prelude::Column::new("name".into(), clusters_column.0),
+            polars::prelude::Column::new(input_header.into(), clusters_column.0),
             polars::prelude::Column::new("count".into(), clusters_column.1),
         ])?;
 
@@ -277,7 +279,7 @@ pub fn run(
             .unzip();
 
         let mut map_df = DataFrame::new(vec![
-            polars::prelude::Column::new("name".into(), map_columns.0),
+            polars::prelude::Column::new(input_header.into(), map_columns.0),
             polars::prelude::Column::new("original".into(), map_columns.1),
         ])?;
 
@@ -297,8 +299,8 @@ pub fn run(
 
         let mut output_df = files.join(
             &clusters,
-            ["name"],
-            ["name"],
+            [input_header],
+            [input_header],
             polars::prelude::JoinType::Inner.into(),
             None,
         )?;
@@ -365,5 +367,87 @@ mod tests {
     fn exact_files() -> Result<()> {
         test_duplicate_files(&format!("{TEST_DATA}/duplicate_files.csv"), "exact")?;
         test_duplicate_files(&format!("{TEST_DATA}/duplicate_files_bow.csv"), "bow")
+    }
+
+    #[test]
+    fn missing_input_duplicate_files() {
+        assert!(run(
+            "nonexistent.csv",
+            None,
+            None,
+            false,
+            "exact",
+            1,
+            "name",
+            test_logger()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn output_exists_no_force_duplicate_files() -> Result<()> {
+        let input = format!("{TEST_DATA}/duplicate_files.csv");
+        let output = format!("{TEST_DATA}/out_no_force.csv");
+        let map = format!("{TEST_DATA}/map_no_force.csv");
+        write_file(&output, b"")?;
+        let result = run(
+            &input,
+            Some(&output),
+            Some(&map),
+            false,
+            "exact",
+            1,
+            "name",
+            test_logger(),
+        );
+        delete_file(&output, false)?;
+        delete_file(&map, true)?;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn force_overwrites_duplicate_files() -> Result<()> {
+        let input = format!("{TEST_DATA}/duplicate_files.csv");
+        let output = format!("{TEST_DATA}/out_force.csv");
+        let map = format!("{TEST_DATA}/map_force.csv");
+        write_file(&output, b"")?;
+        delete_file(&map, true)?;
+        run(
+            &input,
+            Some(&output),
+            Some(&map),
+            true,
+            "exact",
+            1,
+            "name",
+            test_logger(),
+        )?;
+        let expected_df = open_csv(&format!("{input}.unique.csv.expected"), None, None)?;
+        let output_df = open_csv(&output, None, None)?;
+        let sorted_expected = expected_df.sort(vec!["name"], SortMultipleOptions::new())?;
+        let sorted_output = output_df.sort(vec!["name"], SortMultipleOptions::new())?;
+        assert_eq!(sorted_expected, sorted_output);
+        delete_file(&output, false)?;
+        delete_file(&map, false)
+    }
+
+    #[test]
+    fn wrong_header_duplicate_files() -> Result<()> {
+        let input = format!("{TEST_DATA}/duplicate_files.csv");
+        let output = format!("{TEST_DATA}/out_wrong_header.csv");
+        let result = run(
+            &input,
+            Some(&output),
+            None,
+            false,
+            "exact",
+            1,
+            "wrongcol",
+            test_logger(),
+        );
+        delete_file(&output, true)?;
+        assert!(result.is_err());
+        Ok(())
     }
 }

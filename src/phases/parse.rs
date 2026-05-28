@@ -145,7 +145,22 @@ pub fn cli() -> Command {
             .long("ignore-comments")
             .help("Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.")
             .default_value("false")
-            .action(ArgAction::SetTrue),
+            .action(ArgAction::SetTrue)
+            .conflicts_with("count"),
+        )
+        .arg(
+            Arg::new("lambdas")
+            .long("lambdas")
+            .help("Whether to extract lambda functions as well. By default, only named functions are extracted.")
+            .default_value("false")
+            .action(ArgAction::SetTrue)
+        )
+        .arg(
+            Arg::new("count")
+                .long("count")
+                .alias("no-output")
+                .help("Compute statistics on the functions without writing the functions to files.") 
+                .action(ArgAction::SetTrue)
         )
 }
 
@@ -167,6 +182,8 @@ pub fn cli() -> Command {
 /// * `seed` - The seed used to shuffle the input file.
 /// * `force` - Whether to override the output file if it already exists.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions.
+/// * `lambdas` - Whether to extract lambda functions as well.
+/// * `write_out` - Whether to write the extracted functions to files. If false, only the statistics are computed and written to the output file.
 /// * `logger` - The logger to use to display information about the progress of the program.
 pub fn run(
     input_path: &str,
@@ -180,6 +197,8 @@ pub fn run(
     seed: u64,
     force: bool,
     ignore_comments: bool,
+    lambdas: bool,
+    write_out: bool,
     logger: &Logger,
 ) -> Result<()> {
     let supported_languages: HashSet<&'static str> = vec![
@@ -375,6 +394,8 @@ pub fn run(
                                 &keyword_files,
                                 fail_policy,
                                 ignore_comments,
+                                lambdas,
+                                write_out,
                                 &word_counter,
                             ) {
                                 Ok(s) => {
@@ -446,6 +467,8 @@ pub fn run(
 /// * `keywords_files` - The files containing the list of keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
+/// * `lambdas` - Whether to extract lambda functions as well.
+/// * `write_out` - Whether to write the extracted functions to files. If false, only the statistics are computed and written to the output file.
 /// * `word_counter` - The matcher to use to count the words in the functions.
 /// # Returns
 ///
@@ -466,6 +489,8 @@ fn analyze_file(
     keywords_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
+    lambdas: bool,
+    write_out: bool,
     word_counter: &Matcher,
 ) -> Result<(String, Option<String>)> {
     let grammar = language_to_grammar(language)
@@ -477,7 +502,9 @@ fn analyze_file(
         Ok(source_code) => {
             // Creates a folder to store the functions of the file
             let target_folder: String = format!("{path}.functions");
-            create_dir(&target_folder)?;
+            if write_out {
+                create_dir(&target_folder)?;
+            }
 
             // Parses the source code of the file
             let tree: Tree = parser
@@ -496,13 +523,15 @@ fn analyze_file(
                     extract_functions(
                         project_id,
                         &root,
-                        &target_folder,
+                        path,
                         language,
                         &grammar,
                         &source_code,
                         keywords_files,
                         fail_policy,
                         ignore_comments,
+                        lambdas,
+                        write_out,
                         word_counter,
                         &mut parser,
                     )?;
@@ -580,14 +609,16 @@ fn file_error_row(
 ///
 /// * project_id - The id of the project to which the file belongs.
 /// * `root` - The root node of the subtree.
-/// * `target_folder` - The folder where the functions are stored.
+/// * `file_path` - The path to the file where the functions are extracted from.
 /// * `language` - The language of the source file.
 /// * `grammar` - The grammar of the language.
 /// * `source` - The source code of the source file.
 /// * `keyword_files` - The keyword files containing the keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
+/// * `lambdas` - Whether to extract lambda functions as well.
 /// * `word_counter` - The matcher to use to count the words in the functions.
+/// * `write_out` - Whether to write the extracted functions to files.
 /// * `parser` - The parser to use to parse the functions.
 ///
 /// # Returns
@@ -597,16 +628,20 @@ fn file_error_row(
 fn extract_functions(
     project_id: u32,
     root: &Node,
-    target_folder: &str,
+    file_path: &str,
     language: &str,
     grammar: &Grammar,
     source: &[u8],
     keyword_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
+    lambdas: bool,
+    write_out: bool,
     word_counter: &Matcher,
     parser: &mut Parser,
 ) -> Result<(String, usize, usize, Vec<usize>), Error> {
+    let target_folder = format!("{file_path}.functions");
+
     // Initializes the builder to store the statistics of the functions in the file
     let mut builder: String = String::new();
     let mut functions: usize = 0;
@@ -619,7 +654,7 @@ fn extract_functions(
     let mut cursor = root.walk();
 
     while let Some(node) = call_stack.pop() {
-        if grammar.function_nodes.contains(node.kind()) {
+        if grammar.function_nodes(lambdas).contains(node.kind()) {
             let has_error: bool = node.has_error();
 
             if (has_error && fail_policy == "skip-function")
@@ -654,7 +689,7 @@ fn extract_functions(
                 let tree_without_comments: Tree = parser
                     .parse(function_code_with_strings, None)
                     .with_context(|| {
-                        format!("Error parsing code for function {target_folder}/{functions}")
+                        format!("Error parsing code for function at line {}, column {} in file {file_path}", function_position.0, function_position.1)
                     })?;
 
                 // Remove string literals from the function code
@@ -668,19 +703,24 @@ fn extract_functions(
                     keyword_files.count_matches_in_text(language, function_code);
 
                 if matches.iter().any(|x| *x > 0) {
-                    let function_path: String = format!(
-                        "{}/{}-{}",
-                        target_folder, function_position.0, function_position.1
-                    );
-
-                    std::fs::write(
-                        &function_path,
-                        if ignore_comments {
-                            function_code_with_strings
-                        } else {
-                            function_source_code
-                        },
-                    )?;
+                    let function_path: String = if write_out {
+                        format!(
+                            "{}/{}-{}",
+                            target_folder, function_position.0, function_position.1
+                        )
+                    } else {
+                        file_path.to_string()
+                    };
+                    if write_out {
+                        std::fs::write(
+                            &function_path,
+                            if ignore_comments {
+                                function_code_with_strings
+                            } else {
+                                function_source_code
+                            },
+                        )?;
+                    }
 
                     // Count the number of loops, conditionals and parameters if the function
                     let (loops, loop_nesting) = count_nodes_of_kind(&node, &grammar.loop_nodes);
@@ -820,8 +860,11 @@ struct Grammar {
     /// Nodes representing conditional statements.
     cond_nodes: HashSet<&'static str>,
 
-    /// Nodes representing functions or methods.
-    function_nodes: HashSet<&'static str>,
+    /// Nodes representing named functions or methods.
+    named_function_nodes: HashSet<&'static str>,
+
+    /// Nodes representing anonymours functions or lambdas.
+    anon_function_nodes: HashSet<&'static str>,
 
     /// Nodes representing function or method calls.
     function_call_nodes: HashSet<&'static str>,
@@ -842,6 +885,20 @@ struct Grammar {
     name_field: &'static str,
 }
 
+impl Grammar {
+    /// Returns the set of nodes representing functions or methods in the grammar.
+    ///
+    /// # Arguments
+    /// * `with_lambdas` - Whether to include lambda functions in the returned set. If false, only named functions are included.
+    fn function_nodes(&self, with_lambdas: bool) -> HashSet<&'static str> {
+        let mut functions = self.named_function_nodes.clone();
+        if with_lambdas {
+            functions.extend(self.anon_function_nodes.clone());
+        }
+        functions
+    }
+}
+
 /// Returns the grammar for the C programming language.
 fn c_grammar() -> Grammar {
     Grammar {
@@ -854,7 +911,8 @@ fn c_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition"].into_iter().collect(),
+        named_function_nodes: vec!["function_definition"].into_iter().collect(),
+        anon_function_nodes: HashSet::new(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration"].into_iter().collect(),
@@ -876,9 +934,10 @@ fn cpp_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition", "template_declaration"]
+        named_function_nodes: vec!["function_definition", "template_declaration"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration", "variadic_parameter_declaration"]
@@ -908,13 +967,16 @@ fn cs_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec![
+        named_function_nodes: vec![
             "method_declaration",
             "constructor_declaration",
             "operator_declaration",
         ]
         .into_iter()
         .collect(),
+        anon_function_nodes: vec!["lambda_expression", "anonymous_method_expression"]
+            .into_iter()
+            .collect(),
         function_call_nodes: vec!["invocation_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
@@ -936,9 +998,10 @@ fn ts_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "ternary_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_declaration", "method_definition"]
+        named_function_nodes: vec!["function_declaration", "method_definition"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["arrow_function"].into_iter().collect(),
         function_call_nodes: vec![
             "new_expression",
             "call_expression",
@@ -972,9 +1035,10 @@ fn go_grammar() -> Grammar {
         ]
         .into_iter()
         .collect(),
-        function_nodes: vec!["function_declaration", "method_declaration"]
+        named_function_nodes: vec!["function_declaration", "method_declaration"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["func_literal"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration", "variadic_parameter_declaration"]
@@ -1003,9 +1067,10 @@ fn java_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "ternary_expression", "switch_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["method_declaration", "compact_constructor_declaration"]
+        named_function_nodes: vec!["method_declaration", "compact_constructor_declaration"]
             .into_iter()
             .collect(),
+        anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["method_invocation", "explicit_constructor_invocation"]
             .into_iter()
             .collect(),
@@ -1029,7 +1094,8 @@ fn scala_grammar() -> Grammar {
         cond_nodes: vec!["if_expression", "match_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition"].into_iter().collect(),
+        named_function_nodes: vec!["function_definition"].into_iter().collect(),
+        anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
@@ -1063,7 +1129,8 @@ fn fortran_grammar() -> Grammar {
         ]
         .into_iter()
         .collect(),
-        function_nodes: vec!["function", "subroutine"].into_iter().collect(),
+        named_function_nodes: vec!["function", "subroutine"].into_iter().collect(),
+        anon_function_nodes: HashSet::new(),
         function_call_nodes: vec!["call_expression", "subroutine_call"]
             .into_iter()
             .collect(),
@@ -1087,7 +1154,8 @@ fn python_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "conditional_expression", "match_statement"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_definition", "lambda"].into_iter().collect(),
+        named_function_nodes: vec!["function_definition"].into_iter().collect(),
+        anon_function_nodes: vec!["lambda"].into_iter().collect(),
         function_call_nodes: vec!["call"].into_iter().collect(),
         param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
@@ -1111,9 +1179,8 @@ fn rust_grammar() -> Grammar {
         cond_nodes: vec!["if_expression", "let_condition", "match_expression"]
             .into_iter()
             .collect(),
-        function_nodes: vec!["function_item", "closure_expression"]
-            .into_iter()
-            .collect(),
+        named_function_nodes: vec!["function_item"].into_iter().collect(),
+        anon_function_nodes: vec!["closure_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameters", "closure_parameters"]
             .into_iter()
@@ -1407,6 +1474,8 @@ mod tests {
         keywords: &[&str],
         languages: Option<Vec<&str>>,
         ignore_comments: bool,
+        lambdas: bool,
+        write_out: bool,
         should_pass: bool,
     ) -> Result<()> {
         let input_df = open_csv(input_file_path, None, None)?;
@@ -1422,8 +1491,10 @@ mod tests {
         let logs_file_path = format!("{input_file_path}.function_logs.csv");
         delete_file(&logs_file_path, true)?;
 
-        for path in input_df.iter() {
-            delete_dir(format!("{path}.functions"), true)?;
+        if write_out {
+            for path in input_df.iter() {
+                delete_dir(format!("{path}.functions"), true)?;
+            }
         }
 
         if should_pass {
@@ -1439,6 +1510,8 @@ mod tests {
                 0,
                 false,
                 ignore_comments,
+                lambdas,
+                write_out,
                 test_logger(),
             )?;
 
@@ -1470,36 +1543,50 @@ mod tests {
                 has_column(&output_df, "path"),
                 "Output dataframe must have a 'path' column"
             );
-            let sorted_output_df = output_df.sort(vec!["path"], SortMultipleOptions::new())?;
 
-            let expected_df = open_csv(&format!("{output_file_path}.expected"), None, None)?;
-            ensure!(
-                has_column(&expected_df, "path"),
-                "Expected dataframe must have a 'path' column"
-            );
-            let sorted_expected_df = expected_df.sort(vec!["path"], SortMultipleOptions::new())?;
-
-            assert_eq!(sorted_expected_df, sorted_output_df);
-
-            for path in dataframes::str(&sorted_output_df, "path")? {
-                let path = Path::new(path);
-                ensure!(path.exists(), "Parsed file not found: {}", path.display());
-                let expected_path_name = format!(
-                    "{}.expected/{}",
-                    path.parent()
-                        .with_context(|| "Failed to get parent directory")?
-                        .to_str()
-                        .with_context(|| "Failed to convert parent directory to string")?,
-                    path.file_name()
-                        .with_context(|| "Failed to get file name")?
-                        .to_str()
-                        .with_context(|| "Failed to convert file name to string")?
+            if write_out {
+                let sorted_output_df = output_df.sort(vec!["path"], SortMultipleOptions::new())?;
+                let expected_df = open_csv(&format!("{output_file_path}.expected"), None, None)?;
+                ensure!(
+                    has_column(&expected_df, "path"),
+                    "Expected dataframe must have a 'path' column"
                 );
-                let expected_path = Path::new(&expected_path_name);
-                assert_eq!(
-                    std::fs::read_to_string(path)?,
-                    std::fs::read_to_string(expected_path)?
+                let sorted_expected_df =
+                    expected_df.sort(vec!["path"], SortMultipleOptions::new())?;
+                assert_eq!(sorted_expected_df, sorted_output_df);
+
+                for path in dataframes::str(&sorted_output_df, "path")? {
+                    let path = Path::new(path);
+                    ensure!(path.exists(), "Parsed file not found: {}", path.display());
+                    let expected_path_name = format!(
+                        "{}.expected/{}",
+                        path.parent()
+                            .with_context(|| "Failed to get parent directory")?
+                            .to_str()
+                            .with_context(|| "Failed to convert parent directory to string")?,
+                        path.file_name()
+                            .with_context(|| "Failed to get file name")?
+                            .to_str()
+                            .with_context(|| "Failed to convert file name to string")?
+                    );
+                    let expected_path = Path::new(&expected_path_name);
+                    assert_eq!(
+                        std::fs::read_to_string(path)?,
+                        std::fs::read_to_string(expected_path)?
+                    );
+                }
+            } else {
+                let sorted_output_df =
+                    output_df.sort(vec!["path", "name"], SortMultipleOptions::new())?;
+                let expected_df =
+                    open_csv(&format!("{output_file_path}.count.expected"), None, None)?;
+                ensure!(
+                    has_column(&expected_df, "path"),
+                    "Expected dataframe must have a 'path' column"
                 );
+                let sorted_expected_df =
+                    expected_df.sort(vec!["path", "name"], SortMultipleOptions::new())?;
+                assert_eq!(sorted_expected_df, sorted_output_df);
             }
         } else {
             ensure!(run(
@@ -1514,6 +1601,8 @@ mod tests {
                 0,
                 false,
                 ignore_comments,
+                write_out,
+                lambdas,
                 test_logger()
             )
             .is_err());
@@ -1522,8 +1611,10 @@ mod tests {
         delete_file(&output_file_path, true)?;
         delete_file(&logs_file_path, true)?;
 
-        for path in input_df {
-            delete_dir(format!("{path}.functions"), true)?;
+        if write_out {
+            for path in input_df {
+                delete_dir(format!("{path}.functions"), true)?;
+            }
         }
         Ok(())
     }
@@ -1539,7 +1630,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/to_parse.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true, true)
     }
 
     #[test]
@@ -1552,7 +1643,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/parse_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true, true)
     }
 
     #[test]
@@ -1561,7 +1652,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/invalid.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true)
+        test_parse(&input_file_path, &keywords, None, false, true, true, true)
     }
 
     #[test]
@@ -1575,6 +1666,8 @@ mod tests {
             &keywords,
             Some(["javascript"].to_vec()),
             false,
+            true,
+            true,
             false,
         )
     }
@@ -1591,6 +1684,8 @@ mod tests {
             Some(["c"].to_vec()),
             false,
             true,
+            true,
+            true,
         )
     }
 
@@ -1604,6 +1699,19 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/fn_comments_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, true, true)
+        test_parse(&input_file_path, &keywords, None, true, true, true, true)
+    }
+
+    #[test]
+    fn parse_go_count() -> Result<()> {
+        let keywords = vec![
+            "tests/data/keywords/fp_types.json",
+            "tests/data/keywords/fp_transcendental.json",
+            "tests/data/keywords/fp_others.json",
+        ];
+
+        let input_file_path = format!("{TEST_DATA}/parse_go_count.csv");
+
+        test_parse(&input_file_path, &keywords, None, false, true, false, true)
     }
 }

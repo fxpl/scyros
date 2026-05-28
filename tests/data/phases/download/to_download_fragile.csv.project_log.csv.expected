@@ -1,0 +1,2 @@
+id,path,name,latest_commit,files,loc,words,files_with_kw,files_with_tests/data/keywords/rust.json,loc_with_kw,loc_of_files_with_tests/data/keywords/rust.json,words_with_kw,words_of_files_with_tests/data/keywords/rust.json,tests/data/keywords/rust.json
+228916872,target/tests/github_repos/0/228916872-62e3ae285cfc029ab0954a2d485a825546b112c9,minzoovv/my-rust-taste,62e3ae285cfc029ab0954a2d485a825546b112c9,25,544,1454,25,25,544,544,1454,1454,1454

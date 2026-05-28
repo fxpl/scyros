@@ -15,11 +15,11 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use scyros::phases::{
-    download, duplicate_files, duplicate_ids, extract_benchmarks, filter_languages,
-    filter_metadata, forks, ids, languages, metadata, parse, pull_request, tokenizer,
-    type_3_duplicate_files,
+    download, duplicate_files, duplicate_ids, filter_languages, filter_metadata, forks, ids,
+    languages, metadata, parse, pull_request,
 };
 use scyros::utils::logger::Logger;
+use std::io::IsTerminal as _;
 use tracing::{error, info};
 
 fn cli() -> Command {
@@ -37,9 +37,7 @@ fn cli() -> Command {
         .subcommand(download::cli())
         .subcommand(duplicate_files::cli())
         .subcommand(parse::cli())
-        .subcommand(extract_benchmarks::cli())
-        .subcommand(tokenizer::cli())
-        .subcommand(type_3_duplicate_files::cli())
+        // .subcommand(extract_benchmarks::cli())
         .arg(
             Arg::new("debug")
                 .long("debug")
@@ -207,22 +205,24 @@ fn main() {
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("ignore-comments"),
+                                    cli_subargs.get_flag("lambdas"),
+                                    cli_subargs.get_flag("count"),
                                     &logger,
                                 )
                             }
-                            else if subcommand == extract_benchmarks::cli().get_name() {
-                                extract_benchmarks::run(
-                                    cli_subargs.get_one::<String>("input").unwrap(),
-                                    cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
-                                    cli_subargs.get_one::<String>("dest").unwrap(),
-                                    cli_subargs.get_one::<String>("tokens").unwrap(),
-                                    *cli_subargs.get_one::<u64>("seed").unwrap(),
-                                    cli_subargs.get_flag("force"),
-                                    *cli_subargs.get_one::<usize>("threads").unwrap(),
-                                    *cli_subargs.get_one::<u64>("timeout").unwrap(),
-                                    &logger,
-                                )
-                            }
+                            // else if subcommand == extract_benchmarks::cli().get_name() {
+                            //     extract_benchmarks::run(
+                            //         cli_subargs.get_one::<String>("input").unwrap(),
+                            //         cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                            //         cli_subargs.get_one::<String>("dest").unwrap(),
+                            //         cli_subargs.get_one::<String>("tokens").unwrap(),
+                            //         *cli_subargs.get_one::<u64>("seed").unwrap(),
+                            //         cli_subargs.get_flag("force"),
+                            //         *cli_subargs.get_one::<usize>("threads").unwrap(),
+                            //         *cli_subargs.get_one::<u64>("timeout").unwrap(),
+                            //         &logger,
+                            //     )
+                            // }
                             else if subcommand == pull_request::cli().get_name() {
                                 pull_request::run(
                                     cli_subargs.get_one::<String>("input").unwrap(),
@@ -254,32 +254,32 @@ fn main() {
                                     &mut logger,
                                 )
                             } */
-                            else if subcommand == tokenizer::cli().get_name() {
-                                tokenizer::run(
-                                    cli_subargs.get_one::<String>("input").unwrap(),
-                                    //cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
-                                    //cli_subargs.get_one::<String>("language").unwrap(),
-                                    cli_subargs.get_one::<String>("example_word").unwrap(),
-                                    &logger,
-                                )
-                            }
-                            else if subcommand == type_3_duplicate_files::cli().get_name() {
-                                type_3_duplicate_files::run(
-                                    cli_subargs.get_one::<String>("input").unwrap(),
-                                    cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
-                                    cli_subargs.get_one::<String>("map").map(|x| x.as_str()),
-                                    cli_subargs.get_one::<String>("logs").map(|x| x.as_str()),
-                                    /* languages */
-                                    cli_subargs.get_one::<String>("language").map(|s| s.as_str()),
-                                    *cli_subargs.get_one::<usize>("threads").unwrap(),
-                                    *cli_subargs.get_one::<usize>("p_prefix").unwrap(),
-                                    *cli_subargs.get_one::<f64>("threshold").unwrap(),
-                                    cli_subargs.get_one::<String>("example_word"),
-                                    cli_subargs.get_flag("force"),
-                                    cli_subargs.get_one::<String>("header").unwrap(),
-                                    &logger,
-                                )
-                            }
+                            // else if subcommand == tokenizer::cli().get_name() {
+                            //     tokenizer::run(
+                            //         cli_subargs.get_one::<String>("input").unwrap(),
+                            //         //cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                            //         //cli_subargs.get_one::<String>("language").unwrap(),
+                            //         cli_subargs.get_one::<String>("example_word").unwrap(),
+                            //         &logger,
+                            //     )
+                            // }
+                            // else if subcommand == type_3_duplicate_files::cli().get_name() {
+                            //     type_3_duplicate_files::run(
+                            //         cli_subargs.get_one::<String>("input").unwrap(),
+                            //         cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                            //         cli_subargs.get_one::<String>("map").map(|x| x.as_str()),
+                            //         cli_subargs.get_one::<String>("logs").map(|x| x.as_str()),
+                            //         /* languages */
+                            //         cli_subargs.get_one::<String>("language").map(|s| s.as_str()),
+                            //         *cli_subargs.get_one::<usize>("threads").unwrap(),
+                            //         *cli_subargs.get_one::<usize>("p_prefix").unwrap(),
+                            //         *cli_subargs.get_one::<f64>("threshold").unwrap(),
+                            //         cli_subargs.get_one::<String>("example_word"),
+                            //         cli_subargs.get_flag("force"),
+                            //         cli_subargs.get_one::<String>("header").unwrap(),
+                            //         &logger,
+                            //     )
+                            // }
                             else {
                                 Err(anyhow!("The subcommand {subcommand} is not available. Run the program with the --help flag to see the list of subcommands"))
                             }
@@ -291,11 +291,18 @@ fn main() {
     match res {
         Ok(_) => info!("Operation completed successfully."),
         Err(e) => {
-            if cli_args.get_flag("debug") {
-                error!("{:?}", e);
+            let msg = if cli_args.get_flag("debug") {
+                format!("{:?}", e)
             } else {
-                error!("{}", e);
+                format!("{}", e)
+            };
+            error!("{}", msg);
+            // indicatif suppresses output when stderr is not a TTY (pipes, scripts, tests),
+            // so also write directly to stderr in that case.
+            if !std::io::stderr().is_terminal() {
+                eprintln!("{}", msg);
             }
+            std::process::exit(1);
         }
     }
 }

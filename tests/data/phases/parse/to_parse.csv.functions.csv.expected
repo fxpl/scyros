@@ -19,6 +19,7 @@ id,path,name,position,language,loc,words,tests/data/keywords/fp_types.json,tests
 4,tests/data/phases/parse/several_functions.rs.functions/94-5,special_values_demo,94:5,rust,11,20,6,0,2,0,0,0,0,0,0,0,0,0,1,none
 4,tests/data/phases/parse/several_functions.rs.functions/109-1,main,109:1,rust,26,78,3,0,2,0,0,0,0,0,5,4,0,0,0,none
 1,tests/data/phases/parse/several_functions.cpp.functions/20-5,cube,20:5,c++,3,9,2,0,0,0,0,0,0,0,0,0,1,1,1,none
+1,tests/data/phases/parse/several_functions.cpp.functions/28-23,,28:23,c++,3,7,2,1,0,0,0,0,0,0,1,1,1,1,1,none
 1,tests/data/phases/parse/several_functions.cpp.functions/41-1,roundToNearest,41:1,c++,11,32,2,0,1,0,0,0,1,1,3,1,1,1,1,none
 1,tests/data/phases/parse/several_functions.cpp.functions/54-1,sum,54:1,c++,4,9,1,0,0,0,0,0,0,0,0,0,1,0,1,none
 1,tests/data/phases/parse/several_functions.cpp.functions/61-5,print,61:5,c++,3,12,1,0,0,0,0,0,0,0,0,0,1,1,0,none

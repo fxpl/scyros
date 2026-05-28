@@ -180,8 +180,9 @@ impl Matcher {
     /// # Arguments
     ///
     /// * `text` - The text to analyze.
-    pub fn bag_of_words(&self, text: &[u8]) -> Bow {
-        let mut bow: Bow = Bow::new();
+    /// * `to_lower_case` - Whether to convert the words to lower case before adding them to the bag of words.
+    pub fn bag_of_words(&self, text: &[u8], to_lower_case: bool) -> Bow {
+        let mut bow: Bow = Bow::new(to_lower_case);
         if let Some(re) = &self.regex {
             bow.add_all(re.find_iter(text).map(|w| w.as_bytes()));
         }
@@ -373,18 +374,20 @@ impl KeywordFiles {
             };
 
             for ext in extensions {
-                match extensions_to_language.get(&ext) {
+                let ext_without_dot: &str = ext.trim_start_matches('.');
+                match extensions_to_language.get(ext_without_dot) {
                     Some(value) if value != name => {
                         bail!(
                             "Extension {} is associated with both {} and {} when loading {}",
-                            &ext,
+                            &ext_without_dot,
                             value,
                             name,
                             updated_paths.join(", ")
                         );
                     }
                     None => {
-                        extensions_to_language.insert(ext.clone(), name.to_string());
+                        extensions_to_language
+                            .insert(ext_without_dot.to_string(), name.to_string());
                     }
                     _ => (),
                 }
@@ -399,8 +402,13 @@ impl KeywordFiles {
             .map(|json| json_to_set(json))
             .unwrap_or_default();
 
-        let file_matchers =
-            Matcher::keywords_matchers(&local_kw, &global_kw, false, true, self.regex_syntax)?;
+        let file_matchers = Matcher::keywords_matchers(
+            &local_kw,
+            &global_kw,
+            false,
+            !self.regex_syntax,
+            self.regex_syntax,
+        )?;
         let mut updated_matchers = self.matchers;
 
         for (lang, entry) in updated_matchers.iter_mut() {

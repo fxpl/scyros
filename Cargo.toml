@@ -1,6 +1,6 @@
 [package]
 name = "scyros"
-version = "0.3.1"
+version = "0.3.2"
 description = "A framework to design sound, reproducible and scalable mining repositories studies on GitHub."
 authors = ["Andrea Gilot <andrea.gilot@it.uu.se>"]
 edition = "2021"
@@ -30,6 +30,7 @@ byteorder = "1.3.4"
 chrono = "0.4.40"
 clang = { version = "2.0.0", default-features = false, features = ["runtime"] }
 clap = {version = "4.5.32", features=["derive","wrap_help"]}
+clap_complete = "4.6.3"
 crossbeam="0.7"
 crossbeam-channel="0.5.0"
 csv="1.1"
@@ -59,7 +60,7 @@ tree-sitter-go = "0.23.4"
 tree-sitter-scala = "0.24.0"
 tree-sitter-rust = "0.24.2"
 walkdir = "2.5.0"
-zip = "6.0.0"
+zip = "8.6.0"
 zip-extensions = "0.13.0"
 
 
@@ -80,6 +81,10 @@ too_many_arguments = "allow"
 [[bin]]
 name = "scyros"
 path = "src/bin/main.rs"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
 
 [dev-dependencies.cargo-husky]
 version = "1.5.0"

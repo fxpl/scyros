@@ -163,7 +163,7 @@ pub fn global_counter(input_file: &DataFrame) -> Result<Bow> {
     bow_progress.set_message("Building global bag-of-words...");
 
     let word_matcher: Matcher = Matcher::words_matcher();
-    let mut global_bow: Bow = Bow::new();
+    let mut global_bow: Bow = Bow::new(true);
 
     for row in paths_column.into_iter() {
         bow_progress.inc(1);
@@ -172,8 +172,7 @@ pub fn global_counter(input_file: &DataFrame) -> Result<Bow> {
                 //let function_code = std::fs::read_to_string(path)?;
                 match load_file(path, 1024 * 1024 * 1024) {
                     Ok(Ok(function_code)) => {
-                        let local_bow =
-                            word_matcher.bag_of_words(&function_code.to_ascii_lowercase());
+                        let local_bow = word_matcher.bag_of_words(&function_code, true);
                         global_bow.merge(local_bow);
                     }
                     Ok(Err(_e)) => {

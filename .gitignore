@@ -17,4 +17,4 @@ src/phases/alt_parse.rs //Got broken by refactoring but is not in use currently,
 *.zip
 *.tar.gz
 result/
-examples/
+.claude

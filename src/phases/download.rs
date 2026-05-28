@@ -36,7 +36,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use tracing::{debug, info};
 use walkdir::WalkDir;
-use zip_extensions::zip_extract::zip_extract;
+use zip::ZipArchive;
 
 use crate::utils::csv::*;
 use crate::utils::fs::*;
@@ -154,6 +154,7 @@ pub fn cli() -> Command {
                 .value_name("NUMBER_OF_PROJECTS")
                 .help("Number of projects to sample from the input file. \
                        If not specified, all remaining projects in the input file are used.")
+                .value_parser(clap::value_parser!(usize))
         )
         .arg(
             Arg::new("threads")
@@ -498,7 +499,7 @@ pub fn run(
                                     let path_opt = if skip {
                                         Some(project_path.clone())
                                     } else {
-                                        id_opt.map(|id| id.to_string())
+                                        None
                                     };
 
                                     if (!skip || Path::new(&project_path).exists())
@@ -739,13 +740,16 @@ fn download_repo(
             }
         }
 
-        zip_extract(
-            &format!("{project_path}.zip").into(),
-            &Path::new(project_path).to_path_buf(),
+        let zip_path: String = format!("{project_path}.zip");
+        let mut archive: ZipArchive<File> = ZipArchive::new(
+            File::open(&zip_path).with_context(|| format!("Failed to open archive {zip_path}"))?,
         )
-        .with_context(|| format!("Failed to extract archive to {project_path}"))?;
+        .with_context(|| format!("Failed to read archive {zip_path}"))?;
+        archive
+            .extract(Path::new(project_path))
+            .with_context(|| format!("Failed to extract archive to {project_path}"))?;
 
-        delete_file(format!("{project_path}.zip"), true)?;
+        delete_file(zip_path, true)?;
     }
 
     if delete {
@@ -794,13 +798,17 @@ fn download_repo(
     // Remove all files that do not contain the keywords.
     // Repeat the process for every extension.
     for (ext, lang) in keywords_files.extensions_to_language.iter() {
+        let extension_pattern = format!(".{ext}");
         let file_list: Vec<PathBuf> = WalkDir::new(project_path)
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
             .filter(|e| {
                 let path = e.path();
-                path.extension().is_some() && path.to_str().is_some_and(|s| s.ends_with(ext))
+                path.extension().is_some()
+                    && path
+                        .to_str()
+                        .is_some_and(|s| s.ends_with(extension_pattern.as_str()))
             })
             .map(|e| e.into_path())
             .collect();
@@ -1040,6 +1048,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
     fn download_java_scala_float_double() -> Result<()> {
         download_test(
             "to_download.csv",
@@ -1078,5 +1087,153 @@ mod tests {
             true,
             true,
         )
+    }
+
+    #[test]
+    #[ignore = "requires network access, valid GitHub tokens, and is fragile (depends on live repository counts)"]
+    fn download_github_repos_count() -> Result<()> {
+        download_test(
+            "to_download_fragile.csv",
+            Some("github_repos"),
+            &["tests/data/keywords/rust.json"],
+            true,
+            false,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires network access and valid GitHub tokens"]
+    fn download_live_resumes() -> Result<()> {
+        let input_file = format!("{TEST_DATA}/to_download.csv");
+        let output_file_project = format!("{input_file}.resume_test.project_log.csv");
+        let output_file_file = format!("{input_file}.resume_test.file_log.csv");
+        let keywords_files = &[
+            "tests/data/keywords/java_float.json",
+            "tests/data/keywords/scala_float.json",
+        ];
+        let tokens_file = "ghtokens.csv";
+        let target = "target/tests/live_resume_test";
+
+        delete_file(&output_file_project, true)?;
+        delete_file(&output_file_file, true)?;
+        delete_dir(target, true)?;
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            target,
+            Some(tokens_file),
+            keywords_files,
+            false,
+            false,
+            false,
+            true,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_first = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<u32>(0)?
+            .len();
+        assert!(rows_after_first > 0, "First run produced no rows");
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            target,
+            Some(tokens_file),
+            keywords_files,
+            false,
+            false,
+            false,
+            false,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_second = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<u32>(0)?
+            .len();
+
+        assert_eq!(
+            rows_after_first, rows_after_second,
+            "Second run re-processed already-downloaded repos: expected {rows_after_first} rows, got {rows_after_second}"
+        );
+
+        delete_file(&output_file_project, false)?;
+        delete_file(&output_file_file, false)?;
+        delete_dir(target, false)
+    }
+
+    #[test]
+    fn download_local_resumes() -> Result<()> {
+        let input_file = format!("{TEST_DATA}/to_download_local_c.csv");
+        let output_file_project = format!("{input_file}.resume_test.project_log.csv");
+        let output_file_file = format!("{input_file}.resume_test.file_log.csv");
+        let keywords_files = &["tests/data/keywords/c.json"];
+
+        delete_file(&output_file_project, true)?;
+        delete_file(&output_file_file, true)?;
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            "",
+            None,
+            keywords_files,
+            false,
+            true,
+            true,
+            true,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_first = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<String>(0)?
+            .len();
+        assert!(rows_after_first > 0, "First run produced no rows");
+
+        run(
+            &input_file,
+            Some(&output_file_project),
+            Some(&output_file_file),
+            "",
+            None,
+            keywords_files,
+            false,
+            true,
+            true,
+            false,
+            None,
+            0,
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+
+        let rows_after_second = CSVFile::new(&output_file_project, FileMode::Read)?
+            .column::<String>(0)?
+            .len();
+
+        assert_eq!(
+            rows_after_first, rows_after_second,
+            "Second run re-processed already-logged repos: expected {rows_after_first} rows, got {rows_after_second}"
+        );
+
+        delete_file(&output_file_project, false)?;
+        delete_file(&output_file_file, false)
     }
 }

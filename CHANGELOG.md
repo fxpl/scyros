@@ -9,8 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A `--regex` flag for the `download` and `parse` subcommands that allows users to specify whether the keywords in the keywords JSON files should be interpreted as regular expressions or as whole words to match. By default, keywords are interpreted as whole words to match. ([#1](https://github.com/fxpl/scyros/pull/1) by [@Smexykex](https://github.com/Smexykex))
+- A `--no-output` (or `--count`) flag for the `parse` subcommand that allows users to skip writing the extracted functions to disk and only collect their statistics ([#5](https://github.com/fxpl/scyros/issues/5), reported by [@Michago6](https://github.com/Michago6)).
+- A `--lambdas` flag for the `parse` subcommand that allows users to choose whether to extract lambda functions as well. By default, lambda functions are not extracted ([#3](https://github.com/fxpl/scyros/issues/3), reported by [@
+linusbrew](https://github.com/linusbrew)).
 
+### Fixed
+
+- An issue with the `--regex` flag in the `download` and `parse` subcommands that added word delimiters to the regexes when the flag was used (reported by [@Smexykex](https://github.com/Smexykex)).
+- A parsing error in the `download` subcommand when the `--sub` flag was used ([#6](https://github.com/fxpl/scyros/issues/6), reported by [@Michago6](https://github.com/Michago6)).
+- An issue with the `download` subcommand that caused it to not resume progress when restarted ([#7](https://github.com/fxpl/scyros/issues/7), reported by [@Smexykex](https://github.com/Smexykex)).
+- An issue with the `download` subcommand that caused it to match extension prefixes instead of the full name ([#8](https://github.com/fxpl/scyros/issues/8), reported by [@Smexykex](https://github.com/Smexykex)).
+
+## Removed
+
+- The `extract_benchmarks` subcommand has been removed as it was too brittle.
+
+## [0.3.2] - 2026-05-07
+
+### Added
+
+- A `--regex` flag for the `download` and `parse` subcommands that allows users to specify whether the keywords in the keywords JSON files should be interpreted as regular expressions or as whole words to match. By default, keywords are interpreted as whole words to match. (PR [#1](https://github.com/fxpl/scyros/pull/1) by [@Smexykex](https://github.com/Smexykex))
+
+### Fixed
+
+- An issue with the `--header` flag in the `duplicate_files` subcommand that did not produce any output when the specified header was different from 'name'. 
+
+### Changed
+
+- In `bow` similarity mode, the `duplicate_files` subcommand now computes the bag of words of the file content by converting all words to lower case.
 
 ## [0.3.1] - 2026-04-23
 

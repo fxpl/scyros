@@ -21,19 +21,26 @@ use std::collections::HashMap;
 pub struct Bow {
     /// Internal map storing token counts.
     map: HashMap<Vec<u8>, usize>,
+    /// Whether to convert tokens to lower case before adding them to the bag of words.
+    lowercase: bool,
 }
 
 impl Default for Bow {
     fn default() -> Self {
-        Bow::new()
+        Bow::new(false)
     }
 }
 
 impl Bow {
     /// Creates a new, empty Bag of Words.
-    pub fn new() -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `lowercase` - Whether to convert tokens to lower case before adding them to the bag of words.
+    pub fn new(lowercase: bool) -> Self {
         Bow {
             map: HashMap::new(),
+            lowercase,
         }
     }
 
@@ -43,7 +50,15 @@ impl Bow {
     ///
     /// * `token` - The token to be added in byte slice form.
     pub fn add(&mut self, token: &[u8]) {
-        *self.map.entry(token.to_owned()).or_insert(0) += 1;
+        let token: Vec<u8> = if self.lowercase {
+            token
+                .iter()
+                .map(|b| b.to_ascii_lowercase())
+                .collect::<Vec<u8>>()
+        } else {
+            token.to_owned()
+        };
+        *self.map.entry(token).or_insert(0) += 1;
     }
 
     /// Retrieves the frequency of a token in the Bag of Words
@@ -52,6 +67,14 @@ impl Bow {
     ///
     /// * `token` - The token whose frequency is to be retrieved in byte slice form.
     pub fn freq(&self, token: &[u8]) -> usize {
+        let token: &[u8] = if self.lowercase {
+            &token
+                .iter()
+                .map(|b| b.to_ascii_lowercase())
+                .collect::<Vec<u8>>()
+        } else {
+            token
+        };
         *self.map.get(token).unwrap_or(&0)
     }
 
@@ -122,38 +145,49 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let bow = Bow::new();
+        let bow = Bow::new(false);
         assert_eq!(bow.map.len(), 0);
         assert_eq!(bow.freq(b"test"), 0);
     }
 
     #[test]
     fn test_add_and_freq() {
-        let mut bow = Bow::new();
+        let mut bow = Bow::new(false);
         bow.add(b"hello");
         bow.add(b"hello");
         assert_eq!(bow.freq(b"hello"), 2);
         assert_eq!(bow.freq(b"Hello"), 0);
+
+        let mut bow_lower = Bow::new(true);
+        bow_lower.add(b"Hello");
+        assert_eq!(bow_lower.freq(b"hello"), 1);
+        assert_eq!(bow_lower.freq(b"Hello"), 1);
     }
 
     #[test]
     fn test_add_all() {
-        let mut bow = Bow::new();
+        let mut bow = Bow::new(false);
         let tokens = vec![b"foo", b"foo", b"bar"];
         bow.add_all(tokens);
         assert_eq!(bow.freq(b"foo"), 2);
         assert_eq!(bow.freq(b"bar"), 1);
         assert_eq!(bow.freq(b"Bar"), 0);
+
+        let mut bow_lower = Bow::new(true);
+        let tokens = vec![b"Foo", b"foo", b"Bar"];
+        bow_lower.add_all(tokens);
+        assert_eq!(bow_lower.freq(b"foo"), 2);
+        assert_eq!(bow_lower.freq(b"bar"), 1);
     }
 
     #[test]
     fn test_serialize() {
-        let mut bow1 = Bow::new();
+        let mut bow1 = Bow::new(false);
         bow1.add(b"apple");
         bow1.add(b"banana");
         bow1.add(b"apple");
 
-        let mut bow2 = Bow::new();
+        let mut bow2 = Bow::new(false);
         bow2.add(b"banana");
         bow2.add(b"apple");
         bow2.add(b"apple");
