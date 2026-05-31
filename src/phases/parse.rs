@@ -21,11 +21,11 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
 
-use anyhow::{anyhow, bail, ensure, Context, Error, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::iter::FromIterator as _;
 use std::vec;
-use std::{collections::HashSet, fmt::Write, io::Write as IOWrite, sync::Mutex};
-use tracing::info;
+use std::{collections::HashSet, sync::Mutex};
+use tracing::{info, warn};
 use tree_sitter::{Language, Node, Parser, Tree};
 
 use crate::utils::fs::*;
@@ -96,15 +96,6 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("lang")
-                .long("lang")
-                .num_args(1..)
-                .action(ArgAction::Append)
-                .value_name("LANGUAGES")
-                .help("List of languages to parse. The supported languages are C, C++, C#, Fortran, Go, Java, Python and Typescript.")
-                .required(false)
-        )
-        .arg(
             Arg::new("force")
                 .short('f')
                 .long("force")
@@ -164,6 +155,9 @@ pub fn cli() -> Command {
         )
 }
 
+type OutputRow = Vec<String>;
+type LogRow = Vec<String>;
+
 /// Entry point of the program
 ///
 /// # Arguments
@@ -191,7 +185,6 @@ pub fn run(
     logs_path: Option<&str>,
     keywords_file_paths: &[&str],
     regex_syntax: bool,
-    opt_languages: Option<Vec<&str>>,
     fail_policy: &str,
     threads: usize,
     seed: u64,
@@ -216,31 +209,18 @@ pub fn run(
     .into_iter()
     .collect::<HashSet<_>>();
 
-    let languages: Vec<&str> = match opt_languages {
-        Some(l) => {
-            for lang in l.iter() {
-                ensure!(
-                    supported_languages.contains(lang),
-                    "Unsupported language: {lang}"
-                );
-            }
-            l
+    let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
+        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
+    })?;
+    let languages = keyword_files.languages();
+
+    for lang in &languages {
+        if !supported_languages.contains(lang.as_str()) {
+            warn!("Unsupported language: {lang}");
         }
-        None => {
-            info!("No language specified, using all supported languages");
-            supported_languages.into_iter().collect()
-        }
-    };
+    }
 
     info!("Selected languages: {}", languages.join(", "));
-
-    let languages_series = Series::new(
-        "language_filter".into(),
-        languages
-            .iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<String>>(),
-    );
 
     let default_output_path: String = format!("{input_path}.functions.csv");
     let output_path: &str = output_path.unwrap_or(&default_output_path);
@@ -256,9 +236,8 @@ pub fn run(
         Some(Schema::from_iter(vec![
             Field::new("id".into(), DataType::UInt32),
             Field::new("name".into(), DataType::String),
-            Field::new("language".into(), DataType::String),
         ])),
-        Some(vec!["id", "name", "language"]),
+        Some(vec!["id", "name"]),
     )?;
 
     let n_files_before = input_file.height();
@@ -269,10 +248,17 @@ pub fn run(
     );
 
     // Keep only the files written in the selected languages
-    input_file = input_file
-        .lazy()
-        .filter(col("language").is_in(lit(languages_series)))
-        .collect()?;
+    let name_mask: BooleanChunked = input_file
+        .column("name")?
+        .str()?
+        .into_iter()
+        .map(|opt_name| {
+            opt_name
+                .map(|s| keyword_files.path_has_extension(s))
+                .unwrap_or(false)
+        })
+        .collect();
+    input_file = input_file.filter(&name_mask)?;
 
     let n_files = input_file.height();
 
@@ -299,26 +285,11 @@ pub fn run(
 
     let shuffled_rows = shuffled_idx.into_iter().map(|idx| {
         let row = input_file.get_row(idx).unwrap().0;
-        match (row[0].clone(), row[1].clone(), row[2].clone()) {
-            (AnyValue::UInt32(id), AnyValue::String(path), AnyValue::String(lang)) => Ok((
-                id,
-                path.replace("-was_comma-", ",")
-                    .replace("-was_quote-", "\""),
-                lang,
-            )),
+        match (row[0].clone(), row[1].clone()) {
+            (AnyValue::UInt32(id), AnyValue::String(path)) => Ok((id, path.to_string())),
             _ => Err(idx),
         }
     });
-
-    // Number of columns in the output file.
-    const OUTPUT_COLS: usize = 18;
-    const LOGS_COLS: usize = 7;
-
-    let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
-        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
-    })?;
-
-    let keyword_match_headers: String = keyword_files.paths.join(",");
 
     let word_counter: Matcher = Matcher::words_matcher();
 
@@ -326,15 +297,8 @@ pub fn run(
     let mut output_file = CSVFile::new(output_path, FileMode::Overwrite)?;
 
     // Write the header.
-    let header: [&str; OUTPUT_COLS] = [
-        "id",
-        "path",
-        "name",
-        "position",
-        "language",
-        "loc",
-        "words",
-        &keyword_match_headers,
+    let output_prefix = ["id", "path", "name", "position", "language", "loc", "words"];
+    let output_suffix = [
         "loop_statements",
         "loop_nestings",
         "if_statements",
@@ -346,23 +310,23 @@ pub fn run(
         "return_kw_match",
         "parse_error",
     ];
-
-    output_file.write_header(&header)?;
+    let output_header = output_prefix
+        .iter()
+        .map(|s| s.to_string())
+        .chain(keyword_files.paths.iter().cloned())
+        .chain(output_suffix.iter().map(|s| s.to_string()));
+    output_file.write_header(output_header)?;
 
     let mut logs_file = CSVFile::new(logs_path, FileMode::Overwrite)?;
 
     // Write the header.
-    let logs_header: [&str; LOGS_COLS] = [
-        "id",
-        "name",
-        "language",
-        "functions",
-        "functions_with_kw",
-        &keyword_match_headers,
-        "parse_error",
-    ];
-
-    logs_file.write_header(&logs_header)?;
+    let logs_prefix = ["id", "name", "language", "functions", "functions_with_kw"];
+    let logs_header = logs_prefix
+        .iter()
+        .map(|s| s.to_string())
+        .chain(keyword_files.paths.iter().cloned())
+        .chain(std::iter::once("parse_error".to_string()));
+    logs_file.write_header(logs_header)?;
 
     let iter = Mutex::new(shuffled_rows.into_iter());
 
@@ -370,8 +334,7 @@ pub fn run(
     // The sender channel is used to send information about the extracted functions back to the main thread.
     // The receiver channel is used by the main thread to collect and write the information to the log file.
     let (tx, rx) =
-        crossbeam_channel::unbounded::<Option<Result<(String, Option<String>), Error>>>();
-
+        crossbeam_channel::unbounded::<Option<Result<(Vec<OutputRow>, Option<LogRow>)>>>();
     crossbeam::thread::scope(|s| {
         for _ in 0..threads {
             s.spawn(|_| {
@@ -380,17 +343,16 @@ pub fn run(
                 // Download the repositories until the iterator is empty.
                 loop {
                     // Lock the repository iterator and retrieve the next item.
-                    let next_item: Option<Result<(u32, String, &str), usize>> = {
+                    let next_item: Option<Result<(u32, String), usize>> = {
                         let mut iter_guard = iter.lock().unwrap();
                         iter_guard.next()
                     };
 
                     match next_item {
                         Some(row) => match row {
-                            Ok((project_id, file_name, language)) => match analyze_file(
+                            Ok((project_id, file_name)) => match analyze_file(
                                 project_id,
                                 &file_name,
-                                language,
                                 &keyword_files,
                                 fail_policy,
                                 ignore_comments,
@@ -433,10 +395,12 @@ pub fn run(
         while let Ok(msg) = rx.recv() {
             match msg {
                 Some(msg_content) => {
-                    let (output, opt_log) = msg_content?;
-                    write!(&mut output_file, "{output}")?;
-                    if let Some(log) = opt_log {
-                        writeln!(&mut logs_file, "{log}")?;
+                    let (output_rows, opt_log_row) = msg_content?;
+                    for row in output_rows {
+                        output_file.write_record(row)?;
+                    }
+                    if let Some(log_row) = opt_log_row {
+                        logs_file.write_record(log_row)?;
                     }
                     progress.inc(1);
                 }
@@ -485,15 +449,17 @@ pub fn run(
 fn analyze_file(
     project_id: u32,
     path: &str,
-    language: &str,
     keywords_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
     lambdas: bool,
     write_out: bool,
     word_counter: &Matcher,
-) -> Result<(String, Option<String>)> {
-    let grammar = language_to_grammar(language)
+) -> Result<(Vec<OutputRow>, Option<LogRow>)> {
+    let language = keywords_files.file_language(path).with_context(|| {
+        format!("Could not find the language for file {path} in the keywords files")
+    })?;
+    let grammar = language_to_grammar(&language)
         .with_context(|| format!("Unsupported language: {language}"))?;
     // Initializes the parser
     let mut parser: Parser = Parser::new();
@@ -514,7 +480,7 @@ fn analyze_file(
             let file_has_parse_error: bool = tree.root_node().has_error();
 
             if file_has_parse_error && fail_policy == "skip-file" {
-                Ok((String::new(), None))
+                Ok((Vec::new(), None))
             } else if file_has_parse_error && fail_policy == "abort" {
                 bail!("Parse error in file {path}")
             } else {
@@ -524,7 +490,7 @@ fn analyze_file(
                         project_id,
                         &root,
                         path,
-                        language,
+                        &language,
                         &grammar,
                         &source_code,
                         keywords_files,
@@ -542,34 +508,29 @@ fn analyze_file(
                     "none".to_string()
                 };
 
-                Ok((
-                    output,
-                    Some(format!(
-                        "{},{},{},{},{},{},{}",
-                        project_id,
-                        path.replace(",", "-was_comma-")
-                            .replace("\"", "-was_quote-"),
-                        language,
-                        total_functions,
-                        functions_with_kw,
-                        functions_with_specific_kw
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<String>>()
-                            .join(","),
-                        error_position,
-                    )),
-                ))
+                let log_row: LogRow = vec![
+                    project_id.to_string(),
+                    path.to_string(),
+                    language.to_string(),
+                    total_functions.to_string(),
+                    functions_with_kw.to_string(),
+                ]
+                .into_iter()
+                .chain(functions_with_specific_kw.iter().map(|x| x.to_string()))
+                .chain(std::iter::once(error_position))
+                .collect();
+
+                Ok((output, Some(log_row)))
             }
         }
 
         // If the file is too large, return an error row
         Err(_) => Ok((
-            String::new(),
+            Vec::new(),
             Some(file_error_row(
                 project_id,
                 path,
-                language,
+                &language,
                 keywords_files,
                 "none",
             )),
@@ -583,21 +544,18 @@ fn file_error_row(
     language: &str,
     keyword_files: &KeywordFiles,
     parse_error: &str,
-) -> String {
-    format!(
-        "{},{},{},-1,-1,{},{}",
-        project_id,
-        path.replace(",", "-was_comma-")
-            .replace("\"", "-was_quote-"),
-        language,
-        keyword_files
-            .paths
-            .iter()
-            .map(|_| "-1".to_string())
-            .collect::<Vec<String>>()
-            .join(","),
-        parse_error,
-    )
+) -> LogRow {
+    vec![
+        project_id.to_string(),
+        path.to_string(),
+        language.to_string(),
+        "-1".to_string(),
+        "-1".to_string(),
+    ]
+    .into_iter()
+    .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
+    .chain(std::iter::once(parse_error.to_string()))
+    .collect()
 }
 
 /// Extracts the functions from a subtree of a source file and writes them to individual files
@@ -639,11 +597,11 @@ fn extract_functions(
     write_out: bool,
     word_counter: &Matcher,
     parser: &mut Parser,
-) -> Result<(String, usize, usize, Vec<usize>), Error> {
+) -> Result<(Vec<OutputRow>, usize, usize, Vec<usize>)> {
     let target_folder = format!("{file_path}.functions");
 
     // Initializes the builder to store the statistics of the functions in the file
-    let mut builder: String = String::new();
+    let mut rows: Vec<OutputRow> = Vec::new();
     let mut functions: usize = 0;
     let mut functions_with_kw: usize = 0;
     let mut functions_with_specific_kw: Vec<usize> = vec![0; keyword_files.paths.len()];
@@ -776,35 +734,33 @@ fn extract_functions(
                         None => 0,
                     };
 
-                    writeln!(
-                        &mut builder,
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                        project_id,
-                        &function_path
-                            .replace(",", "-was_comma-")
-                            .replace("\"", "-was_quote-"),
-                        name.replace(",", "-was_comma-")
-                            .replace("\"", "-was_quote-"),
+                    let row: OutputRow = vec![
+                        project_id.to_string(),
+                        function_path,
+                        name,
                         position_to_string(Some(function_position)),
-                        language,
-                        count_text_lines(function_code_with_strings),
-                        word_counter.count_matches_in_text(function_code_with_strings),
-                        matches
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<String>>()
-                            .join(","),
-                        loops,
-                        loop_nesting,
-                        conditionals,
-                        conditional_nesting,
-                        calls,
-                        calls_nesting,
-                        n_param,
-                        param_match,
-                        return_type_match,
+                        language.to_string(),
+                        count_text_lines(function_code_with_strings).to_string(),
+                        word_counter
+                            .count_matches_in_text(function_code_with_strings)
+                            .to_string(),
+                    ]
+                    .into_iter()
+                    .chain(matches.iter().map(|m| m.to_string()))
+                    .chain([
+                        loops.to_string(),
+                        loop_nesting.to_string(),
+                        conditionals.to_string(),
+                        conditional_nesting.to_string(),
+                        calls.to_string(),
+                        calls_nesting.to_string(),
+                        n_param.to_string(),
+                        param_match.to_string(),
+                        return_type_match.to_string(),
                         error_position,
-                    )?;
+                    ])
+                    .collect();
+                    rows.push(row);
                     functions_with_kw += 1;
                     for (i, m) in matches.iter().enumerate() {
                         if *m > 0 {
@@ -826,7 +782,7 @@ fn extract_functions(
         }
     }
     Ok((
-        builder,
+        rows,
         functions,
         functions_with_kw,
         functions_with_specific_kw,
@@ -1458,12 +1414,12 @@ fn remove_kind_from_source(source: &[u8], root: &Node, kinds: &HashSet<&str>) ->
 mod tests {
     use std::path::Path;
 
-    use polars::prelude::SortMultipleOptions;
-
     use crate::utils::dataframes;
     use crate::utils::dataframes::*;
     use crate::utils::fs::*;
     use crate::utils::logger::test_logger;
+    use anyhow::ensure;
+    use polars::prelude::SortMultipleOptions;
 
     use super::*;
 
@@ -1472,7 +1428,6 @@ mod tests {
     fn test_parse(
         input_file_path: &str,
         keywords: &[&str],
-        languages: Option<Vec<&str>>,
         ignore_comments: bool,
         lambdas: bool,
         write_out: bool,
@@ -1504,7 +1459,6 @@ mod tests {
                 None,
                 keywords,
                 false,
-                languages,
                 "ignore",
                 8,
                 0,
@@ -1595,7 +1549,6 @@ mod tests {
                 None,
                 keywords,
                 false,
-                languages,
                 "ignore",
                 8,
                 0,
@@ -1630,7 +1583,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/to_parse.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true, true, true)
+        test_parse(&input_file_path, &keywords, false, true, true, true)
     }
 
     #[test]
@@ -1643,7 +1596,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/parse_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true, true, true)
+        test_parse(&input_file_path, &keywords, false, true, true, true)
     }
 
     #[test]
@@ -1652,24 +1605,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/invalid.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true, true, true)
-    }
-
-    #[test]
-    fn invalid_lang() -> Result<()> {
-        let keywords = vec!["tests/data/keywords/scala_float.json"];
-
-        let input_file_path = format!("{TEST_DATA}/empty.csv");
-
-        test_parse(
-            &input_file_path,
-            &keywords,
-            Some(["javascript"].to_vec()),
-            false,
-            true,
-            true,
-            false,
-        )
+        test_parse(&input_file_path, &keywords, false, true, true, true)
     }
 
     #[test]
@@ -1678,15 +1614,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/empty.csv");
 
-        test_parse(
-            &input_file_path,
-            &keywords,
-            Some(["c"].to_vec()),
-            false,
-            true,
-            true,
-            true,
-        )
+        test_parse(&input_file_path, &keywords, false, true, true, true)
     }
 
     #[test]
@@ -1699,7 +1627,7 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/fn_comments_go.csv");
 
-        test_parse(&input_file_path, &keywords, None, true, true, true, true)
+        test_parse(&input_file_path, &keywords, true, true, true, true)
     }
 
     #[test]
@@ -1712,6 +1640,6 @@ mod tests {
 
         let input_file_path = format!("{TEST_DATA}/parse_go_count.csv");
 
-        test_parse(&input_file_path, &keywords, None, false, true, false, true)
+        test_parse(&input_file_path, &keywords, false, true, false, true)
     }
 }

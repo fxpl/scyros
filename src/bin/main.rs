@@ -180,6 +180,12 @@ fn main() {
                                     cli_subargs.get_one::<String>("map").map(|x| x.as_str()),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_one::<String>("similarity").unwrap(),
+                                    // *cli_subargs.get_one::<f64>("threshold").unwrap(),
+                                    // &cli_subargs
+                                    //     .get_many::<String>("languages")
+                                    //     .unwrap()
+                                    //     .map(|s| s.as_str())
+                                    //     .collect::<Vec<&str>>(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     cli_subargs.get_one::<String>("header").unwrap(),
                                     &logger,
@@ -195,11 +201,6 @@ fn main() {
                                         .map(|s| s.as_str())
                                         .collect::<Vec<&str>>(),
                                     cli_subargs.get_flag("regex"),
-                                        cli_subargs
-                                        .get_many::<String>("lang")
-                                        .map(|v|
-                                        v.map(|s| s.as_str())
-                                        .collect::<Vec<&str>>()),
                                     cli_subargs.get_one::<String>("failures").unwrap(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),

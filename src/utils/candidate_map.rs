@@ -4,24 +4,25 @@ use std::collections::{HashMap, HashSet};
 pub struct CandidateEntry {
     pub matches: usize,
     pub length: usize,
-    pub last_token_seen_pos: (usize, usize), // (token_position, cumulative_count)
+    pub last_token_seen_pos: usize, // (token_position, cumulative_count)
+    pub last_token_seen_cumul_count: usize, // the number of words seen up to and including the last token seen for this candidate
 }
 
-pub struct CandidateMap {
-    entries: HashMap<blake3::Hash, CandidateEntry>,
-    match_histogram: HashMap<usize, HashSet<blake3::Hash>>,
-    pending_updates: Vec<(blake3::Hash, usize, (usize, usize))>, // (function_id, new_matches, last_token_seen_pos)
+pub struct CandidateMap<'a> {
+    entries: HashMap<&'a str, CandidateEntry>,
+    match_histogram: HashMap<usize, HashSet<&'a str>>,
+    pending_updates: Vec<(&'a str, usize, usize, usize)>, // (function, new_matches, last_token_seen_pos)
     min_length: usize,
     max_length: usize,
 }
 
-impl Default for CandidateMap {
+impl<'a> Default for CandidateMap<'a> {
     fn default() -> Self {
-        CandidateMap::new()
+        Self::new()
     }
 }
 
-impl CandidateMap {
+impl<'a> CandidateMap<'a> {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
@@ -32,59 +33,62 @@ impl CandidateMap {
         }
     }
 
-    pub fn get_token_matches(&self, function_id: &blake3::Hash) -> usize {
+    pub fn get_token_matches(&self, function: &str) -> usize {
         self.entries
-            .get(function_id)
+            .get(function)
             .map(|entry| entry.matches)
             .unwrap_or(0)
     }
 
     pub fn add_pending_update(
         &mut self,
-        function_id: blake3::Hash,
+        function: &'a str,
         new_matches: usize,
-        last_token_seen_pos: (usize, usize),
+        last_token_seen_pos: usize,
+        last_token_seen_cumul_count: usize,
     ) {
-        self.pending_updates
-            .push((function_id, new_matches, last_token_seen_pos));
+        self.pending_updates.push((
+            function,
+            new_matches,
+            last_token_seen_pos,
+            last_token_seen_cumul_count,
+        ));
     }
 
-    pub fn apply_pending_updates(
-        &mut self,
-        function_paths_and_lengths: &HashMap<blake3::Hash, (&str, usize)>,
-    ) {
+    pub fn apply_pending_updates(&mut self, function_lengths: &HashMap<&str, usize>) {
         let updates = self.pending_updates.drain(..).collect::<Vec<_>>();
-        for (function_id, new_matches, last_token_seen_pos) in updates {
+        for (function, new_matches, last_token_seen_pos, last_token_seen_cumul_count) in updates {
             self.add_candidate(
-                function_id,
-                function_paths_and_lengths,
+                function,
+                function_lengths,
                 new_matches,
                 last_token_seen_pos,
+                last_token_seen_cumul_count,
             );
         }
     }
 
     pub fn add_candidate(
         &mut self,
-        function_id: blake3::Hash,
-        function_paths_and_lengths: &std::collections::HashMap<blake3::Hash, (&str, usize)>,
+        function: &'a str,
+        function_lengths: &std::collections::HashMap<&str, usize>,
         new_matches: usize,
-        last_token_seen_pos: (usize, usize),
+        last_token_seen_pos: usize,
+        last_token_seen_cumul_count: usize,
     ) {
-        let entry = match self.entries.entry(function_id) {
+        let entry = match self.entries.entry(function) {
             Entry::Occupied(occupied) => occupied.into_mut(),
             Entry::Vacant(vacant) => {
-                let length = function_paths_and_lengths
-                    .get(&function_id)
-                    .map(|(_, count)| *count)
-                    .unwrap_or(0);
-                let last_token_seen_pos = (0, 0); // Initialize to (0, 0) for new candidates
+                let length = function_lengths.get(function).copied().unwrap_or(0);
+                let last_token_seen_pos = 0; // Initialize to 0 for new candidates
+                let last_token_seen_cumul_count = 0; // Initialize to 0 for new candidates
                 self.min_length = self.min_length.min(length);
                 self.max_length = self.max_length.max(length);
                 vacant.insert(CandidateEntry {
                     matches: 0,
                     length,
                     last_token_seen_pos,
+                    last_token_seen_cumul_count,
                 })
             }
         };
@@ -92,16 +96,17 @@ impl CandidateMap {
         // Update the match histogram
         if entry.matches > 0 {
             if let Some(bucket) = self.match_histogram.get_mut(&entry.matches) {
-                bucket.remove(&function_id);
+                bucket.remove(&function);
             }
         }
 
         entry.matches += new_matches;
         entry.last_token_seen_pos = last_token_seen_pos;
+        entry.last_token_seen_cumul_count = last_token_seen_cumul_count;
         self.match_histogram
             .entry(entry.matches)
             .or_default()
-            .insert(function_id);
+            .insert(function);
     }
 
     pub fn length_range(&self) -> Option<(usize, usize)> {
@@ -112,7 +117,7 @@ impl CandidateMap {
         }
     }
 
-    pub fn get_candidates_with_n_matches(&self, n: usize, mode: &str) -> HashSet<blake3::Hash> {
+    pub fn get_candidates_with_n_matches(&self, n: usize, mode: &str) -> HashSet<&'a str> {
         if mode == "exact" {
             self.match_histogram.get(&n).cloned().unwrap_or_default()
         } else if mode == "at_least" {
@@ -126,20 +131,22 @@ impl CandidateMap {
         }
     }
 
-    pub fn get_last_token_seen_pos(&self, function_id: &blake3::Hash) -> (usize, usize) {
+    pub fn get_last_token_seen_pos(&self, function: &str) -> (usize, usize) {
         self.entries
-            .get(function_id)
-            .map(|entry| entry.last_token_seen_pos)
+            .get(function)
+            .map(|entry| (entry.last_token_seen_pos, entry.last_token_seen_cumul_count))
             .unwrap_or((0, 0))
     }
 
     pub fn update_last_token_seen_pos(
         &mut self,
-        function_id: &blake3::Hash,
-        new_pos: (usize, usize),
+        function: &str,
+        new_pos: usize,
+        new_cumul_count: usize,
     ) {
-        if let Some(entry) = self.entries.get_mut(function_id) {
+        if let Some(entry) = self.entries.get_mut(function) {
             entry.last_token_seen_pos = new_pos;
+            entry.last_token_seen_cumul_count = new_cumul_count;
         }
     }
 
@@ -165,8 +172,8 @@ impl CandidateMap {
 
         let mut survivors = 0usize;
         for candidate in &self.pending_updates {
-            let function_id = candidate.0;
-            let current_matches = self.get_token_matches(&function_id);
+            let function = candidate.0;
+            let current_matches = self.get_token_matches(function);
             if n > 1 && current_matches == n - 1 {
                 // if n==1 the pending list is empty as they have already been applied
                 survivors += 1;

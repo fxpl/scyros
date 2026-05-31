@@ -265,6 +265,29 @@ impl KeywordFiles {
         self.extensions_to_language.keys().cloned().collect()
     }
 
+    /// Checks if a file path has an extension for which there are matchers in the collection
+    ///
+    /// # Arguments
+    /// * `path` - The path to check for an extension.s
+    pub fn path_has_extension(&self, path: impl AsRef<Path>) -> bool {
+        path.as_ref()
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| self.extensions_to_language.contains_key(ext))
+            .unwrap_or(false)
+    }
+
+    /// Returns the programming language associated with a file path based on its extension, if any.
+    ///
+    /// # Arguments
+    /// * `path` - The path to the file to check for an associated language.
+    pub fn file_language(&self, path: impl AsRef<Path>) -> Option<String> {
+        path.as_ref().extension().and_then(|s| {
+            s.to_str()
+                .and_then(|ext| self.extensions_to_language.get(ext).cloned())
+        })
+    }
+
     pub fn debug_regexes(&self) -> HashMap<String, Vec<String>> {
         self.matchers
             .iter()
@@ -296,6 +319,7 @@ impl KeywordFiles {
     /// # Arguments
     ///
     /// * `paths` - The paths to the keyword files to add
+    /// * `warning` - Whether to log a warning if a language in a keyword file has no extensions field
     ///
     /// # Returns
     /// A new KeywordFiles instance with the added files or an error if any file could not
@@ -315,6 +339,7 @@ impl KeywordFiles {
     /// # Arguments
     ///
     /// * `path` - The path to the keyword file to add
+    /// * `warning` - Whether to log a warning if a language in the keyword file has no extensions field
     ///
     /// # Returns
     ///
@@ -391,7 +416,6 @@ impl KeywordFiles {
                     }
                     _ => (),
                 }
-                extensions_to_language.insert(ext, name.to_string());
             }
             local_kw.insert(name.to_string(), keywords.clone());
         }

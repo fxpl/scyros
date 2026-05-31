@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
-use anyhow::{anyhow, ensure, Context, Error, Result};
+use anyhow::{ensure, Context, Result};
 use blake3::Hash;
 use clap::{Arg, ArgAction, Command};
 use indicatif::ProgressBar;
@@ -25,9 +25,10 @@ use polars::frame::DataFrame;
 use polars::prelude::{DataFrameJoinOps as _, DataType, Field, Schema};
 use tracing::info;
 
-use crate::utils::dataframes::{self, *};
+use crate::utils::dataframes::has_column;
 use crate::utils::fs::*;
-use crate::utils::logger::{log_output_file, log_write_output, Logger};
+use crate::utils::logger::{log_output_file, log_write_dataframe, log_write_rows, Logger};
+use crate::utils::parallel::parallel_pipeline;
 use crate::utils::regex::Matcher;
 
 /// Command line arguments parsing.
@@ -80,7 +81,34 @@ pub fn cli() -> Command {
                 .short('s')
                 .help("Similarity criterion for duplicate detection.")
                 .default_value("exact")
-                .value_parser(["exact", "bow"]),
+                .value_parser(["exact", "bow", "overlap"]),
+        )
+        .arg(
+            Arg::new("threshold")
+                .long("threshold")
+                .help("Similarity threshold for duplicate detection when using overlap similarity.")
+                .default_value("0.8")
+                .value_parser(clap::value_parser!(f64)),
+        )
+        .arg(
+            Arg::new("languages")
+                .short('l')
+                .long("languages")
+                .num_args(1..)
+                .action(ArgAction::Append)
+                .value_name("LANGUAGES_FILES.json")
+                .help("List of files containing the list of languages and extensions to keep. The files must be in JSON format.\n\
+                       The files must have the following structure:\n    \
+                        {\n\
+                            \"languages\": [\n\
+                                {\n\
+                                \"name\": \"LanguageName\",\n\
+                                \"extensions\": [\".ext1\", \".ext2\", ...]\n\
+                                },\n\
+                                ...\n\
+                            ]\n\
+                        }")
+                .required(true)
         )
         .arg(
             Arg::new("header")
@@ -99,6 +127,8 @@ pub fn cli() -> Command {
 /// * `map_path` - The optional path to the map CSV file to store the mapping of clones to their originals.
 /// * `force` - Whether to override the output file if it already exists.
 /// * `similarity` - The similarity criterion for duplicate detection (exact match or invariant to token order and whitespaces).
+/// * `threshold` - The similarity threshold for duplicate detection when using overlap similarity.
+/// * `languages_file_paths` - The list of paths to the files containing the list of languages and extensions to keep.
 /// * `threads` - The number of threads to use.
 /// * `input_header` - The name of the column storing file paths in the input CSV file.
 /// * `logger` - The logger displaying the progress.
@@ -112,6 +142,8 @@ pub fn run(
     map_path: Option<&str>,
     force: bool,
     similarity: &str,
+    // threshold: f64,
+    // languages_file_paths: &[&str],
     threads: usize,
     input_header: &str,
     logger: &Logger,
@@ -145,171 +177,127 @@ pub fn run(
     info!("{} files found.", file_count);
 
     // Split the dataset into chunks for each thread.
-    let split_dataset: Vec<DataFrame> = files
+    let items: Vec<(usize, &str)> = files
         .column(input_header)?
-        .clone()
-        .into_frame()
-        .with_row_index("idx".into(), None)?
-        .split_chunks_by_n(threads, true);
+        .str()?
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .collect();
 
     info!("Starting file processing...\n");
 
-    // Every thread comes with a sender channel.
-    // The sender channel is used to send information about the downloaded repository back to the main thread.
-    // The receiver channel is used by the main thread to collect and write the information to the log file.
-    let (tx, rx) =
-        crossbeam_channel::unbounded::<Option<Result<(u32, String, Option<Hash>), Error>>>();
-    crossbeam::thread::scope(|s| {
-        let mut ended_threads = 0;
-        for chunk in split_dataset {
-            let my_tx = tx.clone();
-            s.spawn(move |_| {
-                let word_matcher: Matcher = Matcher::words_matcher();
-                for (name, idx) in dataframes::str(&chunk, input_header)?
-                    .into_iter()
-                    .zip(dataframes::u32(&chunk, "idx")?.into_iter())
-                {
-                    // Revert the temporary replacements of special characters.
-                    let clean_name: String = name
-                        .replace("-was_comma-", ",")
-                        .replace("-was_quote-", "\"");
-                    match load_file(&clean_name, 1024 * 1024 * 1024) {
-                        Ok(Ok(file_content)) => {
-                            let hash = if similarity == "exact" {
-                                blake3::hash(&file_content)
-                            } else {
-                                blake3::hash(
-                                    &word_matcher.bag_of_words(&file_content, true).serialize(),
-                                )
-                            };
-                            let _ = my_tx.send(Some(Ok((idx, name.to_owned(), Some(hash)))));
-                        }
-                        Ok(Err(_)) => {
-                            let _ = my_tx.send(Some(Ok((idx, name.to_owned(), None))));
-                        }
-                        Err(e) => {
-                            let _ = my_tx.send(Some(Err(e)));
-                        }
-                    }
+    let workers: Vec<Matcher> = (0..threads).map(|_| Matcher::words_matcher()).collect();
+    let progress = ProgressBar::new(file_count as u64);
+    progress.set_style(
+        indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
+    );
+
+    let mut hash_map: HashMap<Hash, (usize, &str, u32)> = std::collections::HashMap::new();
+    let mut clone_map: HashMap<&str, &str> = HashMap::new();
+    let mut big_files: usize = 0;
+
+    parallel_pipeline(
+        items,
+        workers,
+        |matcher: &mut Matcher,
+         (idx, name): (usize, &str)|
+         -> Result<(usize, &str, Option<Hash>)> {
+            match load_file(name, 1024 * 1024 * 1024) {
+                Ok(Ok(file_content)) => {
+                    let hash: Hash = if similarity == "exact" {
+                        blake3::hash(&file_content)
+                    } else {
+                        blake3::hash(&matcher.bag_of_words(&file_content, true).serialize())
+                    };
+                    Ok((idx, name, Some(hash)))
                 }
-                my_tx.send(None)?;
-                anyhow::Ok(())
-            });
-        }
-
-        let progress = ProgressBar::new(file_count as u64);
-        progress.set_style(
-            indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
-        );
-
-        let mut hash_map: HashMap<Hash, (u32, String, u32)> = std::collections::HashMap::new();
-        let mut clone_map: HashMap<String, String> = HashMap::new();
-        let mut big_files: usize = 0;
-
-        // Writes received messages to the log file.
-        // The order is therefore non-deterministic although the list of projects is.
-        while let Ok(msg_opt) = rx.recv() {
-            match msg_opt {
-                Some(msg) => {
-                    let (new_idx, new_name, opt_hash) = msg?;
-                    match opt_hash {
-                        None => {
-                            big_files += 1;
-                        }
-                        Some(hash) => {
-                            let (original_idx, original_name, count) = match hash_map.get(&hash) {
-                                Some((idx, orig_name, cnt)) => (*idx, orig_name.clone(), *cnt),
-                                None => (new_idx, new_name.to_string(), 0),
-                            };
-                            hash_map.insert(hash, (original_idx, original_name.clone(), count + 1));
-                            clone_map.insert(new_name, original_name);
-                            progress.inc(1);
-                        }
-                    }
-                }
-                None => {
-                    // When a None message is received, the sender thread is considered finished.
-                    // When all threads are finished, the main thread can exit.
-                    ended_threads += 1;
-                    if ended_threads == threads {
-                        break;
-                    }
+                Ok(Err(_)) => Ok((idx, name, None)),
+                Err(e) => Err(e),
+            }
+        },
+        |(new_idx, new_name, opt_hash)| {
+            match opt_hash {
+                None => big_files += 1,
+                Some(hash) => {
+                    let (original_idx, original_name, count) = match hash_map.get(&hash) {
+                        Some((idx, orig_name, cnt)) => (*idx, *orig_name, *cnt),
+                        None => (new_idx, new_name, 0),
+                    };
+                    hash_map.insert(hash, (original_idx, original_name, count + 1));
+                    clone_map.insert(new_name, original_name);
+                    progress.inc(1);
                 }
             }
-        }
-        progress.finish();
+            Ok(())
+        },
+    )?;
 
-        let small_files = file_count - big_files;
-        let big_files_percentage = (big_files as f64 / file_count as f64) * 100.0;
+    progress.finish();
 
-        info!(
-            "Ignored large files: {} / {:.2} %",
-            big_files, big_files_percentage
-        );
-        info!(
-            "Remaining files: {} / {:.2} %",
-            small_files,
-            100.0 - big_files_percentage
-        );
+    let small_files = file_count - big_files;
+    let big_files_percentage = (big_files as f64 / file_count as f64) * 100.0;
 
-        let unique_files = hash_map.len();
-        let unique_file_percentage = (unique_files as f64 / small_files as f64) * 100.0;
+    info!(
+        "Ignored large files: {} / {:.2} %",
+        big_files, big_files_percentage
+    );
+    info!(
+        "Remaining files: {} / {:.2} %",
+        small_files,
+        100.0 - big_files_percentage
+    );
 
-        info!(
-            "Unique files: {} / {:.2} %",
-            unique_files, unique_file_percentage
-        );
-        info!(
-            "Duplicate files: {} / {:.2} %",
-            small_files - unique_files,
-            100.0 - unique_file_percentage
-        );
+    let unique_files = hash_map.len();
+    let unique_file_percentage = (unique_files as f64 / small_files as f64) * 100.0;
 
-        let clusters_column: (Vec<String>, Vec<u32>) =
-            hash_map.values().map(|v| (v.1.clone(), v.2)).unzip();
+    info!(
+        "Unique files: {} / {:.2} %",
+        unique_files, unique_file_percentage
+    );
+    info!(
+        "Duplicate files: {} / {:.2} %",
+        small_files - unique_files,
+        100.0 - unique_file_percentage
+    );
 
-        let clusters = DataFrame::new(vec![
-            polars::prelude::Column::new(input_header.into(), clusters_column.0),
-            polars::prelude::Column::new("count".into(), clusters_column.1),
-        ])?;
+    let names: Vec<&str> = hash_map.values().map(|(_, name, _)| *name).collect();
+    let counts: Vec<u32> = hash_map.values().map(|(_, _, count)| *count).collect();
 
-        let map_columns: (Vec<String>, Vec<String>) = clone_map
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .unzip();
+    let most_duplicated_file: u32 = *counts
+        .iter()
+        .max()
+        .with_context(|| "Empty cluster counts")?;
 
-        let mut map_df = DataFrame::new(vec![
-            polars::prelude::Column::new(input_header.into(), map_columns.0),
-            polars::prelude::Column::new("original".into(), map_columns.1),
-        ])?;
+    let clusters = DataFrame::new(vec![
+        polars::prelude::Column::new(input_header.into(), names),
+        polars::prelude::Column::new("count".into(), counts),
+    ])?;
 
-        let most_duplicated_file: u32 = *u32(&clusters, "count")?
-            .iter()
-            .max()
-            .with_context(|| "Empty column 'count'")?;
-        let most_duplicated_file_percentage =
-            (most_duplicated_file as f64 / small_files as f64) * 100.0;
+    let most_duplicated_file_percentage =
+        (most_duplicated_file as f64 / small_files as f64) * 100.0;
 
-        info!(
-            "Most duplicated file: {} times / {:.2} %",
-            most_duplicated_file, most_duplicated_file_percentage
-        );
+    info!(
+        "Most duplicated file: {} times / {:.2} %",
+        most_duplicated_file, most_duplicated_file_percentage
+    );
 
-        log_write_output(logger, map_path, &mut map_df, false)?;
+    log_write_rows(
+        logger,
+        map_path,
+        [input_header, "original"],
+        clone_map.into_iter().map(|(k, v)| [k, v]),
+    )?;
 
-        let mut output_df = files.join(
-            &clusters,
-            [input_header],
-            [input_header],
-            polars::prelude::JoinType::Inner.into(),
-            None,
-        )?;
+    let mut output_df = files.join(
+        &clusters,
+        [input_header],
+        [input_header],
+        polars::prelude::JoinType::Inner.into(),
+        None,
+    )?;
 
-        log_write_output(logger, output_path, &mut output_df, false)
-    })
-    .map_err(|e| anyhow!("Error in child thread: {e:?}"))??;
-
-    Ok(())
+    log_write_dataframe(logger, output_path, &mut output_df)
 }
 
 #[cfg(test)]

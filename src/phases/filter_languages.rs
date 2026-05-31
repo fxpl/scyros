@@ -14,9 +14,7 @@
 
 #![doc = include_str!("../docs/filter_languages.md")]
 
-use std::collections::{HashMap, HashSet};
-use std::iter::FromIterator;
-use std::vec;
+use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, Command};
@@ -24,7 +22,7 @@ use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IdxCa, IntoLazy, Schema};
 use tracing::info;
 
-use crate::utils::logger::{log_output_file, log_write_output, Logger};
+use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 use crate::utils::regex::KeywordFiles;
 use crate::utils::{dataframes, fs::*};
 
@@ -111,9 +109,9 @@ pub fn run(
 
     let languages: HashSet<String> = KeywordFiles::new(false)
         .add_file(languages_path, false)?
-        .matchers
-        .keys()
-        .cloned()
+        .languages()
+        .into_iter()
+        .map(|k| k.to_ascii_lowercase())
         .collect();
 
     let mut projects: DataFrame = open_csv(
@@ -129,10 +127,10 @@ pub fn run(
     let projects_count = projects.height();
 
     info!("{} projects found in the file", projects_count);
-
+    const UNREACHABLE_PREFIX: &str = "http/2 ";
     projects = projects
         .lazy()
-        .filter(col("name").str().starts_with(lit("http/2 ")).not())
+        .filter(col("name").str().starts_with(lit(UNREACHABLE_PREFIX)).not())
         .collect()
         .with_context(|| "Could not filter unreachable projects")?;
 
@@ -152,19 +150,16 @@ pub fn run(
         reachable_projects_count, reachable_projects_percentage
     );
 
-    let languages_maps: Vec<(usize, HashMap<&str, &str>)> =
-        dataframes::str(&projects, "languages")?
-            .into_iter()
-            .map(parse_map)
-            .enumerate()
-            .collect();
-
-    let languages_mask = languages_maps
+    let languages_mask = dataframes::str(&projects, "languages")?
         .into_iter()
-        .filter_map(|(idx, m)| {
-            Some(Some(idx as u32))
-                .filter(|_| m.keys().any(|k| languages.contains(&k.to_lowercase())))
+        .enumerate()
+        .filter(|(_, langs)| {
+            langs
+                .split(';')
+                .filter_map(|p| p.split(':').next())
+                .any(|k| languages.contains(&k.to_ascii_lowercase()))
         })
+        .map(|(idx, _)| Some(idx as u32))
         .collect::<IdxCa>();
 
     projects = projects
@@ -187,19 +182,11 @@ pub fn run(
     );
 
     // Writes the result to the output CSV file
-    log_write_output(logger, output_path, &mut projects, no_output)
-}
-
-fn parse_map(map: &str) -> HashMap<&str, &str> {
-    map.split(';')
-        .filter_map(|pair| {
-            let mut parts = pair.splitn(2, ':');
-            match (parts.next(), parts.next()) {
-                (Some(k), Some(v)) => Some((k, v)),
-                _ => None,
-            }
-        })
-        .collect()
+    if no_output {
+        Ok(())
+    } else {
+        log_write_dataframe(logger, output_path, &mut projects)
+    }
 }
 
 #[cfg(test)]
@@ -209,33 +196,6 @@ mod tests {
     use anyhow::ensure;
 
     use super::*;
-
-    #[test]
-    fn test_parse_map() -> Result<()> {
-        let input = "key1:value1;key2:value2;key3:value3";
-        let expected: HashMap<&str, &str> =
-            [("key1", "value1"), ("key2", "value2"), ("key3", "value3")]
-                .iter()
-                .cloned()
-                .collect();
-        let result = parse_map(input);
-        ensure!(
-            result == expected,
-            "Parsed map does not match expected result."
-        );
-        Ok(())
-    }
-    #[test]
-    fn test_parse_empty_map() -> Result<()> {
-        let input = "";
-        let expected: HashMap<&str, &str> = HashMap::new();
-        let result = parse_map(input);
-        ensure!(
-            result == expected,
-            "Parsed map does not match expected result."
-        );
-        Ok(())
-    }
 
     const INPUT: &str = "tests/data/phases/filter_languages/filter_languages.csv";
     const LANGS: &str = "tests/data/keywords/scala_float.json";

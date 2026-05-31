@@ -16,11 +16,15 @@
 
 use std::collections::HashMap;
 
+use anyhow::{Context, Result};
+
+pub type Word = Vec<u8>;
+
 /// Bag of Words (BoW) structure for counting token occurrences.
 /// BoW are invariant to the order of insertion. All operations assume tokens are in byte slice form.
 pub struct Bow {
     /// Internal map storing token counts.
-    map: HashMap<Vec<u8>, usize>,
+    map: HashMap<Word, usize>,
     /// Whether to convert tokens to lower case before adding them to the bag of words.
     lowercase: bool,
 }
@@ -50,11 +54,11 @@ impl Bow {
     ///
     /// * `token` - The token to be added in byte slice form.
     pub fn add(&mut self, token: &[u8]) {
-        let token: Vec<u8> = if self.lowercase {
+        let token: Word = if self.lowercase {
             token
                 .iter()
                 .map(|b| b.to_ascii_lowercase())
-                .collect::<Vec<u8>>()
+                .collect::<Word>()
         } else {
             token.to_owned()
         };
@@ -71,7 +75,7 @@ impl Bow {
             &token
                 .iter()
                 .map(|b| b.to_ascii_lowercase())
-                .collect::<Vec<u8>>()
+                .collect::<Word>()
         } else {
             token
         };
@@ -95,7 +99,7 @@ impl Bow {
 
     /// Serializes the Bag of Words into a byte vector. The result is invariant to the order of insertion.
     pub fn serialize(self) -> Vec<u8> {
-        let mut ordered_bow: Vec<(Vec<u8>, usize)> = self.map.into_iter().collect();
+        let mut ordered_bow: Vec<(Word, usize)> = self.map.into_iter().collect();
         ordered_bow.sort_by(|a, b| a.0.cmp(&b.0));
         ordered_bow
             .into_iter()
@@ -105,37 +109,48 @@ impl Bow {
             .into_bytes()
     }
 
-    /// Merges another Bag of Words into this one, summing the counts of shared tokens.
+    /// Extends the Bag of Words with another Bag of Words, summing the counts of shared tokens.
     ///
     /// # Arguments
     ///
-    /// * `other` - The other Bag of Words to be merged into this one.
-    pub fn merge(&mut self, other: Bow) {
+    /// * `other` - The other Bag of Words to be extended into this one.
+    pub fn extend(&mut self, other: Bow) {
         for (token, count) in other.map {
             *self.map.entry(token).or_insert(0) += count;
         }
     }
 
-    /// Generates a ranking of tokens based on their frequency in the Bag of Words.
-    /// The ranking is a HashMap where the key is the token and the value is a tuple containing the frequency and the rank (1-based index).
-    /// Returns a HashMap where the key is the token and the value is a tuple containing the frequency and the rank.
-    pub fn token_rankings(&self) -> HashMap<Vec<u8>, (usize, usize)> {
-        let mut rankings: HashMap<Vec<u8>, (usize, usize)> = HashMap::new();
-        let mut count_vec: Vec<(&Vec<u8>, &usize)> = self.map.iter().collect();
-        //count_vec.sort_by(|a, b| a.1.cmp(b.1)); // Sort by count in ascending order
-        count_vec.sort_by(|a, b| {
-            a.1.cmp(b.1) // primary: count ascending
-                .then_with(|| a.0.cmp(b.0)) // secondary: token ascending
-        });
-        for (rank, (token, count)) in count_vec.into_iter().enumerate() {
-            rankings.insert(token.clone(), (*count, rank + 1));
-        }
-        rankings
+    pub fn token_rankings(self) -> HashMap<Word, usize> {
+        let mut count_vec: Vec<(Word, usize)> = self.map.into_iter().collect();
+        count_vec.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        count_vec
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (token, _))| (token, rank))
+            .collect()
     }
 
-    pub fn vectorize(self) -> Vec<(Vec<u8>, usize)> {
-        let vector: Vec<(Vec<u8>, usize)> = self.map.into_iter().collect();
-        vector
+    pub fn sort_by(self, token_rankings: &HashMap<Word, usize>) -> Result<Vec<(Word, usize)>> {
+        let mut ranked: Vec<(usize, Word, usize)> = self
+            .map
+            .into_iter()
+            .map(|(token, count)| {
+                let rank = *token_rankings.get(&token).with_context(|| {
+                    format!(
+                        "Token not found in rankings: {}",
+                        String::from_utf8_lossy(&token)
+                    )
+                })?;
+                Ok((rank, token, count))
+            })
+            .collect::<Result<_>>()?;
+
+        ranked.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+        Ok(ranked
+            .into_iter()
+            .map(|(_, token, count)| (token, count))
+            .collect())
     }
 }
 

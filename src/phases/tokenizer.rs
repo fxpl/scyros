@@ -44,8 +44,7 @@ pub fn cli() -> Command {
 
 pub fn run(input_path: &str, example_word: &str, _logger: &Logger) -> Result<()> {
     let language = "java";
-    let minimum_loc = 5; //temporary
-                         //let separators = vec!["(", ")", "[", "]", "{", "}", ";", ".", ",", ":", "=", "+", "-", "*", "/", "%", "<", ">", "&", "|", "!", "?", "~", "^", "#", "$", "@", "\"", "\\", "`", "'"]; //hardcoded separators for now. Will add more later and make it configurable.
+    let minimum_loc = 5;
 
     let mut input_file = open_csv(
         input_path,
@@ -68,7 +67,6 @@ pub fn run(input_path: &str, example_word: &str, _logger: &Logger) -> Result<()>
         n_functions_before_language
     );
 
-    //input_file = input_file.filter(&input_file.column("language")?.equal(language));
     input_file = input_file
         .lazy()
         .filter(col("language").eq(lit(language)))
@@ -121,59 +119,30 @@ pub fn run(input_path: &str, example_word: &str, _logger: &Logger) -> Result<()>
         example_word,
         token_rankings
             .get(example_word_token)
-            .map(|(count, _)| *count)
-            .unwrap_or(0),
+            .unwrap_or(&0),
         token_rankings
             .get(example_word_token)
-            .map(|(_, rank)| *rank)
-            .unwrap_or(0)
+            .unwrap_or(&0)
     );
 
     Ok(())
 }
 
-/* pub fn run_tokenizer(
-    input_file: &DataFrame,
-    //output_path: &str,
-    //language: &str,
-    _logger: &Logger, //not used currently but hopefully will later
-) -> Result<HashMap<Vec<u8>, (usize, usize)>> {
-    //No checks for language yet. Just uses java for now. Will add more languages later.
-
-    let global_bow = global_counter(input_file)?;
-
-    let token_rankings: std::collections::HashMap<Vec<u8>, (usize, usize)> =
-        global_bow.token_rankings();
-
-    Some(token_rankings).ok_or_else(|| anyhow!("No tokens found in the global Bag of Words."))
-} */
-
 pub fn global_counter(input_file: &DataFrame) -> Result<Bow> {
-    use indicatif::ProgressBar;
-    use std::time::Instant;
     info!("Building global Bag of Words from the functions in the input file...");
-    let bow_start = Instant::now();
     let paths_column = input_file.column("path").and_then(|c| c.str())?;
-    let total_files = paths_column.len();
-
-    let bow_progress = ProgressBar::new(total_files as u64);
-    bow_progress.set_style(
-        indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
-    );
-    bow_progress.set_message("Building global bag-of-words...");
 
     let word_matcher: Matcher = Matcher::words_matcher();
     let mut global_bow: Bow = Bow::new(true);
 
     for row in paths_column.into_iter() {
-        bow_progress.inc(1);
         match row {
             Some(path) => {
                 //let function_code = std::fs::read_to_string(path)?;
                 match load_file(path, 1024 * 1024 * 1024) {
                     Ok(Ok(function_code)) => {
                         let local_bow = word_matcher.bag_of_words(&function_code, true);
-                        global_bow.merge(local_bow);
+                        global_bow.extend(local_bow);
                     }
                     Ok(Err(_e)) => {
                         info!("  Warning: File too large at path {}", path);
@@ -188,34 +157,5 @@ pub fn global_counter(input_file: &DataFrame) -> Result<Bow> {
             }
         }
     }
-
-    bow_progress.finish_and_clear();
-    let bow_duration = bow_start.elapsed();
-    info!("BOW building took: {:.2}s", bow_duration.as_secs_f64());
-
     Ok(global_bow)
 }
-
-/* fn tokenize_function(
-    function_code_path: &str,
-    separators: &Vec<&str>,
-    logger: &mut Logger
-) -> Result<(HashMap<String, usize>), Error> {
-    let function_string = std::fs::read_to_string(function_code_path)?;
-
-
-    let mut tokenized_string = function_string.clone();
-    for separator in separators {
-        tokenized_string = tokenized_string.replace(separator, " ");
-    }
-
-    let words_in_string: Vec<&str> = tokenized_string.split_whitespace().collect();
-
-    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-    for word in words_in_string {
-        *counts.entry(word.to_string()).or_insert(0) += 1;
-    }
-
-    Ok(counts)
-} */

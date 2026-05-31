@@ -2,10 +2,10 @@ use crate::phases::tokenizer::global_counter;
 use crate::utils::candidate_map::*;
 use crate::utils::fs::*;
 use crate::utils::inverted_index::*;
-use crate::utils::logger::{log_output_file, log_write_output, Logger};
+use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 use crate::utils::regex::*;
+use anyhow::Context;
 use anyhow::{/* Error,  */ Result};
-use blake3;
 use clap::ArgAction;
 use clap::{Arg, Command};
 use core::f64;
@@ -14,11 +14,11 @@ use indicatif::ProgressBar;
 use polars::prelude::*;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 use std::vec;
 use tracing::{debug, info, warn};
 
-type CloneMap = HashMap<blake3::Hash, Either<HashSet<blake3::Hash>, blake3::Hash>>;
+type CloneMap<'a> = HashMap<&'a str, Either<HashSet<&'a str>, &'a str>>;
+type Word = Vec<u8>;
 
 pub fn cli() -> Command {
     Command::new("type_3_duplicate_files")
@@ -113,18 +113,15 @@ pub fn run(
     _logs_path: Option<&str>, //for error logs, not implemented yet
     /* _opt_languages: Option<Vec<&str>>, //optional list of languages. Currently java is hardcoded */
     opt_language: Option<&str>,
-    _threads: usize,               //current implementation is single-threaded
-    p_prefix: usize,               //number of tokens to consider for the prefix, default is 1
-    threshold: f64,                //threshold for the prefix length, default is 0.8
-    example_word: Option<&String>, //an example word to check the global Bag of Words for, optional
-    force: bool,                   //whether to override the output CSV file if it already exists
-    input_header: &str,            //name of column storing file paths in the input CSV file
+    _threads: usize,    //current implementation is single-threaded
+    p_prefix: usize,    //number of tokens to consider for the prefix, default is 1
+    threshold: f64,     //threshold for the prefix length, default is 0.8
+    force: bool,        //whether to override the output CSV file if it already exists
+    input_header: &str, //name of column storing file paths in the input CSV file
     _logger: &Logger,
 ) -> Result<()> {
-    //let language = "java";
     let language = opt_language.unwrap_or("java"); //default to java currently
     let minimum_loc = 0; //temporary
-    let total_start = Instant::now();
     let mut input_file = open_csv(
         input_path,
         Some(Schema::from_iter(vec![
@@ -167,8 +164,6 @@ pub fn run(
 
     info!(" {} functions found after filtering by language, filtering functions with less that {} lines of code.", n_functions_before_loc, minimum_loc);
 
-    //input_file = input_file.filter(&input_file.column("loc")?.greater_equal(minimum_loc))?;
-
     input_file = input_file
         .lazy()
         .filter(col("loc").gt_eq(lit(minimum_loc)))
@@ -179,7 +174,7 @@ pub fn run(
     //moved here from detect_clones
     let paths_column = input_file.column(input_header)?.str()?;
     let words_column = input_file.column("words")?.u32()?;
-    let rows: Vec<(&str, usize)> = paths_column
+    let rows: HashMap<&str, usize> = paths_column
         .into_iter()
         .zip(words_column)
         .filter_map(|(path_opt, words_opt)| match (path_opt, words_opt) {
@@ -188,27 +183,10 @@ pub fn run(
         })
         .collect();
 
-    let function_paths_and_lengths: HashMap<blake3::Hash, (&str, usize)> = rows
-        .iter()
-        .map(|(path, words)| (blake3::hash(path.as_bytes()), (*path, *words)))
-        .collect();
-
-    let global_bow = global_counter(&input_file)?;
-    let token_rankings = global_bow.token_rankings();
-    let index_start = Instant::now();
-    let vector_of_indices_plus_min_max = index_builder(
-        &input_file,
-        &token_rankings,
-        p_prefix,
-        threshold,
-        &function_paths_and_lengths,
-    )?;
-    let index_duration = index_start.elapsed();
-    info!("Index building took: {:.2}s", index_duration.as_secs_f64());
+    let token_rankings: HashMap<Vec<u8>, usize> = global_counter(&input_file)?.token_rankings();
+    let (vector_of_indices, min_words, max_words) =
+        index_builder(&input_file, &token_rankings, p_prefix, threshold, &rows)?;
     // Maximum and minimum 'words' in input file
-    let vector_of_indices = vector_of_indices_plus_min_max.0;
-    let min_words = vector_of_indices_plus_min_max.1 .0;
-    let max_words = vector_of_indices_plus_min_max.1 .1;
     info!(
         "Built {} indices with prefix scheme from 1 to {}, minimum words in a function: {}, maximum words in a function: {}.",
         vector_of_indices.len(),
@@ -217,49 +195,41 @@ pub fn run(
         max_words
     );
 
-    if let Some(word) = example_word {
-        let word = word.to_owned().as_bytes().to_ascii_lowercase();
-        let mut index_number = 1;
-        for index in vector_of_indices.iter() {
-            debug!(
-                "Index {} has {} entries, total length of vectors in entries: {}",
-                index_number,
-                index.len(),
-                index.len_tokens()
-            );
-            if let Some(entries) = index.get(&word) {
-                debug!(
-                    "Entries for the example word '{}' in index {}§:",
-                    String::from_utf8_lossy(&word),
-                    index_number
-                );
-                for (function_id, count, (token_position, cumulative_count)) in entries {
-                    debug!(
-                        "Function ID: {}, Count: {}, Token Position: {}, Cumulative Count: {}",
-                        function_id, count, token_position, cumulative_count
-                    );
-                }
-            } else {
-                debug!(
-                    "The example word '{}' was not found in index {}.",
-                    String::from_utf8_lossy(&word),
-                    index_number
-                );
-            }
-            index_number += 1;
-        }
-    }
+    // if let Some(word) = example_word {
+    //     let word = word.to_owned().as_bytes().to_ascii_lowercase();
+    //     let mut index_number = 1;
+    //     for index in vector_of_indices.iter() {
+    //         debug!(
+    //             "Index {} has {} entries, total length of vectors in entries: {}",
+    //             index_number,
+    //             index.len(),
+    //             index.len_tokens()
+    //         );
+    //         if let Some(entries) = index.get(&word) {
+    //             debug!(
+    //                 "Entries for the example word '{}' in index {}§:",
+    //                 String::from_utf8_lossy(&word),
+    //                 index_number
+    //             );
+    //             for (function_id, count, (token_position, cumulative_count)) in entries {
+    //                 debug!(
+    //                     "Function ID: {}, Count: {}, Token Position: {}, Cumulative Count: {}",
+    //                     function_id, count, token_position, cumulative_count
+    //                 );
+    //             }
+    //         } else {
+    //             debug!(
+    //                 "The example word '{}' was not found in index {}.",
+    //                 String::from_utf8_lossy(&word),
+    //                 index_number
+    //             );
+    //         }
+    //         index_number += 1;
+    //     }
+    // }
 
     //go through input file again? Means i can grab 'words' from the file. Could do something like just checking candidates
-    let verify_start = Instant::now();
-    let clone_map = detect_clones(
-        &token_rankings,
-        &vector_of_indices,
-        threshold,
-        &function_paths_and_lengths,
-    )?;
-    let verify_duration = verify_start.elapsed();
-    info!("Verification took: {:.2}s", verify_duration.as_secs_f64());
+    let clone_map = detect_clones(&token_rankings, &vector_of_indices, threshold, &rows)?;
 
     // Ok() is kept at the end of the function
     // Prepare CSV outputs: map of clone -> origin, and unique files list
@@ -269,34 +239,26 @@ pub fn run(
     let map_path: &str = _map_path.unwrap_or(&default_map_path);
 
     // Build clone -> origin mapping
-    let mut clone_to_origin: HashMap<blake3::Hash, blake3::Hash> = HashMap::new();
-    for (k, v) in clone_map.iter() {
+    let mut clone_to_origin: HashMap<&str, &str> = HashMap::new();
+    for (k, v) in clone_map {
         match v {
             Either::Left(set) => {
-                for c in set.iter() {
-                    clone_to_origin.insert(*c, *k);
+                for c in set {
+                    clone_to_origin.insert(c, k);
                 }
             }
             Either::Right(origin) => {
-                clone_to_origin.insert(*k, *origin);
+                clone_to_origin.insert(k, origin);
             }
         }
     }
 
+    let clone_to_origin = clone_to_origin; //make immutable
+
     // Map CSV rows
-    let mut map_names: Vec<String> = Vec::new();
-    let mut map_originals: Vec<String> = Vec::new();
-    for (clone_hash, origin_hash) in clone_to_origin.iter() {
-        let clone_path = function_paths_and_lengths
-            .get(clone_hash)
-            .map(|(p, _)| *p)
-            .unwrap_or("Unknown")
-            .to_string();
-        let origin_path = function_paths_and_lengths
-            .get(origin_hash)
-            .map(|(p, _)| *p)
-            .unwrap_or("Unknown")
-            .to_string();
+    let mut map_names: Vec<&str> = Vec::new();
+    let mut map_originals: Vec<&str> = Vec::new();
+    for (clone_path, origin_path) in &clone_to_origin {
         map_names.push(clone_path);
         map_originals.push(origin_path);
     }
@@ -307,12 +269,12 @@ pub fn run(
     ])?;
 
     // Unique files: those that are not listed as clones
-    let mut unique_paths: Vec<String> = Vec::new();
+    let mut unique_paths: Vec<&str> = Vec::new();
     let mut unique_words: Vec<u32> = Vec::new();
-    for (hash, (path, words)) in function_paths_and_lengths.iter() {
-        if !clone_to_origin.contains_key(hash) {
-            unique_paths.push(path.to_string());
-            unique_words.push(*words as u32);
+    for (path, words) in rows {
+        if !clone_to_origin.contains_key(path) {
+            unique_paths.push(path);
+            unique_words.push(words as u32);
         }
     }
 
@@ -323,8 +285,8 @@ pub fn run(
 
     // Check output files and write
     log_output_file(output_path, false, force)?;
-    log_write_output(_logger, map_path, &mut map_df, false)?;
-    log_write_output(_logger, output_path, &mut output_df, false)?;
+    log_write_dataframe(_logger, map_path, &mut map_df)?;
+    log_write_dataframe(_logger, output_path, &mut output_df)?;
 
     info!(
         "Remaining files: {} / {:.2} %", //something is weird with the percentage calculation here.
@@ -352,101 +314,62 @@ pub fn run(
         duplicate_files, duplicate_file_percentage
     );
 
-    let total_duration = total_start.elapsed();
-    info!("Total runtime: {:.2}s", total_duration.as_secs_f64());
-
     Ok(())
 }
 
-fn index_builder(
-    input_file: &DataFrame,
-    token_rankings: &HashMap<Vec<u8>, (usize, usize)>,
+fn prefix_length(word_count: usize, threshold: f64) -> usize {
+    word_count - ((word_count as f64) * threshold).ceil() as usize + 1
+}
+
+fn index_builder<'a>(
+    input_file: &'a DataFrame,
+    token_rankings: &HashMap<Word, usize>,
     p_prefix: usize,
     threshold: f64,
-    function_paths_and_lengths: &HashMap<blake3::Hash, (&str, usize)>,
-) -> Result<(Vec<InvertedIndex>, (usize, usize))> {
+    functions_lengths: &HashMap<&'a str, usize>,
+) -> Result<(Vec<InvertedIndex<'a>>, usize, usize)> {
     info!("Building indices...");
-    let index_progress = ProgressBar::new(function_paths_and_lengths.len() as u64);
-    index_progress.set_style(
-        indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
-    );
-    let word_matcher: Matcher = Matcher::words_matcher();
 
-    let mut vector_of_indices: Vec<InvertedIndex> = Vec::new();
-    for _i in 1..=p_prefix {
-        vector_of_indices.push(InvertedIndex::new());
-        //info!("Initialized index {}.", _i);
-    }
+    let mut vector_of_indices: Vec<InvertedIndex<'a>> =
+        (0..p_prefix).map(|_| InvertedIndex::new()).collect();
     let mut min_words = usize::MAX;
     let mut max_words = 0;
-    for path in input_file
-        .column("path")
-        .and_then(|c| c.str())
-        .unwrap()
-        .into_iter()
-        .flatten()
-    {
-        index_progress.inc(1);
-        match load_file(path, 1024 * 1024 * 1024) {
-            Ok(Ok(function_code)) => {
-                let local_bow = word_matcher.bag_of_words(&function_code, true);
-                let mut vectored_bow = local_bow.vectorize();
-                vectored_bow.sort_by_key(|(token, _)| {
-                    token_rankings
-                        .get(token)
-                        .map(|(_, rank)| *rank)
-                        .unwrap_or(usize::MAX)
-                });
-                //let codeblock_length = vectored_bow.iter().map(|(_, count)| count).sum::<usize>();
-                let codeblock_length = function_paths_and_lengths
-                    .get(&blake3::hash(path.as_bytes()))
-                    .map(|(_, count)| *count)
-                    .unwrap_or(0);
-                // Could probably rewrite this to get number of words from the input file instead of calculating it here
-                // Min and Max codeblock are in number of words, not tokens but seeing as they're only used for estimating verification cost they don't need to be precise
-                if codeblock_length < min_words {
-                    min_words = codeblock_length;
-                }
-                if codeblock_length > max_words {
-                    max_words = codeblock_length;
-                }
-                let prefix_length =
-                    codeblock_length - ((codeblock_length as f64) * threshold).round() as usize + 1;
+    let paths = input_file.column("path")?.str()?.into_iter().flatten();
+    for path in paths {
+        let function_code = load_file(path, 1024 * 1024 * 1024)?
+            .map_err(|e| anyhow::anyhow!("Error loading file '{}': {}.", path, e))?;
+        let vector_bow = Matcher::words_matcher()
+            .bag_of_words(&function_code, true)
+            .sort_by(token_rankings)?;
+        let codeblock_length: usize = functions_lengths
+            .get(path)
+            .copied()
+            .with_context(|| format!("No entry found in functions_lengths for path '{}'.", path))?;
+        min_words = min_words.min(codeblock_length);
+        max_words = max_words.max(codeblock_length);
+        let prefix_length: usize = prefix_length(codeblock_length, threshold);
 
-                let mut cumulative_count = 0;
-                let mut p = 1;
-                let function_id = blake3::hash(path.as_bytes());
-                //info!("Prefix length: {}, total tokens: {}, codeblock length: {}", prefix_length, vectored_bow.len(), codeblock_length);
+        let mut cumulative_count = 0;
+        let mut p = 0;
 
-                for (idx, (token, count)) in vectored_bow.iter().enumerate() {
-                    cumulative_count += count;
-                    vector_of_indices[p - 1].add(token, function_id, *count, idx, cumulative_count);
-                    if cumulative_count >= prefix_length {
-                        if p == p_prefix {
-                            //info!("Prefix scheme {} added token {} with count {}", p, String::from_utf8_lossy(&token), count);
-                            break;
-                        } else {
-                            p += 1;
-                        }
-                    }
+        for (idx, (token, count)) in vector_bow.into_iter().enumerate() {
+            cumulative_count += count;
+            vector_of_indices[p].add(&token, path, count, idx, cumulative_count);
+            if cumulative_count >= prefix_length {
+                p += 1;
+                if p == p_prefix {
+                    break;
                 }
-            }
-            Ok(Err(_e)) => {
-                warn!("File too large at path '{}', skipping.", path);
-            }
-            Err(_e) => {
-                warn!("Failed to read file at path '{}', skipping.", path);
             }
         }
     }
-    index_progress.finish();
     info!("Finished building indices.");
-    Ok((vector_of_indices, (min_words, max_words)))
+    Ok((vector_of_indices, min_words, max_words))
 }
 
 fn delta_filter_cost(
     token_tuple: &(Vec<u8>, usize),
-    vector_of_indices: &[InvertedIndex], //changed from &Vec<InvertedIndex> since the compiler requested it
+    vector_of_indices: &[InvertedIndex],
     p_prefix: usize,
     new: bool,
 ) -> usize {
@@ -464,66 +387,53 @@ fn delta_filter_cost(
     cost
 }
 
-fn weighted_prefix_end(vectored_bow: &[(Vec<u8>, usize)], prefix_length: usize) -> usize {
-    if prefix_length == 0 {
-        debug!("Prefix length is 0, returning 0 for weighted prefix end.");
-        // This case shouldn't be seen
-        return 0;
-    }
-    let mut cumulative_count = 0usize;
+fn weighted_prefix_end(vectored_bow: &[(Vec<u8>, usize)], prefix_length: usize) -> Result<usize> {
+    let mut cumulative_count: usize = 0;
     for (idx, (_, count)) in vectored_bow.iter().enumerate() {
         cumulative_count += *count;
         if cumulative_count >= prefix_length {
-            return idx + 1; //Enumerator is 0-based, so we need to add 1 to get the correct length of the prefix vector
+            return Ok(idx + 1); //Enumerator is 0-based, so we need to add 1 to get the correct length of the prefix vector
         }
     }
-    warn!("prefix_length {} is greater than total token count {}, returning full length of vectored_bow.", prefix_length, vectored_bow.len());
-    vectored_bow.len()
+    anyhow::bail!(
+        "Unreachable: Prefix length {} is greater than the total number of tokens in the function ({}).",
+        prefix_length,
+        cumulative_count
+    )
 }
 
-fn detect_clones(
-    token_rankings: &HashMap<Vec<u8>, (usize, usize)>,
-    vector_of_indices: &[InvertedIndex], //changed from &Vec<InvertedIndex> since the compiler requested it
+fn detect_clones<'a>(
+    token_rankings: &HashMap<Word, usize>,
+    vector_of_indices: &'a [InvertedIndex],
     threshold: f64,
-    function_paths_and_lengths: &HashMap<blake3::Hash, (&str, usize)>,
-) -> Result<CloneMap> {
+    function_lengths: &HashMap<&'a str, usize>,
+) -> Result<CloneMap<'a>> {
     // result will probably be a 'clone-map'. Unsure for now if it has to be its own data-structure or if i can reuse the candidate map from before.
     let mut clone_map: CloneMap = HashMap::new();
 
     let word_matcher: Matcher = Matcher::words_matcher();
     let p_prefix = vector_of_indices.len();
     info!("Detecting clones");
-    let detection_progress = ProgressBar::new(function_paths_and_lengths.len() as u64);
+    let detection_progress = ProgressBar::new(function_lengths.len() as u64);
     detection_progress.set_style(
         indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
     );
 
-    for (path, origin_word_count) in function_paths_and_lengths.values() {
+    for (path, origin_word_count) in function_lengths {
         debug!("-----------------------------------------------------------------------------");
         detection_progress.inc(1);
         // info!("Path: {}, Words: {}", path, origin_word_count);
         match load_file(path, 1024 * 1024 * 1024) {
             Ok(Ok(function_code)) => {
-                let local_bow = word_matcher.bag_of_words(&function_code, true);
-                let mut origin_vectored_bow = local_bow.vectorize();
-                origin_vectored_bow.sort_by_key(|(token, _)| {
-                    token_rankings
-                        .get(token)
-                        .map(|(_, rank)| *rank)
-                        .unwrap_or(usize::MAX)
-                });
-                let origin_function_id = blake3::hash(path.as_bytes());
-                debug!("Origin path: {}", path);
+                let origin_vectored_bow = word_matcher
+                    .bag_of_words(&function_code, true)
+                    .sort_by(token_rankings)?;
                 let mut candidate_map = CandidateMap::new();
 
-                let prefix_length = origin_word_count
-                    - ((*origin_word_count as f64) * threshold).round() as usize
-                    + 1;
-                debug!(
-                    "Prefix length: {}, origin word count: {}, threshold: {}",
-                    prefix_length, origin_word_count, threshold
-                );
-                let init_prefix_end = weighted_prefix_end(&origin_vectored_bow, prefix_length);
+                let init_prefix_end = weighted_prefix_end(
+                    &origin_vectored_bow,
+                    prefix_length(*origin_word_count, threshold),
+                )?;
                 let mut filter_cost_vector: Vec<usize> = Vec::new();
                 filter_cost_vector.push(0); //cost of prefix scheme 1 is calculated from an empty prefix, so the initial cost is 0
                 let mut verification_cost_vector: Vec<usize> = Vec::new();
@@ -537,69 +447,67 @@ fn detect_clones(
                     let mut filter_cost = filter_cost_vector[p - 1]; // start with the filter cost of the previous prefix scheme
                     let prefix_end = init_prefix_end + p - 1; //the prefix end for the current scheme is at least the prefix end of the first scheme + the number of tokens in the prefix - 1 (since p-prefix is at least 1)
 
-                    /* for (idx, token_tuple) in
-                    origin_vectored_bow.iter().take(prefix_end).enumerate() */
                     while origin_token_position < prefix_end
                         && origin_token_position < origin_vectored_bow.len()
                     {
                         let token_tuple = origin_vectored_bow.get(origin_token_position).unwrap();
-                        //debug!("Processing token {} at position {} in the origin prefix vector for prefix scheme {}.", String::from_utf8_lossy(&token_tuple.0), origin_token_position, p);
-                        //loop through the prefix vector of the current scheme, for the first scheme this is just the original prefix vector, for the next schemes this includes additional tokens
                         let is_new = origin_token_position + 1 == prefix_end;
                         origin_cumulative_count += token_tuple.1;
                         filter_cost += delta_filter_cost(token_tuple, vector_of_indices, p, is_new);
-                        debug!("Origin    ID {}, count {}, token {}, index {}, tok_pos {}, wordpos {}.", origin_function_id, token_tuple.1, String::from_utf8_lossy(&token_tuple.0), p, origin_token_position, origin_cumulative_count);
+                        debug!(
+                            "Origin {}, count {}, token {}, index {}, tok_pos {}, wordpos {}.",
+                            path,
+                            token_tuple.1,
+                            String::from_utf8_lossy(&token_tuple.0),
+                            p,
+                            origin_token_position,
+                            origin_cumulative_count
+                        );
                         for candidate in vector_of_indices[p - 1]
                             .get(&token_tuple.0)
                             .unwrap_or(&Vec::new())
                         {
-                            debug!("Candidate ID {}, count {}, token {}, index {}, tok_pos {}, wordpos {}.", candidate.0, candidate.1, String::from_utf8_lossy(&token_tuple.0), p, candidate.2.0, candidate.2.1);
-                            /* if candidate_id_lt_origin_id(&candidate.0, &origin_function_id) {
-                                info!("DClone: SKIPPING candidate at path '{}' since it has a lower function ID than the origin.", function_paths_and_lengths.get(&candidate.0).map(|(path, _)| *path).unwrap_or("Unknown"));
-                                continue; //skip candidates that have already been processed as origins
-                            } */
+                            debug!("Candidate ID {}, count {}, token {}, index {}, tok_pos {}, wordpos {}.", candidate.0, candidate.1, String::from_utf8_lossy(&token_tuple.0), p, candidate.2, candidate.3);
                             if clone_map.contains_key(&candidate.0) {
-                                debug!("DClone: SKIPPING candidate at path '{}' since it already has an entry in clone_map.", function_paths_and_lengths.get(&candidate.0).map(|(path, _)| *path).unwrap_or("Unknown"));
+                                debug!("DClone: SKIPPING candidate at path '{}' since it already has an entry in clone_map.", candidate.0);
                                 continue;
                             }
-                            let candidate_word_count = function_paths_and_lengths
-                                .get(&candidate.0)
-                                .map(|(_, count)| *count)
-                                .unwrap_or(0);
+                            let candidate_word_count =
+                                function_lengths.get(&candidate.0).copied().unwrap_or(0);
 
                             if candidate_word_count
                                 < ((*origin_word_count as f64) * threshold).round() as usize
                             {
-                                debug!("DClone: SKIPPING candidate at path '{}' since its word count {} is below the threshold for clones with the origin ({} words, threshold {}).", function_paths_and_lengths.get(&candidate.0).map(|(path, _)| *path).unwrap_or("Unknown"), candidate_word_count, origin_word_count, threshold);
+                                debug!("DClone: SKIPPING candidate at path '{}' since its word count {} is below the threshold for clones with the origin ({} words, threshold {}).", candidate.0, candidate_word_count, origin_word_count, threshold);
                                 continue; //skip candidates that are too small to reach the threshold
                             }
 
                             let new_matches = min(token_tuple.1, candidate.1);
-                            let function_id = candidate.0;
-                            let last_token_seen_pos = candidate.2; // (token_position, cumulative_count)
+                            let function = candidate.0;
+                            let last_token_seen_pos = candidate.2;
+                            let last_token_seen_cumul_count = candidate.3;
                             let current_threshold =
                                 (max(*origin_word_count, candidate_word_count) as f64 * threshold)
                                     .round() as usize;
                             let upper_bound = min(
                                 *origin_word_count - origin_cumulative_count,
-                                candidate_word_count - last_token_seen_pos.1, //candidate.2.1 is the number of words seen up to and including this token including duplicates
+                                candidate_word_count - last_token_seen_cumul_count,
                             );
-                            if candidate_map.get_token_matches(&function_id)
-                                + upper_bound
-                                + new_matches
+                            if candidate_map.get_token_matches(function) + upper_bound + new_matches
                                 >= current_threshold
                             {
                                 candidate_map.add_pending_update(
-                                    function_id,
+                                    function,
                                     new_matches,
                                     last_token_seen_pos,
+                                    last_token_seen_cumul_count,
                                 );
                             }
                         }
                         origin_token_position += 1;
                     }
                     if p == 1 {
-                        candidate_map.apply_pending_updates(function_paths_and_lengths);
+                        candidate_map.apply_pending_updates(function_lengths);
                         //apply updates for the first prefix scheme before estimating costs since it relies on min/max length
                     }
                     let verification_cost =
@@ -612,33 +520,35 @@ fn detect_clones(
                         debug!("Best prefix scheme is {} with estimated total cost of {}, filter cost: {}, verification cost: {}. Moving on to verification phase.", p - 1, total_cost_vector[p - 1], filter_cost_vector[p - 1], verification_cost_vector[p - 1]);
                         debug!("The next prefix scheme {} has estimated total cost of {}, filter cost: {}, verification cost: {}.", p, total_cost_vector[p], filter_cost_vector[p], verification_cost_vector[p]);
                         verify_candidates(
-                            origin_function_id,
+                            path,
                             &origin_vectored_bow,
-                            (origin_token_position, origin_cumulative_count),
+                            origin_token_position,
+                            origin_cumulative_count,
                             &mut candidate_map,
                             &mut clone_map,
                             p - 1,
                             token_rankings,
                             threshold,
-                            function_paths_and_lengths,
+                            function_lengths,
                         )?;
                         break 'prefix_schemes;
                     } else {
                         //apply updates
-                        candidate_map.apply_pending_updates(function_paths_and_lengths);
+                        candidate_map.apply_pending_updates(function_lengths);
                         if p == p_prefix {
                             debug!("Best prefix scheme is {} with estimated total cost of {}, filter cost: {}, verification cost: {}. This is the last prefix scheme, moving on to verification phase.", p, total_cost_vector[p], filter_cost_vector[p], verification_cost_vector[p]);
                             //return verify_candidates(candidate_map, path, function_code, p);
                             verify_candidates(
-                                origin_function_id,
+                                path,
                                 &origin_vectored_bow,
-                                (origin_token_position, origin_cumulative_count),
+                                origin_token_position,
+                                origin_cumulative_count,
                                 &mut candidate_map,
                                 &mut clone_map,
                                 p_prefix,
                                 token_rankings,
                                 threshold,
-                                function_paths_and_lengths,
+                                function_lengths,
                             )?;
                             break 'prefix_schemes;
                         }
@@ -660,28 +570,26 @@ fn detect_clones(
     Ok(clone_map)
 }
 
-fn verify_candidates(
-    origin_function_id: blake3::Hash,
-    origin_vectored_bow: &Vec<(Vec<u8>, usize)>,
-    prefix_origin_last_token_seen_pos: (usize, usize),
-    candidate_map: &mut CandidateMap,
-    clone_map: &mut CloneMap,
+fn verify_candidates<'a>(
+    origin_function: &'a str,
+    origin_vectored_bow: &Vec<(Word, usize)>,
+    prefix_origin_last_token_seen_pos: usize,
+    prefix_origin_last_token_seen_cumul_count: usize,
+    candidate_map: &mut CandidateMap<'a>,
+    clone_map: &mut CloneMap<'a>,
     p_prefix: usize,
-    token_rankings: &HashMap<Vec<u8>, (usize, usize)>,
+    token_rankings: &HashMap<Word, usize>,
     threshold: f64,
-    function_paths_and_lengths: &HashMap<blake3::Hash, (&str, usize)>,
+    function_lengths: &HashMap<&'a str, usize>,
 ) -> Result<()> {
     // This function will take the candidate map for a function and verify the candidates that have enough matches
     // to be considered clones based on their full token vectors.
     // The clone_map is updated with the results, mapping original function ids to sets of clone function ids.
     let word_matcher: Matcher = Matcher::words_matcher();
-    let (origin_path, origin_word_count) = function_paths_and_lengths
-        .get(&origin_function_id)
-        .copied()
-        .unwrap_or(("Unknown", 0));
+    let origin_word_count = function_lengths.get(origin_function).copied().unwrap_or(0);
     debug!(
         "Verifying candidates for function at path '{}', with word count {}.",
-        origin_path, origin_word_count
+        origin_function, origin_word_count
     );
     let origin_vectored_bow = origin_vectored_bow.to_owned();
     let origin_token_count = origin_vectored_bow.len();
@@ -691,184 +599,187 @@ fn verify_candidates(
         .map(|(token, count)| (String::from_utf8_lossy(token).to_string(), *count))
         .collect();
     debug!("sorted origin vector: {:?}", origin_vector_readable);
-    debug!("origin_function_id: {:?}", origin_function_id);
-    debug!("origin_id as bytes: {:?}", origin_function_id.as_bytes());
-    for candidate_id in candidates_to_verify {
+    debug!("origin_function: {:?}", origin_function);
+    for candidate in candidates_to_verify {
         debug!("----------------------");
-        let (path, length) = function_paths_and_lengths
-            .get(&candidate_id)
-            .copied()
-            .unwrap();
-        debug!("candidate_id as bytes: {:?}", candidate_id.as_bytes());
-        if clone_map.contains_key(&candidate_id) {
+        debug!("candidate_id as bytes: {:?}", candidate.as_bytes());
+        if clone_map.contains_key(&candidate) {
             debug!(
                 "SKIPPING candidate at path '{}' since it already has an entry in clone_map.",
-                path
+                candidate
             );
             continue;
         }
-        if candidate_id == origin_function_id {
-            debug!("Skipping self-comparison for function at path '{}'.", path);
+        if candidate == origin_function {
+            debug!(
+                "Skipping self-comparison for function at path '{}'.",
+                candidate
+            );
             continue; //skip comparing the function to itself
         }
         let mut origin_last_token_seen_pos = prefix_origin_last_token_seen_pos;
-        match load_file(path, 1024 * 1024 * 1024) {
-            Ok(Ok(candidate_code)) => {
-                // Handle successful file load
-                // load function, sort tokens by global frequency, calculate similarity, if above threshold add to clone map
-                debug!("Candidate loaded: {}, length: {}", path, length);
-                let candidate_bow = word_matcher.bag_of_words(&candidate_code, true);
-                let mut vectored_candidate_bow = candidate_bow.vectorize();
-                vectored_candidate_bow.sort_by_key(|(token, _)| {
-                    token_rankings
-                        .get(token)
-                        .map(|(_, rank)| *rank)
-                        .unwrap_or(usize::MAX)
-                });
-                let candidate_vector_readable: Vec<(String, usize)> = vectored_candidate_bow
-                    .iter()
-                    .map(|(token, count)| (String::from_utf8_lossy(token).to_string(), *count))
-                    .collect();
-                debug!("sorted candidate vector: {:?}", candidate_vector_readable);
-                let candidate_word_count = length;
-                let candidate_token_count = vectored_candidate_bow.len();
-                let current_threshold = (max(origin_word_count, candidate_word_count) as f64
-                    * threshold)
-                    .round() as usize;
-                let mut candidate_last_token_seen_pos =
-                    candidate_map.get_last_token_seen_pos(&candidate_id); // (token_position, cumulative_count)
-                let mut new_matches = 0usize;
-                let prefix_matches = candidate_map.get_token_matches(&candidate_id);
-                while origin_last_token_seen_pos.0 < origin_token_count
-                    && candidate_last_token_seen_pos.0 + 1 < candidate_token_count
-                {
-                    let upper_bound = min(
-                        origin_word_count - origin_last_token_seen_pos.1,
-                        candidate_word_count - candidate_last_token_seen_pos.1,
-                    );
-                    let current_matches = prefix_matches + new_matches;
-                    let origin_token_tuple = &origin_vectored_bow[origin_last_token_seen_pos.0];
-                    let candidate_token_tuple =
-                        &vectored_candidate_bow[candidate_last_token_seen_pos.0 + 1];
+        let mut origin_last_token_seen_cumul_count = prefix_origin_last_token_seen_cumul_count;
+        let candidate_code = load_file(candidate, 1024 * 1024 * 1024)?
+            .map_err(|e| anyhow::anyhow!("Error loading file '{}': {}.", candidate, e))?;
 
-                    let candidate_current_token_pos = (
-                        candidate_last_token_seen_pos.0 + 1,
-                        candidate_last_token_seen_pos.1 + candidate_token_tuple.1,
-                    );
+        // load function, sort tokens by global frequency, calculate similarity, if above threshold add to clone map
+        let candidate_bow = word_matcher.bag_of_words(&candidate_code, true);
+        let vectored_candidate_bow = candidate_bow.sort_by(token_rankings)?;
+        let candidate_word_count = function_lengths.get(candidate).copied().unwrap();
+        let candidate_token_count = vectored_candidate_bow.len();
+        let current_threshold =
+            (max(origin_word_count, candidate_word_count) as f64 * threshold).round() as usize;
+        let (mut candidate_last_token_seen_pos, candidate_last_token_seen_cumul_count) =
+            candidate_map.get_last_token_seen_pos(candidate);
+        let mut new_matches = 0usize;
+        let prefix_matches = candidate_map.get_token_matches(candidate);
+        while origin_last_token_seen_pos < origin_token_count
+            && candidate_last_token_seen_pos + 1 < candidate_token_count
+        {
+            let upper_bound = min(
+                origin_word_count - origin_last_token_seen_cumul_count,
+                candidate_word_count - candidate_last_token_seen_cumul_count,
+            );
+            let current_matches = prefix_matches + new_matches;
+            let origin_token_tuple = &origin_vectored_bow[origin_last_token_seen_pos];
+            let (candidate_token, candidate_token_count) =
+                &vectored_candidate_bow[candidate_last_token_seen_pos + 1];
 
-                    debug!("Current threshold: {}", current_threshold);
-                    debug!(
-                        "Current matches: {} + {} = {}",
-                        prefix_matches, new_matches, current_matches
-                    );
-                    debug!("Upper bound of remaining matches: {}", upper_bound);
+            let candidate_current_token_pos = candidate_last_token_seen_pos + 1;
+            // let candidate_current_token_cumul_count =  candidate_last_token_seen_cumul_count + *candidate_token_count;
 
-                    let origin_rank = token_rankings
-                        .get(&origin_token_tuple.0)
-                        .map(|(_, rank)| *rank)
-                        .unwrap_or(usize::MAX);
-                    let candidate_rank = token_rankings
-                        .get(&candidate_token_tuple.0)
-                        .map(|(_, rank)| *rank)
-                        .unwrap_or(usize::MAX);
+            debug!("Current threshold: {}", current_threshold);
+            debug!(
+                "Current matches: {} + {} = {}",
+                prefix_matches, new_matches, current_matches
+            );
+            debug!("Upper bound of remaining matches: {}", upper_bound);
 
-                    debug!(
-                        "Origin: {}, rank: {}, position: {} | Candidate: {}, rank: {}, position: {}",
-                        String::from_utf8_lossy(&origin_token_tuple.0),
-                        origin_rank,
-                        origin_last_token_seen_pos.0,
-                        String::from_utf8_lossy(&candidate_token_tuple.0),
-                        candidate_rank,
-                        candidate_current_token_pos.0
-                    );
+            let origin_rank = token_rankings
+                .get(&origin_token_tuple.0)
+                .copied()
+                .unwrap_or(usize::MAX);
+            let candidate_rank = token_rankings
+                .get(candidate_token)
+                .copied()
+                .unwrap_or(usize::MAX);
 
-                    if current_matches >= current_threshold {
-                        //already reached the threshold, we can stop comparing this candidate and add it to the clone map
-                        debug!(
-                            "Threshold reached with current matches {}, adding to clone map.",
-                            current_matches
-                        );
-                        break;
-                    } else if upper_bound + current_matches >= current_threshold {
-                        if origin_token_tuple.0 == candidate_token_tuple.0 {
-                            //it's a match
-                            debug!("MATCHING!");
-                            new_matches += min(origin_token_tuple.1, candidate_token_tuple.1);
-                            candidate_last_token_seen_pos = candidate_current_token_pos;
-                            origin_last_token_seen_pos.0 += 1;
-                            origin_last_token_seen_pos.1 += origin_token_tuple.1;
-                        } else if origin_rank > candidate_rank {
-                            //origin token is more frequent than candidate token, so we move in the candidate vector
-                            debug!("origin_count > candidate_count");
-                            candidate_last_token_seen_pos = candidate_current_token_pos;
-                        } else {
-                            //candidate token is more frequent than origin token, so we move in the origin vector
-                            debug!("candidate_count > origin_count");
-                            origin_last_token_seen_pos.0 += 1;
-                            origin_last_token_seen_pos.1 += candidate_token_tuple.1;
-                        }
-                    } else {
-                        debug!("UPPER BOUND + current_matches is {}, which is not enough to reach the threshold of {}. Stopping comparison for this candidate.", upper_bound + current_matches, current_threshold);
-                        debug!(
-                            "origin_last_token_seen_pos: {}, candidate_last_token_seen_pos: {}",
-                            origin_last_token_seen_pos.0, candidate_last_token_seen_pos.0
-                        );
-                        break;
-                    }
-                }
-                candidate_map.add_candidate(
-                    candidate_id,
-                    function_paths_and_lengths,
-                    new_matches,
-                    candidate_last_token_seen_pos,
+            debug!(
+                "Origin: {}, rank: {}, position: {} | Candidate: {}, rank: {}, position: {}",
+                String::from_utf8_lossy(&origin_token_tuple.0),
+                origin_rank,
+                origin_last_token_seen_pos,
+                String::from_utf8_lossy(candidate_token),
+                candidate_rank,
+                candidate_current_token_pos
+            );
+
+            if current_matches >= current_threshold {
+                //already reached the threshold, we can stop comparing this candidate and add it to the clone map
+                debug!(
+                    "Threshold reached with current matches {}, adding to clone map.",
+                    current_matches
                 );
-                if candidate_map.get_token_matches(&candidate_id) >= current_threshold {
-                    insert_clone_relation(clone_map, origin_function_id, candidate_id);
-                    debug!("*** CLONE DETECTED! ***");
-                    debug!(
-                        "Origin: {}, Candidate: {}, Similarity >= {:.2} %",
-                        function_paths_and_lengths
-                            .get(&origin_function_id)
-                            .map(|(path, _)| *path)
-                            .unwrap_or("Unknown"),
-                        function_paths_and_lengths
-                            .get(&candidate_id)
-                            .map(|(path, _)| *path)
-                            .unwrap_or("Unknown"),
-                        (candidate_map.get_token_matches(&candidate_id) as f64
-                            / max(origin_word_count, candidate_word_count) as f64)
-                            * 100.0
-                    );
+                break;
+            } else if upper_bound + current_matches >= current_threshold {
+                if origin_token_tuple.0 == *candidate_token {
+                    //it's a match
+                    debug!("MATCHING!");
+                    new_matches += min(origin_token_tuple.1, *candidate_token_count);
+                    candidate_last_token_seen_pos = candidate_current_token_pos;
+                    origin_last_token_seen_pos += 1;
+                    origin_last_token_seen_cumul_count += origin_token_tuple.1;
+                } else if origin_rank > candidate_rank {
+                    //origin token is more frequent than candidate token, so we move in the candidate vector
+                    debug!("origin_count > candidate_count");
+                    candidate_last_token_seen_pos = candidate_current_token_pos;
+                } else {
+                    //candidate token is more frequent than origin token, so we move in the origin vector
+                    debug!("candidate_count > origin_count");
+                    origin_last_token_seen_pos += 1;
+                    origin_last_token_seen_cumul_count += *candidate_token_count;
                 }
-                debug!("**********")
-            }
-            Ok(Err(_)) => {
-                warn!("File too large at path '{}', skipping.", path);
-            }
-            Err(_) => {
-                warn!("Failed to read file at path '{}', skipping.", path);
+            } else {
+                debug!("UPPER BOUND + current_matches is {}, which is not enough to reach the threshold of {}. Stopping comparison for this candidate.", upper_bound + current_matches, current_threshold);
+                debug!(
+                    "origin_last_token_seen_pos: {}, candidate_last_token_seen_pos: {}",
+                    origin_last_token_seen_pos, candidate_last_token_seen_pos
+                );
+                break;
             }
         }
+        candidate_map.add_candidate(
+            candidate,
+            function_lengths,
+            new_matches,
+            candidate_last_token_seen_pos,
+            candidate_last_token_seen_cumul_count,
+        );
+        if candidate_map.get_token_matches(candidate) >= current_threshold {
+            insert_clone_relation(clone_map, origin_function, candidate);
+            debug!("*** CLONE DETECTED! ***");
+            debug!(
+                "Origin: {}, Candidate: {}, Similarity >= {:.2} %",
+                origin_function,
+                candidate,
+                (candidate_map.get_token_matches(candidate) as f64
+                    / max(origin_word_count, candidate_word_count) as f64)
+                    * 100.0
+            );
+        }
+        debug!("**********")
     }
     Ok(())
 }
 
-fn insert_clone_relation(
-    clone_map: &mut CloneMap,
-    origin_function_id: blake3::Hash,
-    candidate_id: blake3::Hash,
+fn insert_clone_relation<'a>(
+    clone_map: &mut CloneMap<'a>,
+    origin_function: &'a str,
+    candidate: &'a str,
 ) {
     let origin_entry = clone_map
-        .entry(origin_function_id)
+        .entry(origin_function)
         .or_insert_with(|| Either::Left(HashSet::new()));
 
     // Origin must always store the set of its clones as Left(HashSet<_>).
     if let Either::Left(clones) = origin_entry {
-        clones.insert(candidate_id);
+        clones.insert(candidate);
     } else {
-        *origin_entry = Either::Left(HashSet::from([candidate_id]));
+        *origin_entry = Either::Left(HashSet::from([candidate]));
     }
 
     // Clone points back to its origin as Right(origin_hash).
-    clone_map.insert(candidate_id, Either::Right(origin_function_id));
+    clone_map.insert(candidate, Either::Right(origin_function));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prefix_length() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+
+        for _ in 0..10_000 {
+            let word_count: usize = rng.gen_range(1..=10_000);
+            // threshold=0 is the known exception: ceil(0)=0 gives word_count+1
+            let threshold: f64 = rng.gen_range(f64::MIN_POSITIVE..=1.0);
+
+            let result = prefix_length(word_count, threshold);
+            assert!(
+                result >= 1,
+                "prefix_length({word_count}, {threshold}) = {result} is not >= 1"
+            );
+            assert!(
+                result <= word_count,
+                "prefix_length({word_count}, {threshold}) = {result} exceeds word_count"
+            );
+        }
+
+        // threshold=0 produces word_count+1, violating the upper bound
+        for word_count in [1usize, 2, 10, 100] {
+            assert_eq!(prefix_length(word_count, 0.0), word_count + 1);
+        }
+    }
 }
