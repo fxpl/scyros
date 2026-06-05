@@ -24,7 +24,7 @@ pub type Word = Vec<u8>;
 /// BoW are invariant to the order of insertion. All operations assume tokens are in byte slice form.
 pub struct Bow {
     /// Internal map storing token counts.
-    map: HashMap<Word, usize>,
+    map: HashMap<Word, u32>,
     /// Whether to convert tokens to lower case before adding them to the bag of words.
     lowercase: bool,
 }
@@ -70,7 +70,7 @@ impl Bow {
     /// # Arguments
     ///
     /// * `token` - The token whose frequency is to be retrieved in byte slice form.
-    pub fn freq(&self, token: &[u8]) -> usize {
+    pub fn freq(&self, token: &[u8]) -> u32 {
         let token: &[u8] = if self.lowercase {
             &token
                 .iter()
@@ -80,6 +80,11 @@ impl Bow {
             token
         };
         *self.map.get(token).unwrap_or(&0)
+    }
+
+    /// Returns the total count of all tokens in the Bag of Words.
+    pub fn sum(&self) -> u32 {
+        self.map.values().sum()
     }
 
     /// Adds multiple tokens to the Bag of Words
@@ -99,7 +104,7 @@ impl Bow {
 
     /// Serializes the Bag of Words into a byte vector. The result is invariant to the order of insertion.
     pub fn serialize(self) -> Vec<u8> {
-        let mut ordered_bow: Vec<(Word, usize)> = self.map.into_iter().collect();
+        let mut ordered_bow: Vec<(Word, u32)> = self.map.into_iter().collect();
         ordered_bow.sort_by(|a, b| a.0.cmp(&b.0));
         ordered_bow
             .into_iter()
@@ -121,7 +126,7 @@ impl Bow {
     }
 
     pub fn token_rankings(self) -> HashMap<Word, usize> {
-        let mut count_vec: Vec<(Word, usize)> = self.map.into_iter().collect();
+        let mut count_vec: Vec<(Word, u32)> = self.map.into_iter().collect();
         count_vec.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         count_vec
             .into_iter()
@@ -130,26 +135,34 @@ impl Bow {
             .collect()
     }
 
-    pub fn sort_by(self, token_rankings: &HashMap<Word, usize>) -> Result<Vec<(Word, usize)>> {
-        let mut ranked: Vec<(usize, Word, usize)> = self
+    pub fn sort_by<'a>(
+        &self,
+        token_rankings: &'a HashMap<Word, usize>,
+    ) -> Result<Vec<(&'a Word, u32, u32)>> {
+        let mut ranked: Vec<(usize, &'a Word, u32)> = self
             .map
-            .into_iter()
+            .iter()
             .map(|(token, count)| {
-                let rank = *token_rankings.get(&token).with_context(|| {
-                    format!(
-                        "Token not found in rankings: {}",
-                        String::from_utf8_lossy(&token)
-                    )
-                })?;
-                Ok((rank, token, count))
+                let (ranking_token, rank) =
+                    token_rankings.get_key_value(token).with_context(|| {
+                        format!(
+                            "Token not found in rankings: {}",
+                            String::from_utf8_lossy(token)
+                        )
+                    })?;
+                Ok((*rank, ranking_token, *count))
             })
             .collect::<Result<_>>()?;
 
-        ranked.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        ranked.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
 
+        let mut cumulative = 0;
         Ok(ranked
             .into_iter()
-            .map(|(_, token, count)| (token, count))
+            .map(|(_, token, count)| {
+                cumulative += count;
+                (token, count, cumulative)
+            })
             .collect())
     }
 }

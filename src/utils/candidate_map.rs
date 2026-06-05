@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 pub struct CandidateEntry {
     pub matches: usize,
     pub length: usize,
-    pub last_token_seen_pos: usize, // (token_position, cumulative_count)
+    pub last_token_seen_pos: usize,
     pub last_token_seen_cumul_count: usize, // the number of words seen up to and including the last token seen for this candidate
 }
 

@@ -39,19 +39,19 @@ use std::sync::Mutex;
 /// Returns an error (does not panic) if a worker thread panics; the panic
 /// payload is included in the error message.
 pub fn parallel_pipeline<T, W, P, R, H>(
-    items: Vec<T>,
+    items: &[T],
     workers: Vec<W>,
     process: P,
     mut handle: H,
 ) -> Result<()>
 where
-    T: Send,
+    T: Sync,
     W: Send,
-    P: Fn(&mut W, T) -> Result<R> + Send + Sync,
+    P: Fn(&mut W, &T) -> Result<R> + Sync,
     R: Send,
     H: FnMut(R) -> Result<()>,
 {
-    let queue = Mutex::new(items.into_iter());
+    let queue = Mutex::new(items.iter());
     let (tx, rx) = crossbeam_channel::unbounded::<Result<R>>();
 
     crossbeam::thread::scope(|s| -> Result<()> {
@@ -94,9 +94,9 @@ mod tests {
         let sum_clone = sum.clone();
 
         parallel_pipeline(
-            items,
+            &items,
             workers,
-            |_, n: i32| Ok(n * n),
+            |_, n: &i32| Ok(n * n),
             |squared: i32| {
                 sum_clone.fetch_add(squared as usize, Ordering::Relaxed);
                 Ok(())
@@ -118,7 +118,7 @@ mod tests {
         let total_clone = total_processed.clone();
 
         parallel_pipeline(
-            items,
+            &items,
             workers,
             |counter: &mut usize, _| {
                 *counter += 1;
@@ -141,13 +141,13 @@ mod tests {
         let workers = vec![(); 4];
 
         let result = parallel_pipeline(
-            items,
+            &items,
             workers,
-            |_, n: i32| {
-                if n == 42 {
+            |_, n: &i32| {
+                if *n == 42 {
                     Err(anyhow!("hit 42"))
                 } else {
-                    Ok(n)
+                    Ok(*n)
                 }
             },
             |_: i32| Ok(()),
@@ -164,9 +164,9 @@ mod tests {
         let workers = vec![(); 4];
 
         let result = parallel_pipeline(
-            items,
+            &items,
             workers,
-            |_, n: i32| Ok(n),
+            |_, n: &i32| Ok(*n),
             |n: i32| {
                 if n > 500 {
                     Err(anyhow!("too big"))
@@ -184,13 +184,13 @@ mod tests {
     fn empty_items_succeeds() -> Result<()> {
         let items: Vec<i32> = vec![];
         let workers = vec![(); 4];
-        parallel_pipeline(items, workers, |_, n: i32| Ok(n), |_| Ok(()))
+        parallel_pipeline(&items, workers, |_, n: &i32| Ok(*n), |_| Ok(()))
     }
 
     #[test]
     fn empty_workers_with_empty_items_succeeds() -> Result<()> {
         let items: Vec<i32> = vec![];
         let workers: Vec<()> = vec![];
-        parallel_pipeline(items, workers, |_, n: i32| Ok(n), |_| Ok(()))
+        parallel_pipeline(&items, workers, |_, n: &i32| Ok(*n), |_| Ok(()))
     }
 }
