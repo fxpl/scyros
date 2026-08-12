@@ -18,13 +18,13 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 
-pub type Word = Vec<u8>;
+pub type Token = Vec<u8>;
 
 /// Bag of Words (BoW) structure for counting token occurrences.
 /// BoW are invariant to the order of insertion. All operations assume tokens are in byte slice form.
 pub struct Bow {
-    /// Internal map storing token counts.
-    map: HashMap<Word, u32>,
+    /// Internal map storing token frequencies.
+    map: HashMap<Token, u32>,
     /// Whether to convert tokens to lower case before adding them to the bag of words.
     lowercase: bool,
 }
@@ -54,11 +54,11 @@ impl Bow {
     ///
     /// * `token` - The token to be added in byte slice form.
     pub fn add(&mut self, token: &[u8]) {
-        let token: Word = if self.lowercase {
+        let token: Token = if self.lowercase {
             token
                 .iter()
                 .map(|b| b.to_ascii_lowercase())
-                .collect::<Word>()
+                .collect::<Token>()
         } else {
             token.to_owned()
         };
@@ -75,14 +75,14 @@ impl Bow {
             &token
                 .iter()
                 .map(|b| b.to_ascii_lowercase())
-                .collect::<Word>()
+                .collect::<Token>()
         } else {
             token
         };
         *self.map.get(token).unwrap_or(&0)
     }
 
-    /// Returns the total count of all tokens in the Bag of Words.
+    /// Returns the total frequency of all tokens in the Bag of Words.
     pub fn sum(&self) -> u32 {
         self.map.values().sum()
     }
@@ -104,31 +104,31 @@ impl Bow {
 
     /// Serializes the Bag of Words into a byte vector. The result is invariant to the order of insertion.
     pub fn serialize(self) -> Vec<u8> {
-        let mut ordered_bow: Vec<(Word, u32)> = self.map.into_iter().collect();
+        let mut ordered_bow: Vec<(Token, u32)> = self.map.into_iter().collect();
         ordered_bow.sort_by(|a, b| a.0.cmp(&b.0));
         ordered_bow
             .into_iter()
-            .map(|(word, count)| format!("{}:{}", String::from_utf8_lossy(&word), count))
+            .map(|(token, freq)| format!("{}:{}", String::from_utf8_lossy(&token), freq))
             .collect::<Vec<_>>()
             .join("|")
             .into_bytes()
     }
 
-    /// Extends the Bag of Words with another Bag of Words, summing the counts of shared tokens.
+    /// Extends the Bag of Words with another Bag of Words, summing the frequencies of shared tokens.
     ///
     /// # Arguments
     ///
     /// * `other` - The other Bag of Words to be extended into this one.
     pub fn extend(&mut self, other: Bow) {
-        for (token, count) in other.map {
-            *self.map.entry(token).or_insert(0) += count;
+        for (token, freq) in other.map {
+            *self.map.entry(token).or_insert(0) += freq;
         }
     }
 
-    pub fn token_rankings(self) -> HashMap<Word, usize> {
-        let mut count_vec: Vec<(Word, u32)> = self.map.into_iter().collect();
-        count_vec.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        count_vec
+    pub fn token_rankings(self) -> HashMap<Token, usize> {
+        let mut freq_vec: Vec<(Token, u32)> = self.map.into_iter().collect();
+        freq_vec.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        freq_vec
             .into_iter()
             .enumerate()
             .map(|(rank, (token, _))| (token, rank))
@@ -137,12 +137,12 @@ impl Bow {
 
     pub fn sort_by<'a>(
         &self,
-        token_rankings: &'a HashMap<Word, usize>,
-    ) -> Result<Vec<(&'a Word, u32, u32)>> {
-        let mut ranked: Vec<(usize, &'a Word, u32)> = self
+        token_rankings: &'a HashMap<Token, usize>,
+    ) -> Result<Vec<(&'a Token, u32, u32)>> {
+        let mut ranked: Vec<(usize, &'a Token, u32)> = self
             .map
             .iter()
-            .map(|(token, count)| {
+            .map(|(token, freq)| {
                 let (ranking_token, rank) =
                     token_rankings.get_key_value(token).with_context(|| {
                         format!(
@@ -150,7 +150,7 @@ impl Bow {
                             String::from_utf8_lossy(token)
                         )
                     })?;
-                Ok((*rank, ranking_token, *count))
+                Ok((*rank, ranking_token, *freq))
             })
             .collect::<Result<_>>()?;
 
@@ -159,9 +159,9 @@ impl Bow {
         let mut cumulative = 0;
         Ok(ranked
             .into_iter()
-            .map(|(_, token, count)| {
-                cumulative += count;
-                (token, count, cumulative)
+            .map(|(_, token, freq)| {
+                cumulative += freq;
+                (token, freq, cumulative)
             })
             .collect())
     }

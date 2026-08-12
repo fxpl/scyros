@@ -1,0 +1,16 @@
+{
+    "languages": [
+        {
+            "name": "json",
+            "extensions": ["json"]
+        },
+        {
+            "name": "copy",
+            "extensions": [".copy"]
+        },
+        {
+            "name": "java",
+            "extensions": ["java"]
+        }
+    ]
+}
