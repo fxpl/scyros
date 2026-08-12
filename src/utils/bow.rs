@@ -135,10 +135,16 @@ impl Bow {
             .collect()
     }
 
+    /// Places every token of the bag in the global rarity order, rarest first.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_rankings` - The rank of every token of the corpus, as returned by
+    ///   [`Bow::token_rankings`]. Every token of the bag must appear in it.
     pub fn sort_by<'a>(
         &self,
         token_rankings: &'a HashMap<Token, usize>,
-    ) -> Result<Vec<(&'a Token, u32, u32)>> {
+    ) -> Result<Vec<RankedToken<'a>>> {
         let mut ranked: Vec<(usize, &'a Token, u32)> = self
             .map
             .iter()
@@ -159,12 +165,30 @@ impl Bow {
         let mut cumulative = 0;
         Ok(ranked
             .into_iter()
-            .map(|(_, token, freq)| {
-                cumulative += freq;
-                (token, freq, cumulative)
+            .map(|(_, token, frequency)| {
+                cumulative += frequency;
+                RankedToken {
+                    token,
+                    frequency,
+                    cumulative,
+                }
             })
             .collect())
     }
+}
+
+/// One token of a bag of words, placed in the global rarity order.
+///
+/// Carrying the running total alongside each token lets a caller ask how much of a code block it
+/// has covered without walking back over the tokens it has already passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RankedToken<'a> {
+    /// The token itself.
+    pub token: &'a Token,
+    /// How many times the token occurs in this bag.
+    pub frequency: u32,
+    /// The frequencies of this token and of every token before it in the order, summed.
+    pub cumulative: u32,
 }
 
 #[cfg(test)]

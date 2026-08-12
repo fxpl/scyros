@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `--no-output` (or `--count`) flag for the `parse` subcommand that allows users to skip writing the extracted functions to disk and only collect their statistics ([#5](https://github.com/fxpl/scyros/issues/5), reported by [@Michago6](https://github.com/Michago6)).
 - A `--lambdas` flag for the `parse` subcommand that allows users to choose whether to extract lambda functions as well. By default, lambda functions are not extracted ([#3](https://github.com/fxpl/scyros/issues/3), reported by [@
 linusbrew](https://github.com/linusbrew)).
+- An `overlap` similarity criterion for the `duplicate_files` subcommand, which detects near-miss duplicates, that is, files that differ by a few statements rather than matching exactly. Files are compared by how many tokens they have in common, using the prefix filtering technique of SourcererCC and its adaptive extension. The proportion of how many tokens two files must share to be considered duplicates can be set with the `--threshold` flag (defaults to 0.8).
+The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates may be deepened. A deeper prefix rejects more candidates before the full comparison, at the cost of more index lookups. Defaults to 1. The `--languages` (or `-l`) maps file extensions to languages, in the same JSON format used by the other subcommands. The `overlap` criterion compares files only against others of the same language, and leaves files whose extension belongs to no listed language uncompared. The other criteria ignore the flag. (PR [#2](https://github.com/fxpl/scyros/pull/2) by [@swartling](https://github.com/swartling))
 
 ### Fixed
 

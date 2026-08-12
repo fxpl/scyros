@@ -181,7 +181,7 @@ fn main() {
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_one::<String>("similarity").unwrap(),
                                     *cli_subargs.get_one::<f64>("threshold").unwrap(),
-                                    *cli_subargs.get_one::<usize>("prefix_depth").unwrap(),
+                                    *cli_subargs.get_one::<usize>("prefix").unwrap(),
                                     &cli_subargs
                                         .get_many::<String>("languages")
                                         .unwrap_or_default()
