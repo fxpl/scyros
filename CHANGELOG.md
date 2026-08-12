@@ -22,7 +22,7 @@ The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates
 - An issue with the `download` subcommand that caused it to not resume progress when restarted ([#7](https://github.com/fxpl/scyros/issues/7), reported by [@Smexykex](https://github.com/Smexykex)).
 - An issue with the `download` subcommand that caused it to match extension prefixes instead of the full name ([#8](https://github.com/fxpl/scyros/issues/8), reported by [@Smexykex](https://github.com/Smexykex)).
 
-## Removed
+### Removed
 
 - The `extract_benchmarks` subcommand has been removed as it was too brittle.
 
