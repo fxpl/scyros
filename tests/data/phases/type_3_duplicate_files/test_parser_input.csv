@@ -1,0 +1,5 @@
+id,name,language
+0,tests/data/phases/type_3_duplicate_files/files/original.py,python
+1,tests/data/phases/type_3_duplicate_files/files/type_1.py,python
+2,tests/data/phases/type_3_duplicate_files/files/type_2.py,python
+3,tests/data/phases/type_3_duplicate_files/files/type_3.py,python

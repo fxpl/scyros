@@ -1,0 +1,6 @@
+def code_block_1(): 
+    example_array = ["telephone", "dog", "example", "banana", "apple"]
+    
+    for word in example_array:
+        print(f"Word: {word}")
+    print("Done")

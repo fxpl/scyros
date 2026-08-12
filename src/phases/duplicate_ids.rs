@@ -19,7 +19,7 @@ use polars::frame::DataFrame;
 use tracing::info;
 
 use crate::utils::fs::*;
-use crate::utils::logger::log_write_output;
+use crate::utils::logger::log_write_dataframe;
 use crate::utils::logger::{log_output_file, Logger};
 
 /// Command line arguments parsing.
@@ -122,8 +122,11 @@ pub fn run(
         ids_count - unique_ids_count,
         100.0 - unique_ids_percentage
     );
-
-    log_write_output(logger, output_path, &mut ids, no_output)
+    if !no_output {
+        log_write_dataframe(logger, output_path, &mut ids)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

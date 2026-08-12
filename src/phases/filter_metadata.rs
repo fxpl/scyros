@@ -23,7 +23,7 @@ use tracing::info;
 
 use crate::utils::dataframes;
 use crate::utils::fs::*;
-use crate::utils::logger::{log_output_file, log_write_output, Logger};
+use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -341,7 +341,11 @@ pub fn run(
     );
 
     // Writes the result to the output CSV file
-    log_write_output(logger, output_path, &mut projects, no_output)
+    if no_output {
+        Ok(())
+    } else {
+        log_write_dataframe(logger, output_path, &mut projects)
+    }
 }
 
 #[cfg(test)]

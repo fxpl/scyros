@@ -104,38 +104,68 @@ impl CSVFile {
                 self.path
             )
         } else {
-            Ok(csv::ReaderBuilder::new()
-                .has_headers(true)
-                .double_quote(false)
-                .escape(Some(b'\\'))
-                .from_reader(open_file(&self.path, FileMode::Read)?))
+            Ok(csv::ReaderBuilder::new().from_reader(open_file(&self.path, FileMode::Read)?))
         }
     }
 
     // TODO: Test
-    /// Writes a header to this file if it is empty or if the force flag is set.
+    /// Writes a header to this file if it is empty.
     ///
     /// # Arguments
     ///
-    /// * `header` - The header to write.
-    /// * `force` - If true, the header is written even if the file is not empty.
+    /// * `header` - The header fields, escaped per RFC 4180.
     ///
     /// # Returns
     ///
-    /// An error if the header could not be written or if the metadata of the file could not be read.
-    pub fn write_header(&mut self, header: &[&str]) -> Result<()> {
-        match self.writer.as_mut() {
-            None => bail!(
+    /// An error if the file is in read-only mode or the write fails.
+    pub fn write_header<I, S>(&mut self, header: I) -> Result<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<[u8]>,
+    {
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            anyhow!(
                 "Cannot write to {} since it is in read-only mode",
                 self.path
-            ),
-            Some(f) => {
-                if f.get_ref().metadata()?.len() == 0 {
-                    writeln!(self, "{}", header.join(","))?
-                }
-                Ok(())
-            }
+            )
+        })?;
+        if writer.get_ref().metadata()?.len() != 0 {
+            return Ok(());
         }
+        let mut csv_writer = csv::WriterBuilder::new()
+            .has_headers(false)
+            .from_writer(writer);
+        csv_writer.write_record(header)?;
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    /// Writes one record to this file, escaping fields per RFC 4180.
+    ///
+    /// # Arguments
+    ///
+    /// * `fields` - The fields of the record.
+    ///
+    /// # Returns
+    ///
+    /// An error if the file is in read-only mode or the write fails.
+    pub fn write_record<I, S>(&mut self, fields: I) -> Result<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<[u8]>,
+    {
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            anyhow!(
+                "Cannot write to {} since it is in read-only mode",
+                self.path
+            )
+        })?;
+        let mut csv_writer = csv::WriterBuilder::new()
+            .has_headers(false)
+            .from_writer(writer);
+        csv_writer.write_record(fields)?;
+        csv_writer.flush()?;
+        Ok(())
     }
 
     // TODO: Test
@@ -378,6 +408,29 @@ mod tests {
 
         let indexed_lines = empty.indexed_lines::<IpAddr>(0)?;
         assert_eq!(indexed_lines.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn write_record_test() -> Result<()> {
+        let path = "tests/data/write_record_test.csv";
+        let _ = delete_file(path, true);
+
+        let mut file = CSVFile::new(path, FileMode::Overwrite)?;
+        file.write_header(&["name", "note"])?;
+        file.write_record(["alice", "hello"])?;
+        file.write_record(["bob", "he said \"hi\""])?;
+        file.write_record(["carol", "a, b, c"])?;
+        file.flush()?;
+
+        // Read it back via CSVFile and check round-trip.
+        let read_file = CSVFile::new(path, FileMode::Read)?;
+        let names = read_file.column::<String>(0)?;
+        let notes = read_file.column::<String>(1)?;
+        assert_eq!(names, vec!["alice", "bob", "carol"]);
+        assert_eq!(notes, vec!["hello", "he said \"hi\"", "a, b, c"]);
+
+        delete_file(path, false)?;
         Ok(())
     }
 }

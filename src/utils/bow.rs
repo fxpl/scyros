@@ -16,11 +16,15 @@
 
 use std::collections::HashMap;
 
+use anyhow::{Context, Result};
+
+pub type Token = Vec<u8>;
+
 /// Bag of Words (BoW) structure for counting token occurrences.
 /// BoW are invariant to the order of insertion. All operations assume tokens are in byte slice form.
 pub struct Bow {
-    /// Internal map storing token counts.
-    map: HashMap<Vec<u8>, usize>,
+    /// Internal map storing token frequencies.
+    map: HashMap<Token, u32>,
     /// Whether to convert tokens to lower case before adding them to the bag of words.
     lowercase: bool,
 }
@@ -50,11 +54,11 @@ impl Bow {
     ///
     /// * `token` - The token to be added in byte slice form.
     pub fn add(&mut self, token: &[u8]) {
-        let token: Vec<u8> = if self.lowercase {
+        let token: Token = if self.lowercase {
             token
                 .iter()
                 .map(|b| b.to_ascii_lowercase())
-                .collect::<Vec<u8>>()
+                .collect::<Token>()
         } else {
             token.to_owned()
         };
@@ -66,16 +70,21 @@ impl Bow {
     /// # Arguments
     ///
     /// * `token` - The token whose frequency is to be retrieved in byte slice form.
-    pub fn freq(&self, token: &[u8]) -> usize {
+    pub fn freq(&self, token: &[u8]) -> u32 {
         let token: &[u8] = if self.lowercase {
             &token
                 .iter()
                 .map(|b| b.to_ascii_lowercase())
-                .collect::<Vec<u8>>()
+                .collect::<Token>()
         } else {
             token
         };
         *self.map.get(token).unwrap_or(&0)
+    }
+
+    /// Returns the total frequency of all tokens in the Bag of Words.
+    pub fn sum(&self) -> u32 {
+        self.map.values().sum()
     }
 
     /// Adds multiple tokens to the Bag of Words
@@ -95,15 +104,91 @@ impl Bow {
 
     /// Serializes the Bag of Words into a byte vector. The result is invariant to the order of insertion.
     pub fn serialize(self) -> Vec<u8> {
-        let mut ordered_bow: Vec<(Vec<u8>, usize)> = self.map.into_iter().collect();
+        let mut ordered_bow: Vec<(Token, u32)> = self.map.into_iter().collect();
         ordered_bow.sort_by(|a, b| a.0.cmp(&b.0));
         ordered_bow
             .into_iter()
-            .map(|(word, count)| format!("{}:{}", String::from_utf8_lossy(&word), count))
+            .map(|(token, freq)| format!("{}:{}", String::from_utf8_lossy(&token), freq))
             .collect::<Vec<_>>()
             .join("|")
             .into_bytes()
     }
+
+    /// Extends the Bag of Words with another Bag of Words, summing the frequencies of shared tokens.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other Bag of Words to be extended into this one.
+    pub fn extend(&mut self, other: Bow) {
+        for (token, freq) in other.map {
+            *self.map.entry(token).or_insert(0) += freq;
+        }
+    }
+
+    pub fn token_rankings(self) -> HashMap<Token, usize> {
+        let mut freq_vec: Vec<(Token, u32)> = self.map.into_iter().collect();
+        freq_vec.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        freq_vec
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (token, _))| (token, rank))
+            .collect()
+    }
+
+    /// Places every token of the bag in the global rarity order, rarest first.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_rankings` - The rank of every token of the corpus, as returned by
+    ///   [`Bow::token_rankings`]. Every token of the bag must appear in it.
+    pub fn sort_by<'a>(
+        &self,
+        token_rankings: &'a HashMap<Token, usize>,
+    ) -> Result<Vec<RankedToken<'a>>> {
+        let mut ranked: Vec<(usize, &'a Token, u32)> = self
+            .map
+            .iter()
+            .map(|(token, freq)| {
+                let (ranking_token, rank) =
+                    token_rankings.get_key_value(token).with_context(|| {
+                        format!(
+                            "Token not found in rankings: {}",
+                            String::from_utf8_lossy(token)
+                        )
+                    })?;
+                Ok((*rank, ranking_token, *freq))
+            })
+            .collect::<Result<_>>()?;
+
+        ranked.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+
+        let mut cumulative = 0;
+        Ok(ranked
+            .into_iter()
+            .map(|(_, token, frequency)| {
+                cumulative += frequency;
+                RankedToken {
+                    token,
+                    frequency,
+                    cumulative,
+                }
+            })
+            .collect())
+    }
+}
+
+/// One token of a bag of words, placed in the global rarity order.
+///
+/// Carrying the running total alongside each token lets a caller ask how much of a code block it
+/// has covered without walking back over the tokens it has already passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RankedToken<'a> {
+    /// The token itself.
+    pub token: &'a Token,
+    /// How many times the token occurs in this bag.
+    pub frequency: u32,
+    /// The frequencies of this token and of every token before it in the order, summed.
+    pub cumulative: u32,
 }
 
 #[cfg(test)]

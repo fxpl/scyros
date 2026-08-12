@@ -249,29 +249,55 @@ pub fn log_output_file(output_path: &str, no_output: bool, force: bool) -> Resul
     }
 }
 
-/// Logs the writing of a DataFrame to a CSV file, unless no_output is true.
+/// Logs the writing of a DataFrame to a CSV file.
 ///
 /// # Arguments
 /// * `logger` - A mutable reference to the logger.
 /// * `output_path` - The path to the output file.
 /// * `data` - The DataFrame to write to the output file.
-/// * `no_output` - If true, no output file will be generated and the writing will not be logged.
 ///
 /// # Returns
 /// An error if the writing of the output file fails, or if the logging of the writing in the terminal fails.
-pub fn log_write_output(
+pub fn log_write_dataframe(logger: &Logger, output_path: &str, data: &mut DataFrame) -> Result<()> {
+    logger.run_task(format!("Writing to {output_path}"), || {
+        write_csv(output_path, data)
+    })
+}
+
+/// Logs the writing of CSV rows to a file. Use this for ad-hoc CSV writes that don't need a polars `DataFrame`
+///
+/// # Arguments
+///
+/// * `logger` - The logger.
+/// * `output_path` - The path to the output file.
+/// * `headers` - The CSV header fields.
+/// * `rows` - An iterator of rows; each row is an iterator of fields.
+///
+/// # Returns
+///
+/// An error if the writing fails.
+pub fn log_write_rows<H, HS, R, RS>(
     logger: &Logger,
     output_path: &str,
-    data: &mut DataFrame,
-    no_output: bool,
-) -> Result<()> {
-    if !no_output {
-        logger.run_task(format!("Writing to {output_path}"), || {
-            write_csv(output_path, data)
-        })
-    } else {
+    headers: H,
+    rows: R,
+) -> Result<()>
+where
+    H: IntoIterator<Item = HS>,
+    HS: AsRef<[u8]>,
+    R: IntoIterator,
+    R::Item: IntoIterator<Item = RS>,
+    RS: AsRef<[u8]>,
+{
+    logger.run_task(format!("Writing to {output_path}"), || {
+        let mut file = CSVFile::new(output_path, FileMode::Overwrite)?;
+        file.write_header(headers)?;
+        for row in rows {
+            file.write_record(row)?;
+        }
+        file.flush()?;
         Ok(())
-    }
+    })
 }
 
 /// Logs the seed used for random number generation.

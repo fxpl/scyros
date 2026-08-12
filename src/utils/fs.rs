@@ -264,10 +264,25 @@ pub fn write_csv(path: &str, df: &mut DataFrame) -> Result<()> {
         .with_context(|| format!("Could not write to {path}"))
 }
 
+/// Checks if a directory is empty.
+///
+/// # Arguments
+///
+/// * `path` - The path to the directory.
+///
+/// # Returns
+/// True if the directory is empty, false otherwise, or an error if the directory could not be read.
 pub fn is_empty_dir(path: impl AsRef<Path>) -> Result<bool> {
     Ok(fs::read_dir(path)?.next().is_none())
 }
 
+/// Deletes all empty directories in a directory and its subdirectories.
+///
+/// # Arguments
+/// * `path` - The path to the directory.
+///
+/// # Returns
+/// An error if the directory could not be read or if an empty directory could not be deleted.
 pub fn delete_empty_dirs(path: impl AsRef<Path>) -> Result<()> {
     for entry in WalkDir::new(path)
         .contents_first(true)
@@ -280,6 +295,24 @@ pub fn delete_empty_dirs(path: impl AsRef<Path>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Checks if a path has a given extension.
+///
+/// # Arguments
+/// * `path` - The path to check.
+/// * `ext` - The extension to check for, with or without the leading period.
+pub fn has_extension(path: impl AsRef<Path>, ext: &str) -> bool {
+    let extension_with_dot: String = if ext.starts_with('.') {
+        ext.to_string()
+    } else {
+        format!(".{ext}")
+    };
+    path.as_ref().extension().is_some()
+        && path
+            .as_ref()
+            .to_str()
+            .is_some_and(|s| s.ends_with(&extension_with_dot))
 }
 
 /// Returns a list of files with a given extension in a directory and its subdirectories,

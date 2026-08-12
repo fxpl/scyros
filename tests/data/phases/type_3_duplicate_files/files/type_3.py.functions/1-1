@@ -1,0 +1,11 @@
+def code_block_3():
+    
+    
+    
+    
+    my_array = ["computer", "dog", "example", "banana", "apple"]
+    my_array.append("grape")
+
+    for item in my_array:
+
+        print(f"Word: {item}")

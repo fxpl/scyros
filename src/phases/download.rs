@@ -26,9 +26,8 @@ use rand::SeedableRng;
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use std::collections::HashSet;
-use std::fmt::Write as FmtWrite;
 use std::fs::File;
-use std::io::{copy, BufRead, Write};
+use std::io::{copy, BufRead};
 use std::iter::FromIterator as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -101,7 +100,7 @@ pub fn cli() -> Command {
                 .action(ArgAction::Append)
                 .value_name("KEYWORDS_FILES.json")
                 .help("List of files containing the list of extensions and keywords to use. The files must be in JSON format.\n\
-                       The extensions should be written without the period (`java` instead of `.java`). The files must have the following structure:\n    \
+                       The files must have the following structure:\n    \
                         {\n\
                             \"languages\": [\n\
                                 {\n\
@@ -173,6 +172,9 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(u64)),
         )
 }
+
+type FileRow = Vec<String>;
+type ProjectRow = Vec<String>;
 
 /// Entry point of the program
 ///
@@ -348,26 +350,6 @@ pub fn run(
             .join("\n")
     );
 
-    let files_with_kw_headers: String = keyword_files
-        .paths
-        .iter()
-        .map(|p| format!("files_with_{p}"))
-        .collect::<Vec<String>>()
-        .join(",");
-    let loc_of_files_with_kw_headers: String = keyword_files
-        .paths
-        .iter()
-        .map(|p| format!("loc_of_files_with_{p}"))
-        .collect::<Vec<String>>()
-        .join(",");
-    let words_of_files_with_kw_headers: String = keyword_files
-        .paths
-        .iter()
-        .map(|p| format!("words_of_files_with_{p}"))
-        .collect::<Vec<String>>()
-        .join(",");
-    let keyword_match_headers: String = keyword_files.paths.join(",");
-
     let word_counter: Matcher = Matcher::words_matcher();
 
     let mut project_log_file = CSVFile::new(
@@ -380,23 +362,10 @@ pub fn run(
     )?;
 
     // If the file has no header, write the header.
-    let project_log_headers: Vec<&str> = if skip {
-        [
-            "path",
-            "files",
-            "loc",
-            "words",
-            "files_with_kw",
-            &files_with_kw_headers,
-            "loc_with_kw",
-            &loc_of_files_with_kw_headers,
-            "words_with_kw",
-            &words_of_files_with_kw_headers,
-            &keyword_match_headers,
-        ]
-        .to_vec()
+    let prefix: &[&str] = if skip {
+        &["path", "files", "loc", "words"]
     } else {
-        [
+        &[
             "id",
             "path",
             "name",
@@ -404,18 +373,36 @@ pub fn run(
             "files",
             "loc",
             "words",
-            "files_with_kw",
-            &files_with_kw_headers,
-            "loc_with_kw",
-            &loc_of_files_with_kw_headers,
-            "words_with_kw",
-            &words_of_files_with_kw_headers,
-            &keyword_match_headers,
         ]
-        .to_vec()
     };
 
-    project_log_file.write_header(&project_log_headers)?;
+    let project_log_headers = prefix
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once("files_with_kw".to_string()))
+        .chain(
+            keyword_files
+                .paths
+                .iter()
+                .map(|p| format!("files_with_{p}")),
+        )
+        .chain(std::iter::once("loc_with_kw".to_string()))
+        .chain(
+            keyword_files
+                .paths
+                .iter()
+                .map(|p| format!("loc_of_files_with_{p}")),
+        )
+        .chain(std::iter::once("words_with_kw".to_string()))
+        .chain(
+            keyword_files
+                .paths
+                .iter()
+                .map(|p| format!("words_of_files_with_{p}")),
+        )
+        .chain(keyword_files.paths.iter().cloned());
+
+    project_log_file.write_header(project_log_headers)?;
 
     // Open the log file for the files or create it if it does not exist.
     // If the overwrite flag is set, the file is generated anew.
@@ -430,21 +417,18 @@ pub fn run(
         },
     )?;
 
-    let file_log_headers: Vec<&str> = if skip {
-        ["path", "language", "loc", "words", &keyword_match_headers].to_vec()
+    let prefix: &[&str] = if skip {
+        &["path", "language", "loc", "words"]
     } else {
-        [
-            "id",
-            "name",
-            "language",
-            "loc",
-            "words",
-            &keyword_match_headers,
-        ]
-        .to_vec()
+        &["id", "name", "language", "loc", "words"]
     };
 
-    file_log.write_header(&file_log_headers)?;
+    let file_log_headers = prefix
+        .iter()
+        .map(|s| s.to_string())
+        .chain(keyword_files.paths.iter().cloned());
+
+    file_log.write_header(file_log_headers)?;
 
     // Iterate over the projects and collect metadata.
     let iter = Mutex::new(shuffled_rows);
@@ -458,7 +442,7 @@ pub fn run(
     // Every thread comes with a sender channel.
     // The sender channel is used to send information about the downloaded repository back to the main thread.
     // The receiver channel is used by the main thread to collect and write the information to the log file.
-    let (tx, rx) = crossbeam_channel::unbounded::<Option<Result<(String, String)>>>();
+    let (tx, rx) = crossbeam_channel::unbounded::<Option<Result<(ProjectRow, Vec<FileRow>)>>>();
     crossbeam::thread::scope(|s: &crossbeam::thread::Scope<'_>| {
         // Spawn a thread per github token
         for t in tokens {
@@ -556,11 +540,11 @@ pub fn run(
         while let Ok(msg) = rx.recv() {
             match msg {
                 Some(msg_content) => {
-                    let (project_msg, files_msg) = msg_content?;
+                    let (project_row, file_rows) = msg_content?;
 
-                    writeln!(&mut project_log_file, "{project_msg}")?;
-                    if !files_msg.trim().is_empty() {
-                        write!(&mut file_log, "{files_msg}")?;
+                    project_log_file.write_record(project_row)?;
+                    for row in file_rows {
+                        file_log.write_record(row)?;
                     }
                     progress.inc(1);
                 }
@@ -651,7 +635,7 @@ fn download_repo(
     word_counter: &Matcher,
     skip: bool,
     delete: bool,
-) -> Result<(String, String)> {
+) -> Result<(ProjectRow, Vec<FileRow>)> {
     if !skip {
         let id = id_opt.with_context(|| {
             format!(
@@ -722,7 +706,7 @@ fn download_repo(
         if !response.status().is_success() {
             return Ok((
                 error_row(id, full_name, last_commit, keywords_files.len()),
-                String::new(),
+                Vec::new(),
             ));
         }
 
@@ -735,7 +719,7 @@ fn download_repo(
             Err(_) => {
                 return Ok((
                     error_row(id, full_name, last_commit, keywords_files.len()),
-                    String::new(),
+                    Vec::new(),
                 ));
             }
         }
@@ -758,10 +742,7 @@ fn download_repo(
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                let ext = e.path().extension().and_then(|s| s.to_str());
-                !matches!(ext, Some(ext) if keywords_files.extensions_to_language.contains_key(ext))
-            })
+            .filter(|e| !keywords_files.path_has_extension(e.path()))
         {
             delete_file(entry.path(), false)?;
         }
@@ -786,7 +767,7 @@ fn download_repo(
     let mut dir_files_before_filter: usize = 0;
     let mut dir_words_before_filter: usize = 0;
 
-    let mut files_output: String = String::new();
+    let mut file_rows: Vec<FileRow> = Vec::new();
     let mut dir_loc_after_filter_any: usize = 0;
     let mut dir_loc_after_filter: Vec<usize> = vec![0; keywords_files.len()];
     let mut dir_files_after_filter_any: usize = 0;
@@ -798,18 +779,11 @@ fn download_repo(
     // Remove all files that do not contain the keywords.
     // Repeat the process for every extension.
     for (ext, lang) in keywords_files.extensions_to_language.iter() {
-        let extension_pattern = format!(".{ext}");
         let file_list: Vec<PathBuf> = WalkDir::new(project_path)
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                let path = e.path();
-                path.extension().is_some()
-                    && path
-                        .to_str()
-                        .is_some_and(|s| s.ends_with(extension_pattern.as_str()))
-            })
+            .filter(|e| has_extension(e.path(), ext))
             .map(|e| e.into_path())
             .collect();
 
@@ -853,27 +827,20 @@ fn download_repo(
 
                     // Remove commas from the filename to avoid issues with the CSV format.
 
-                    let path_str = &path
-                        .to_str()
-                        .with_context(|| {
-                            format!("Could not convert path to string: {}", &path.display())
-                        })?
-                        .replace(",", "-was_comma-")
-                        .replace("\"", "-was_quote-");
-                    writeln!(
-                        &mut files_output,
-                        "{}{},{},{},{},{}",
-                        id_opt.map_or_else(String::new, |i| format!("{},", i)),
-                        path_str,
-                        lang,
-                        loc,
-                        words,
-                        matches
-                            .iter()
-                            .map(|m| m.to_string())
-                            .collect::<Vec<String>>()
-                            .join(",")
-                    )?;
+                    let path_str = path.to_str().with_context(|| {
+                        format!("Could not convert path to string: {}", &path.display())
+                    })?;
+
+                    let mut row: Vec<String> = Vec::new();
+                    if let Some(id) = id_opt {
+                        row.push(id.to_string());
+                    }
+                    row.push(path_str.to_string());
+                    row.push(lang.to_string());
+                    row.push(loc.to_string());
+                    row.push(words.to_string());
+                    row.extend(matches.iter().map(|m| m.to_string()));
+                    file_rows.push(row);
                 } else if delete {
                     delete_file(&path, false)?
                 }
@@ -885,87 +852,54 @@ fn download_repo(
         delete_empty_dirs(project_path)?
     }
 
-    let project_output = format!(
-        "{}{},{}{}{},{},{},{},{},{},{},{},{},{}",
-        id_opt.map_or_else(String::new, |i| format!("{i},")),
-        project_path,
-        if skip {
-            "".to_string()
-        } else {
-            format!("{full_name},")
-        },
-        if skip {
-            "".to_string()
-        } else {
-            let last_commit = last_commit
-                .with_context(|| format!("Last commit not found for project {full_name}"))?;
-            format!("{last_commit},")
-        },
-        dir_files_before_filter,
-        dir_loc_before_filter,
-        dir_words_before_filter,
-        dir_files_after_filter_any,
-        dir_files_after_filter
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(","),
-        dir_loc_after_filter_any,
-        dir_loc_after_filter
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(","),
-        dir_words_after_filter_any,
-        dir_words_after_filter
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(","),
-        dir_matches
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(",")
-    );
+    let mut project_row: Vec<String> = Vec::new();
+    if let Some(id) = id_opt {
+        project_row.push(id.to_string());
+    }
+    project_row.push(project_path.to_string());
+    if !skip {
+        project_row.push(full_name.to_string());
+        let last_commit = last_commit
+            .with_context(|| format!("Last commit not found for project {full_name}"))?;
+        project_row.push(last_commit.to_string());
+    }
+    project_row.push(dir_files_before_filter.to_string());
+    project_row.push(dir_loc_before_filter.to_string());
+    project_row.push(dir_words_before_filter.to_string());
+    project_row.push(dir_files_after_filter_any.to_string());
+    project_row.extend(dir_files_after_filter.iter().map(|m| m.to_string()));
+    project_row.push(dir_loc_after_filter_any.to_string());
+    project_row.extend(dir_loc_after_filter.iter().map(|m| m.to_string()));
+    project_row.push(dir_words_after_filter_any.to_string());
+    project_row.extend(dir_words_after_filter.iter().map(|m| m.to_string()));
+    project_row.extend(dir_matches.iter().map(|m| m.to_string()));
 
-    Ok((project_output, files_output))
+    Ok((project_row, file_rows))
 }
 
-fn error_row(id: u32, full_name: &str, last_commit: Option<&str>, n_kw_files: usize) -> String {
-    format!(
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-        id,
-        "error",
-        full_name,
-        last_commit.unwrap_or_default(),
-        0,
-        0,
-        0,
-        0,
-        vec![0; n_kw_files]
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(","),
-        0,
-        vec![0; n_kw_files]
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(","),
-        0,
-        vec![0; n_kw_files]
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(","),
-        vec![0; n_kw_files]
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(",")
-    )
+fn error_row(
+    id: u32,
+    full_name: &str,
+    last_commit: Option<&str>,
+    n_kw_files: usize,
+) -> Vec<String> {
+    let mut row: Vec<String> = vec![
+        id.to_string(),
+        "error".to_string(),
+        full_name.to_string(),
+        last_commit.unwrap_or_default().to_string(),
+        "0".to_string(), // files
+        "0".to_string(), // loc
+        "0".to_string(), // words
+    ];
+    // Four blocks: (files_with_kw, [0; n]), (loc_with_kw, [0; n]),
+    // (words_with_kw, [0; n]), and a trailing [0; n] for per-keyword matches.
+    for _ in 0..3 {
+        row.push("0".to_string()); // *_with_kw aggregate
+        row.extend((0..n_kw_files).map(|_| "0".to_string()));
+    }
+    row.extend((0..n_kw_files).map(|_| "0".to_string()));
+    row
 }
 
 #[cfg(test)]

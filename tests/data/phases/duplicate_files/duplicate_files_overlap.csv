@@ -1,0 +1,7 @@
+name,extension
+tests/data/phases/duplicate_files/files/c_float.json,json
+tests/data/phases/duplicate_files/files/c_float.copy,copy
+tests/data/phases/duplicate_files/files/empty.java,java
+tests/data/phases/duplicate_files/files/empty.c,c
+tests/data/phases/duplicate_files/files/foo.java,java
+tests/data/phases/duplicate_files/files/foo_clone.java,java

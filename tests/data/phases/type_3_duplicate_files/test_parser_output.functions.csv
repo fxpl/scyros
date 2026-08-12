@@ -1,0 +1,5 @@
+id,path,name,position,language,loc,words,tests/data/phases/type_3_duplicate_files/python.json,loop_statements,loop_nestings,if_statements,if_nestings,functions_calls,function_calls_nestings,params,param_kw_match,parse_error
+1,tests/data/phases/type_3_duplicate_files/files/type_1.py.functions/1-1,code_block_1,1:1,python,11,18,9,1,1,0,0,2,1,0,0,none
+2,tests/data/phases/type_3_duplicate_files/files/type_2.py.functions/1-1,code_block_2,1:1,python,12,18,9,1,1,0,0,2,1,0,0,none
+0,tests/data/phases/type_3_duplicate_files/files/original.py.functions/1-1,code_block_1,1:1,python,6,18,9,1,1,0,0,2,1,0,0,none
+3,tests/data/phases/type_3_duplicate_files/files/type_3.py.functions/1-1,code_block_3,1:1,python,11,19,10,1,1,0,0,2,1,0,0,none

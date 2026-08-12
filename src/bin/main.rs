@@ -180,6 +180,13 @@ fn main() {
                                     cli_subargs.get_one::<String>("map").map(|x| x.as_str()),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_one::<String>("similarity").unwrap(),
+                                    *cli_subargs.get_one::<f64>("threshold").unwrap(),
+                                    *cli_subargs.get_one::<usize>("prefix").unwrap(),
+                                    &cli_subargs
+                                        .get_many::<String>("languages")
+                                        .unwrap_or_default()
+                                        .map(|s| s.as_str())
+                                        .collect::<Vec<&str>>(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     cli_subargs.get_one::<String>("header").unwrap(),
                                     &logger,
@@ -195,11 +202,6 @@ fn main() {
                                         .map(|s| s.as_str())
                                         .collect::<Vec<&str>>(),
                                     cli_subargs.get_flag("regex"),
-                                        cli_subargs
-                                        .get_many::<String>("lang")
-                                        .map(|v|
-                                        v.map(|s| s.as_str())
-                                        .collect::<Vec<&str>>()),
                                     cli_subargs.get_one::<String>("failures").unwrap(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
@@ -237,6 +239,49 @@ fn main() {
                                     &logger,
                                 )
                             }
+                            /* else if subcommand == alt_parse::cli().get_name() {
+                                alt_parse::run(
+                                    cli_subargs.get_one::<String>("input").unwrap(),
+                                    cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                                    cli_subargs.get_one::<String>("logs").map(|x| x.as_str()),
+                                    cli_subargs
+                                        .get_many::<String>("lang")
+                                        .map(|v|
+                                        v.map(|s| s.as_str())
+                                        .collect::<Vec<&str>>()),
+                                    cli_subargs.get_one::<String>("failures").unwrap(),
+                                    *cli_subargs.get_one::<usize>("threads").unwrap(),
+                                    *cli_subargs.get_one::<u64>("seed").unwrap(),
+                                    cli_subargs.get_flag("force"),
+                                    &mut logger,
+                                )
+                            } */
+                            // else if subcommand == tokenizer::cli().get_name() {
+                            //     tokenizer::run(
+                            //         cli_subargs.get_one::<String>("input").unwrap(),
+                            //         //cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                            //         //cli_subargs.get_one::<String>("language").unwrap(),
+                            //         cli_subargs.get_one::<String>("example_word").unwrap(),
+                            //         &logger,
+                            //     )
+                            // }
+                            // else if subcommand == type_3_duplicate_files::cli().get_name() {
+                            //     type_3_duplicate_files::run(
+                            //         cli_subargs.get_one::<String>("input").unwrap(),
+                            //         cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                            //         cli_subargs.get_one::<String>("map").map(|x| x.as_str()),
+                            //         cli_subargs.get_one::<String>("logs").map(|x| x.as_str()),
+                            //         /* languages */
+                            //         cli_subargs.get_one::<String>("language").map(|s| s.as_str()),
+                            //         *cli_subargs.get_one::<usize>("threads").unwrap(),
+                            //         *cli_subargs.get_one::<usize>("p_prefix").unwrap(),
+                            //         *cli_subargs.get_one::<f64>("threshold").unwrap(),
+                            //         cli_subargs.get_one::<String>("example_word"),
+                            //         cli_subargs.get_flag("force"),
+                            //         cli_subargs.get_one::<String>("header").unwrap(),
+                            //         &logger,
+                            //     )
+                            // }
                             else {
                                 Err(anyhow!("The subcommand {subcommand} is not available. Run the program with the --help flag to see the list of subcommands"))
                             }

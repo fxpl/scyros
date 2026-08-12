@@ -1,0 +1,8 @@
+//Code Block 3 (CB3)
+public static int factorial(int n) {
+  if(n >= 0) {
+    result[0] = 1;
+    for(int i=1; i<=n; i++) {
+      result[i] = i * result[i-1];
+    }
+    return result[n]; } }
