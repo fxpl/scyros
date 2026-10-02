@@ -132,3 +132,27 @@ console.log("Floating-point sequence:", [...sequence]);
 
 floatObject.x = 42.42;
 console.log("Float object x:", floatObject.x);
+
+// for...in, while and do-while loops
+function sumKeys(values: { [key: string]: number }): number {
+    let total = 0;
+    for (const key in values) {
+        total += Math.sqrt(values[key]);
+    }
+    let i = 0;
+    while (i < 3) {
+        i++;
+    }
+    do {
+        total = total / 2;
+    } while (total > 100);
+    return total;
+}
+
+// Decorator call
+class Meter {
+    @logged(Math.sqrt(2))
+    read(): number {
+        return Math.sqrt(4);
+    }
+}

@@ -67,6 +67,13 @@
             "keywords" : []
         },
         {
+            "name": "python",
+            "extensions" : [
+                "py"
+            ],
+            "keywords" : []
+        },
+        {
             "name": "c_header",
             "extensions" : [
                 "h",

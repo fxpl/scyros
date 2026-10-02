@@ -202,6 +202,7 @@ fn main() {
                                         .map(|s| s.as_str())
                                         .collect::<Vec<&str>>(),
                                     cli_subargs.get_flag("regex"),
+                                    cli_subargs.get_flag("case-sensitive"),
                                     cli_subargs.get_one::<String>("failures").unwrap(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),

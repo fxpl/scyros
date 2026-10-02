@@ -1,0 +1,15 @@
+subroutine kinds(v, a)
+  class(*) :: v
+  real :: a(..)
+#if 0 /* sqrt in a preprocessor comment is not counted */
+  print *, 1.0
+#endif
+  select type (v)
+  type is (real)
+    print *, sqrt(v)
+  end select
+  select rank (a)
+  rank (1)
+    print *, sqrt(a(1))
+  end select
+end subroutine kinds

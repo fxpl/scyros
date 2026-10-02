@@ -1,0 +1,14 @@
+function sumKeys(values: { [key: string]: number }): number {
+    let total = 0;
+    for (const key in values) {
+        total += Math.sqrt(values[key]);
+    }
+    let i = 0;
+    while (i < 3) {
+        i++;
+    }
+    do {
+        total = total / 2;
+    } while (total > 100);
+    return total;
+}

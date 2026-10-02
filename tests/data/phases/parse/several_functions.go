@@ -199,3 +199,13 @@ func main() {
 	// Demonstrate runtime.GOARCH for floating-point architecture
 	fmt.Printf("Floating-point architecture: %s\n", runtime.GOARCH)
 }
+
+// Method with a receiver, type switch and raw string literal
+func (c Circle) Describe(scale float64, value interface{}) string {
+	switch v := value.(type) {
+	case float64:
+		return fmt.Sprint(v * scale * c.Radius)
+	default:
+		return `float64`
+	}
+}

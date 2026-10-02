@@ -1,0 +1,3 @@
+def scale(self, a, b: float, c=1.0, d: float = 2.0, *args, e, **kwargs):
+    # sqrt in a comment is not counted
+    return float(a) * b

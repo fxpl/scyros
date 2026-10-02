@@ -1,0 +1,3 @@
+def ratio(a, /, b, *, c):
+    """sqrt in a docstring is a string"""
+    return math.sqrt(a / b)

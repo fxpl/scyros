@@ -107,3 +107,24 @@ namespace ExoticFloatingPoint
         }
     }
 }
+
+// Loops, conditionals and strings not used above
+class MoreFloatingPoint
+{
+    public static double Process(double[] values, bool verbose)
+    {
+        double total = 0.0;
+        foreach (double v in values) { total += v; }
+        int i = 0;
+        while (i < values.Length) { i++; }
+        do { total /= 2; } while (total > 100);
+        switch (i) { case 0: return 0.0; default: break; }
+        string path = @"C:\sqrt";
+        string raw = """sqrt""";
+        string text = $"{total} sqrt";
+        return verbose ? total : -total;
+    }
+
+    // Anonymous method
+    public static Func<double, double> Half = delegate (double x) { return x / 2; };
+}

@@ -1,0 +1,6 @@
+fn print_scaled(values: &[f64]) {
+    let scale = |x: f64| -> f64 { x * 2.0 };
+    for v in values {
+        println!("{}", scale(*v));
+    }
+}

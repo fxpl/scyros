@@ -1,0 +1,5 @@
+Point {
+            if (Double.isNaN(x)) {
+                throw new IllegalArgumentException();
+            }
+        }

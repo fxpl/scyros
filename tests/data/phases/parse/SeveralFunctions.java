@@ -77,3 +77,44 @@ public class SeveralFunctions {
         }
     }
 }
+
+// Comments, loops, lambdas, constructors and variable-length parameters
+class MoreFloatingPoint {
+    /* Block comment mentioning sqrt */
+    private final double base;
+
+    // Constructor calling another constructor
+    MoreFloatingPoint(double base, double... others) {
+        this(base);
+    }
+
+    MoreFloatingPoint(double base) {
+        this.base = base;
+    }
+
+    double loops(double[] values) {
+        // infinity in a comment is not counted
+        double total = 0.0;
+        for (int i = 0; i < values.length; i++) {
+            total += values[i];
+        }
+        int j = 0;
+        while (j < 3) {
+            j++;
+        }
+        do {
+            total = total / 2;
+        } while (total > 100);
+        return Math.sqrt(total);
+    }
+
+    java.util.function.DoubleUnaryOperator half = x -> Math.sqrt(x) / 2;
+
+    record Point(double x, double y) {
+        Point {
+            if (Double.isNaN(x)) {
+                throw new IllegalArgumentException();
+            }
+        }
+    }
+}

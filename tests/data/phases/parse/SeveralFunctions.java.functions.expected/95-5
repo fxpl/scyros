@@ -1,0 +1,15 @@
+double loops(double[] values) {
+        // infinity in a comment is not counted
+        double total = 0.0;
+        for (int i = 0; i < values.length; i++) {
+            total += values[i];
+        }
+        int j = 0;
+        while (j < 3) {
+            j++;
+        }
+        do {
+            total = total / 2;
+        } while (total > 100);
+        return Math.sqrt(total);
+    }

@@ -1,0 +1,1 @@
+lambda x, y=2: float(x) / y

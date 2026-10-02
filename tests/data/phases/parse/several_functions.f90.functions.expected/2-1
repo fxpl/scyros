@@ -1,0 +1,20 @@
+function total(x, n) result(s)
+  real :: x(n), s
+  integer :: n, i, j
+  ! sqrt in a comment is not counted
+  s = 0.0
+  do i = 1, n
+    do j = 1, n
+      s = s + x(i)
+    end do
+  end do
+  do while (s > 100.0)
+    s = s / 2.0
+  end do
+  do
+    exit
+  end do
+  if (s < 0.0) then
+    s = -s
+  end if
+end function total

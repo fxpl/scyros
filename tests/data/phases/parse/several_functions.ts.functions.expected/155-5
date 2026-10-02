@@ -1,0 +1,3 @@
+read(): number {
+        return Math.sqrt(4);
+    }

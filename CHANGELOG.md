@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A `--case-sensitive` flag for the `download` subcommand. The documentation now states that file extensions are always case-sensitive ([#9](https://github.com/fxpl/scyros/issues/9), reported by [@Sparcraps](https://github.com/Sparcraps)).
+- A `--case-sensitive` flag for the `download` and `parse` subcommands. The documentation now states that file extensions are always case-sensitive ([#9](https://github.com/fxpl/scyros/issues/9), reported by [@Sparcraps](https://github.com/Sparcraps)).
 - A `--no-output` (or `--count`) flag for the `parse` subcommand that allows users to skip writing the extracted functions to disk and only collect their statistics ([#5](https://github.com/fxpl/scyros/issues/5), reported by [@Michago6](https://github.com/Michago6)).
 - A `--lambdas` flag for the `parse` subcommand that allows users to choose whether to extract lambda functions as well. By default, lambda functions are not extracted ([#3](https://github.com/fxpl/scyros/issues/3), reported by [@
 linusbrew](https://github.com/linusbrew)).
@@ -36,7 +36,7 @@ The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates
 - The `languages` subcommand lists the languages of a repository in the same order in every run.
 - The `forks` subcommand reports entries without a fork value instead of counting them as forks.
 - The `duplicate_files` subcommand stops after the first error and requires at least one thread. With several threads, the file standing for a group of duplicates is now always its first file in the input instead of changing between runs. The duplicates map is no longer overwritten without `--force`, a path listed several times in the input counts as one file, and a `count` column of the input is replaced instead of producing `count_right`.
-- The `parse` subcommand no longer hangs with 0 threads.
+- The `parse` subcommand no longer hangs with 0 threads, skips files in languages it cannot parse instead of stopping the run (for example `.h` files mapped to `c_header`), and applies the `--failures` policies as described: `skip-file` and `skip-function` write rows with -1 for every statistic, and `abort` stops all threads.
 - Input files are read by column name instead of position, and tokens are read from the `token` column instead of the first one.
 - Empty values in id, name or token columns, and values that are not strings in keywords files, are reported as errors instead of being read as 0 or an empty string, or causing a crash.
 - Log messages are printed when the standard error is not a terminal, for example in a batch job.

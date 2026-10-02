@@ -1,0 +1,8 @@
+func (c Circle) Describe(scale float64, value interface{}) string {
+	switch v := value.(type) {
+	case float64:
+		return fmt.Sprint(v * scale * c.Radius)
+	default:
+		return `float64`
+	}
+}

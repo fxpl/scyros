@@ -1,0 +1,11 @@
+double halve_until_small(double x, int mode) {
+    do {
+        x = x / 2.0;
+    } while (x > 1.0);
+    switch (mode) {
+        case 0:
+            return x;
+        default:
+            return -x;
+    }
+}

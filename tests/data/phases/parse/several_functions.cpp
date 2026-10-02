@@ -140,3 +140,32 @@ double IntegrationOfFunctions::calculate_trapezoid_integral(const Vector<double>
 
    return(trapezoid_integral);
 }
+
+// Range-based for, while and do-while loops, and a raw string literal
+double sumAll(const std::vector<double>& values) {
+    double total = 0.0;
+    for (double v : values) {
+        total += v;
+    }
+    int i = 0;
+    while (i < 3) {
+        i++;
+    }
+    do {
+        total = total / 2;
+    } while (total > 100);
+    const char *label = R"(sqrt)";
+    return total;
+}
+
+// Template class: each method is a function
+template <typename T>
+class Accumulator {
+public:
+    double average(T sum, int n) { return static_cast<double>(sum) / n; }
+    double root(T value) { return std::sqrt(value); }
+};
+
+// Template declaration without a body
+template <typename T>
+double scale(T value, double factor = 2.0);

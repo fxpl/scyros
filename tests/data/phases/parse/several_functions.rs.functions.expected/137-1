@@ -1,0 +1,8 @@
+fn classify(value: f64) -> &'static str {
+    /* nan in a block comment is not counted */
+    let label = r"sqrt";
+    match value {
+        v if v.is_nan() => "nan",
+        _ => label,
+    }
+}

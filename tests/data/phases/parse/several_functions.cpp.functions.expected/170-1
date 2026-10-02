@@ -1,0 +1,2 @@
+template <typename T>
+double scale(T value, double factor = 2.0);

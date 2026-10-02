@@ -1,0 +1,14 @@
+def loops(values):
+    total = 0.0
+    for v in values:
+        total += v
+    while total > 100:
+        total = total / 2
+    if total < 0:
+        total = -total
+    result = total if total > 1 else float(1)
+    match result:
+        case 0:
+            return 0.0
+        case _:
+            return math.sqrt(result)

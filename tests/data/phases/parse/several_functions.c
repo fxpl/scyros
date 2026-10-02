@@ -167,3 +167,16 @@ int main() {
     
     return 0;
 }
+
+// do-while loop and switch statement
+double halve_until_small(double x, int mode) {
+    do {
+        x = x / 2.0;
+    } while (x > 1.0);
+    switch (mode) {
+        case 0:
+            return x;
+        default:
+            return -x;
+    }
+}

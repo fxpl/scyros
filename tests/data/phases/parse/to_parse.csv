@@ -6,3 +6,5 @@ id,name,language
 2,tests/data/phases/parse/several_functions.cs,c#
 3,tests/data/phases/parse/SeveralFunctions.scala,scala
 4,tests/data/phases/parse/several_functions.rs,rust
+5,tests/data/phases/parse/several_functions.py,python
+6,tests/data/phases/parse/several_functions.f90,fortran

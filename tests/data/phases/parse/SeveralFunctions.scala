@@ -86,3 +86,8 @@ object Main {
         println(s"Special values: ${FloatUtils.specialValuesDemo().mkString(", ")}")
     }
 }
+
+// Anonymous function
+object MoreFloatingPoint {
+  val half: Double => Double = (x: Double) => math.sqrt(x) / 2
+}

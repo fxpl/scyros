@@ -1,0 +1,20 @@
+subroutine scale(x, n, mode)
+  real :: x(n)
+  integer :: n, mode, k
+  do 10 k = 1, n
+    x(k) = sqrt(x(k))
+10 continue
+  if (mode - 1) 20, 30, 30
+20 continue
+30 continue
+  select case (mode)
+  case (1)
+    x = x * 2.0
+  case default
+    x = x / 2.0
+  end select
+  where (x > 1.0) x = 1.0
+  forall (k = 1:n) x(k) = x(k) + 1.0
+  print *, 'sqrt'
+  call print_values(x, n)
+end subroutine scale

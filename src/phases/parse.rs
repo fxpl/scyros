@@ -23,8 +23,9 @@ use rand::SeedableRng;
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::iter::FromIterator as _;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::vec;
-use std::{collections::HashSet, sync::Mutex};
+use std::{collections::HashSet, path::Path, sync::Mutex};
 use tracing::{info, warn};
 use tree_sitter::{Language, Node, Parser, Tree};
 
@@ -46,8 +47,8 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. It must be a valid CSV file where the first column is the path to the file and the \
-                       second column is the extension of the file. Other columns are ignored.")
+                .help("Path to the input csv file to use. It must be a valid CSV file with a column 'id' containing the id of the project \
+                       and a column 'name' containing the path to the file. The language of a file is given by its extension. Other columns are ignored.")
                 .required(true)
         )
         .arg(
@@ -93,6 +94,12 @@ pub fn cli() -> Command {
                 .long("regex")
                 .help("Whether to interpret the keywords as regular expressions. If not specified, the keywords are interpreted as whole words to match.")
                 .default_value("false")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("case-sensitive")
+                .long("case-sensitive")
+                .help("Match the keywords case-sensitively. By default, letter case is ignored when matching keywords. File extensions are always case-sensitive.")
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -169,6 +176,7 @@ type LogRow = Vec<String>;
 /// * `logs_path` - Path to the output csv file storing the files statistics.
 /// * `keywords_file_paths` - Paths to the files containing the list of extensions and keywords to use.
 /// * `regex_syntax` - Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
+/// * `case_sensitive` - Whether keywords are matched case-sensitively.
 /// * `opt_languages` - Optional list of languages to parse. If not specified, all supported languages are parsed.
 /// * `fail_policy` - The policy to apply when a parse error is encountered. It can be one of the following:
 ///   * `ignore`: continue parsing and write the statistics of the file or function with parse error as if there was no error.
@@ -187,6 +195,7 @@ pub fn run(
     logs_path: Option<&str>,
     keywords_file_paths: &[&str],
     regex_syntax: bool,
+    case_sensitive: bool,
     fail_policy: &str,
     threads: usize,
     seed: u64,
@@ -212,13 +221,15 @@ pub fn run(
     .collect::<HashSet<_>>();
 
     let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
-        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
+        KeywordFiles::new(regex_syntax)
+            .case_sensitive(case_sensitive)
+            .add_files(keywords_file_paths, true)
     })?;
     let languages = keyword_files.languages();
 
     for lang in &languages {
-        if !supported_languages.contains(lang.as_str()) {
-            warn!("Unsupported language: {lang}");
+        if !supported_languages.contains(lang.to_lowercase().as_str()) {
+            warn!("Unsupported language: {lang}. Its files are skipped.");
         }
     }
 
@@ -256,8 +267,8 @@ pub fn run(
         .into_iter()
         .map(|opt_name| {
             opt_name
-                .map(|s| keyword_files.path_has_extension(s))
-                .unwrap_or(false)
+                .and_then(|s| keyword_files.file_language(s))
+                .is_some_and(|lang| supported_languages.contains(lang.to_lowercase().as_str()))
         })
         .collect();
     input_file = input_file.filter(&name_mask)?;
@@ -332,6 +343,9 @@ pub fn run(
 
     let iter = Mutex::new(shuffled_rows.into_iter());
 
+    // Set when a thread fails, so that the other threads stop instead of processing the remaining files.
+    let failed = AtomicBool::new(false);
+
     // Every thread comes with a sender channel.
     // The sender channel is used to send information about the extracted functions back to the main thread.
     // The receiver channel is used by the main thread to collect and write the information to the log file.
@@ -345,10 +359,12 @@ pub fn run(
                 // Download the repositories until the iterator is empty.
                 loop {
                     // Lock the repository iterator and retrieve the next item.
-                    let next_item: Option<Result<(u32, String), usize>> = {
-                        let mut iter_guard = iter.lock().unwrap();
-                        iter_guard.next()
-                    };
+                    let next_item: Option<Result<(u32, String), usize>> =
+                        if failed.load(Ordering::Relaxed) {
+                            None
+                        } else {
+                            iter.lock().unwrap().next()
+                        };
 
                     match next_item {
                         Some(row) => match row {
@@ -366,13 +382,16 @@ pub fn run(
                                     my_tx.send(Some(Ok(s))).unwrap();
                                 }
                                 Err(e) => {
+                                    failed.store(true, Ordering::Relaxed);
                                     my_tx.send(Some(Err(e))).unwrap();
                                     break;
                                 }
                             },
                             Err(row_nr) => {
+                                failed.store(true, Ordering::Relaxed);
                                 let _ =
                                     my_tx.send(Some(Err(anyhow!("Could not parse row {row_nr}"))));
+                                break;
                             }
                         },
                         None => {
@@ -482,7 +501,16 @@ fn analyze_file(
             let file_has_parse_error: bool = tree.root_node().has_error();
 
             if file_has_parse_error && fail_policy == "skip-file" {
-                Ok((Vec::new(), None))
+                Ok((
+                    Vec::new(),
+                    Some(file_error_row(
+                        project_id,
+                        path,
+                        &language,
+                        keywords_files,
+                        &position_to_string(find_first_error_position(&tree.root_node())),
+                    )),
+                ))
             } else if file_has_parse_error && fail_policy == "abort" {
                 bail!("Parse error in file {path}")
             } else {
@@ -560,6 +588,73 @@ fn file_error_row(
     .collect()
 }
 
+/// Returns the statistics row of a function skipped because of a parse error, with -1 for every statistic.
+fn function_error_row(
+    project_id: u32,
+    file_path: &str,
+    name: String,
+    position: (usize, usize),
+    language: &str,
+    keyword_files: &KeywordFiles,
+    parse_error: String,
+) -> OutputRow {
+    const STATISTICS_AFTER_KEYWORDS: usize = 9;
+    vec![
+        project_id.to_string(),
+        file_path.to_string(),
+        name,
+        position_to_string(Some(position)),
+        language.to_string(),
+        "-1".to_string(),
+        "-1".to_string(),
+    ]
+    .into_iter()
+    .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
+    .chain(std::iter::repeat_n(
+        "-1".to_string(),
+        STATISTICS_AFTER_KEYWORDS,
+    ))
+    .chain(std::iter::once(parse_error))
+    .collect()
+}
+
+/// Returns the name of a function, without its parameters and whitespace.
+///
+/// # Arguments
+///
+/// * `function` - The node of the function.
+/// * `grammar` - The grammar of the language.
+/// * `source` - The source code of the whole file.
+fn function_name(function: &Node, grammar: &Grammar, source: &[u8]) -> String {
+    let mut name: String = String::from_utf8_lossy(
+        find_first_field(function, grammar.name_field)
+            .map(|n| node_source_code(&n, source))
+            .unwrap_or(b""),
+    )
+    .to_string();
+    if let Some(idx) = name.find('(') {
+        name.truncate(idx);
+    }
+    name.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Returns the position of the first parse error in a function, relative to the start of the function.
+///
+/// # Arguments
+///
+/// * `function` - The node of the function.
+/// * `function_position` - The line and column where the function starts in the file.
+fn relative_error_position(function: &Node, function_position: (usize, usize)) -> String {
+    position_to_string(find_first_error_position(function).map(|(row, col)| {
+        let error_row = row - function_position.0 + 1;
+        if row == function_position.0 {
+            (error_row, col - function_position.1 + 1)
+        } else {
+            (error_row, col)
+        }
+    }))
+}
+
 /// Extracts the functions from a subtree of a source file and writes them to individual files
 /// if they contain one of the provided keywords. Returns statistics about all the functions
 /// in the subtree.
@@ -617,27 +712,30 @@ fn extract_functions(
         if grammar.function_nodes(lambdas).contains(node.kind()) {
             let has_error: bool = node.has_error();
 
-            if (has_error && fail_policy == "skip-function")
-                || (language == "java" && find_fields(&node, "body").is_empty())
-            {
+            let function_position: (usize, usize) = (
+                node.start_position().row + 1,
+                node.start_position().column + 1,
+            );
+
+            if language == "java" && find_fields(&node, "body").is_empty() {
                 continue;
+            } else if has_error && fail_policy == "skip-function" {
+                rows.push(function_error_row(
+                    project_id,
+                    file_path,
+                    function_name(&node, grammar, source),
+                    function_position,
+                    language,
+                    keyword_files,
+                    relative_error_position(&node, function_position),
+                ));
+                functions += 1;
             } else {
                 // Function source code
                 let function_source_code: &[u8] = node_source_code(&node, source);
-                let function_position: (usize, usize) = (
-                    node.start_position().row + 1,
-                    node.start_position().column + 1,
-                );
 
                 let error_position: String = if has_error {
-                    position_to_string(find_first_error_position(&node).map(|(row, col)| {
-                        let error_row = row - function_position.0 + 1;
-                        if row == function_position.0 {
-                            (error_row, col - function_position.1 + 1)
-                        } else {
-                            (error_row, col)
-                        }
-                    }))
+                    relative_error_position(&node, function_position)
                 } else {
                     "none".to_string()
                 };
@@ -664,10 +762,10 @@ fn extract_functions(
 
                 if matches.iter().any(|x| *x > 0) {
                     let function_path: String = if write_out {
-                        format!(
-                            "{}/{}-{}",
-                            target_folder, function_position.0, function_position.1
-                        )
+                        Path::new(&target_folder)
+                            .join(format!("{}-{}", function_position.0, function_position.1))
+                            .to_string_lossy()
+                            .into_owned()
                     } else {
                         file_path.to_string()
                     };
@@ -692,16 +790,7 @@ fn extract_functions(
                     let params_vec: Vec<Node<'_>> =
                         find_first_node_of_kind(&node, &grammar.param_seq_nodes, true);
 
-                    let mut name: String = String::from_utf8_lossy(
-                        find_first_field(&node, grammar.name_field)
-                            .map(|n| node_source_code(&n, source))
-                            .unwrap_or(b""),
-                    )
-                    .to_string();
-                    if let Some(idx) = name.find('(') {
-                        name.truncate(idx);
-                    }
-                    name = name.chars().filter(|c| !c.is_whitespace()).collect();
+                    let name: String = function_name(&node, grammar, source);
 
                     let mut n_param: usize = 0;
                     let mut param_match: usize = 0;
@@ -885,10 +974,17 @@ fn cpp_grammar() -> Grammar {
     Grammar {
         lang: tree_sitter_cpp::LANGUAGE.into(),
         comment_nodes: vec!["comment"].into_iter().collect(),
-        string_literal_nodes: vec!["string_literal"].into_iter().collect(),
-        loop_nodes: vec!["for_range_loop", "for_statement", "while_statement"]
+        string_literal_nodes: vec!["string_literal", "raw_string_literal"]
             .into_iter()
             .collect(),
+        loop_nodes: vec![
+            "for_range_loop",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+        ]
+        .into_iter()
+        .collect(),
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
@@ -898,9 +994,13 @@ fn cpp_grammar() -> Grammar {
         anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
         param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
-        param_nodes: vec!["parameter_declaration", "variadic_parameter_declaration"]
-            .into_iter()
-            .collect(),
+        param_nodes: vec![
+            "parameter_declaration",
+            "optional_parameter_declaration",
+            "variadic_parameter_declaration",
+        ]
+        .into_iter()
+        .collect(),
         param_type_field: Some("type"),
         return_type_field: Some("type"),
         name_field: "declarator",
@@ -916,15 +1016,26 @@ fn cs_grammar() -> Grammar {
             "string_literal",
             "verbatim_string_literal",
             "raw_string_literal",
+            "string_content",
         ]
         .into_iter()
         .collect(),
-        loop_nodes: vec!["for_statement", "while_statement", "do_statement"]
-            .into_iter()
-            .collect(),
-        cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
-            .into_iter()
-            .collect(),
+        loop_nodes: vec![
+            "for_statement",
+            "foreach_statement",
+            "while_statement",
+            "do_statement",
+        ]
+        .into_iter()
+        .collect(),
+        cond_nodes: vec![
+            "if_statement",
+            "switch_statement",
+            "switch_expression",
+            "conditional_expression",
+        ]
+        .into_iter()
+        .collect(),
         named_function_nodes: vec![
             "method_declaration",
             "constructor_declaration",
@@ -950,9 +1061,14 @@ fn ts_grammar() -> Grammar {
         lang: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         comment_nodes: vec!["comment"].into_iter().collect(),
         string_literal_nodes: vec!["string_fragment"].into_iter().collect(),
-        loop_nodes: vec!["for_statement", "for_in_statement", "while_statement"]
-            .into_iter()
-            .collect(),
+        loop_nodes: vec![
+            "for_statement",
+            "for_in_statement",
+            "while_statement",
+            "do_statement",
+        ]
+        .into_iter()
+        .collect(),
         cond_nodes: vec!["if_statement", "switch_statement", "ternary_expression"]
             .into_iter()
             .collect(),
@@ -960,13 +1076,9 @@ fn ts_grammar() -> Grammar {
             .into_iter()
             .collect(),
         anon_function_nodes: vec!["arrow_function"].into_iter().collect(),
-        function_call_nodes: vec![
-            "new_expression",
-            "call_expression",
-            "decorator_call_expression",
-        ]
-        .into_iter()
-        .collect(),
+        function_call_nodes: vec!["new_expression", "call_expression"]
+            .into_iter()
+            .collect(),
         param_seq_nodes: vec!["formal_parameters"].into_iter().collect(),
         param_nodes: vec!["required_parameter", "optional_parameter"]
             .into_iter()
@@ -1033,7 +1145,9 @@ fn java_grammar() -> Grammar {
             .into_iter()
             .collect(),
         param_seq_nodes: vec!["formal_parameters"].into_iter().collect(),
-        param_nodes: vec!["formal_parameter"].into_iter().collect(),
+        param_nodes: vec!["formal_parameter", "spread_parameter"]
+            .into_iter()
+            .collect(),
         param_type_field: Some("type"),
         return_type_field: Some("type"),
         name_field: "name",
@@ -1045,7 +1159,7 @@ fn scala_grammar() -> Grammar {
     Grammar {
         lang: tree_sitter_scala::LANGUAGE.into(),
         comment_nodes: vec!["comment", "block_comment"].into_iter().collect(),
-        string_literal_nodes: vec!["string"].into_iter().collect(),
+        string_literal_nodes: vec!["string", "interpolated_string"].into_iter().collect(),
         loop_nodes: vec!["for_expression", "while_expression", "do_while_expression"]
             .into_iter()
             .collect(),
@@ -1070,11 +1184,10 @@ fn fortran_grammar() -> Grammar {
         comment_nodes: vec!["preproc_comment", "comment"].into_iter().collect(),
         string_literal_nodes: vec!["string_literal"].into_iter().collect(),
         loop_nodes: vec![
-            "loop_control_expression",
+            "do_loop_statement",
+            "do_label_statement",
             "where_statement",
             "forall_statement",
-            "concurrent_statement",
-            "while_statement",
         ]
         .into_iter()
         .collect(),
@@ -1127,14 +1240,14 @@ fn python_grammar() -> Grammar {
 fn rust_grammar() -> Grammar {
     Grammar {
         lang: tree_sitter_rust::LANGUAGE.into(),
-        comment_nodes: vec!["comment"].into_iter().collect(),
+        comment_nodes: vec!["line_comment", "block_comment"].into_iter().collect(),
         string_literal_nodes: vec!["string_literal", "raw_string_literal"]
             .into_iter()
             .collect(),
-        loop_nodes: vec!["for_expression", "loop", "while_expression"]
+        loop_nodes: vec!["for_expression", "loop_expression", "while_expression"]
             .into_iter()
             .collect(),
-        cond_nodes: vec!["if_expression", "let_condition", "match_expression"]
+        cond_nodes: vec!["if_expression", "match_expression"]
             .into_iter()
             .collect(),
         named_function_nodes: vec!["function_item"].into_iter().collect(),
@@ -1461,6 +1574,7 @@ mod tests {
                 None,
                 keywords,
                 false,
+                false,
                 "ignore",
                 8,
                 0,
@@ -1551,6 +1665,7 @@ mod tests {
                 None,
                 keywords,
                 false,
+                false,
                 "ignore",
                 8,
                 0,
@@ -1599,6 +1714,103 @@ mod tests {
         let input_file_path = format!("{TEST_DATA}/parse_go.csv");
 
         test_parse(&input_file_path, &keywords, false, true, true, true)
+    }
+
+    /// Runs the parser with a failure policy and returns the content of the functions file and of the logs file.
+    fn parse_with_policy(
+        input_file_path: &str,
+        keywords: &[&str],
+        fail_policy: &str,
+    ) -> Result<(String, String)> {
+        let output_path = format!("{input_file_path}.{fail_policy}.functions.csv");
+        let logs_path = format!("{input_file_path}.{fail_policy}.function_logs.csv");
+        let result = run(
+            input_file_path,
+            Some(&output_path),
+            Some(&logs_path),
+            keywords,
+            false,
+            false,
+            fail_policy,
+            1,
+            0,
+            true,
+            false,
+            false,
+            false,
+            test_logger(),
+        )
+        .and_then(|_| {
+            Ok((
+                std::fs::read_to_string(&output_path)?,
+                std::fs::read_to_string(&logs_path)?,
+            ))
+        });
+        delete_file(&output_path, true)?;
+        delete_file(&logs_path, true)?;
+        result
+    }
+
+    #[test]
+    fn skip_file_writes_error_log_row() -> Result<()> {
+        let (functions, logs) = parse_with_policy(
+            &format!("{TEST_DATA}/invalid.csv"),
+            &["tests/data/keywords/c_float.json"],
+            "skip-file",
+        )?;
+        assert_eq!(functions.lines().count(), 1);
+        assert_eq!(
+            logs.lines().nth(1),
+            Some("0,tests/data/phases/parse/invalid.c,c,-1,-1,-1,1:25")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn skip_function_writes_error_function_row() -> Result<()> {
+        let (functions, logs) = parse_with_policy(
+            &format!("{TEST_DATA}/invalid.csv"),
+            &["tests/data/keywords/c_float.json"],
+            "skip-function",
+        )?;
+        assert_eq!(
+            functions.lines().nth(1),
+            Some("0,tests/data/phases/parse/invalid.c,main,1:5,c,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1:21")
+        );
+        assert_eq!(
+            logs.lines().nth(1),
+            Some("0,tests/data/phases/parse/invalid.c,c,1,0,0,1:25")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn abort_stops_on_parse_error() {
+        assert!(parse_with_policy(
+            &format!("{TEST_DATA}/invalid.csv"),
+            &["tests/data/keywords/c_float.json"],
+            "abort",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn unsupported_languages_are_skipped() -> Result<()> {
+        let input_file_path = format!("{TEST_DATA}/unsupported_language.csv");
+        write_file(
+            &input_file_path,
+            b"id,name\n0,tests/data/phases/parse/invalid.c\n1,tests/data/phases/parse/header.h\n",
+        )?;
+        let result = parse_with_policy(
+            &input_file_path,
+            &["tests/data/keywords/fp_types.json"],
+            "ignore",
+        );
+        delete_file(&input_file_path, false)?;
+        let (_, logs) = result?;
+        assert_eq!(logs.lines().count(), 2);
+        ensure!(logs.contains("invalid.c"));
+        Ok(())
     }
 
     #[test]

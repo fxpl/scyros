@@ -1,0 +1,6 @@
+template <typename T>
+class Accumulator {
+public:
+    double average(T sum, int n) { return static_cast<double>(sum) / n; }
+    double root(T value) { return std::sqrt(value); }
+};

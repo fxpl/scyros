@@ -132,3 +132,21 @@ fn main() {
         .collect();
     println!("Special values: {}", special.join(", "));
 }
+
+/* Block comment mentioning sqrt */
+fn classify(value: f64) -> &'static str {
+    /* nan in a block comment is not counted */
+    let label = r"sqrt";
+    match value {
+        v if v.is_nan() => "nan",
+        _ => label,
+    }
+}
+
+// Closure with a return type inside a function without one
+fn print_scaled(values: &[f64]) {
+    let scale = |x: f64| -> f64 { x * 2.0 };
+    for v in values {
+        println!("{}", scale(*v));
+    }
+}

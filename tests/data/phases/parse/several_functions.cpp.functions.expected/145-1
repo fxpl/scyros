@@ -1,0 +1,15 @@
+double sumAll(const std::vector<double>& values) {
+    double total = 0.0;
+    for (double v : values) {
+        total += v;
+    }
+    int i = 0;
+    while (i < 3) {
+        i++;
+    }
+    do {
+        total = total / 2;
+    } while (total > 100);
+    const char *label = R"(sqrt)";
+    return total;
+}
