@@ -14,7 +14,7 @@
 
 #![doc = include_str!("../docs/ids.md")]
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -141,6 +141,11 @@ pub fn run(
     force: bool,
     logger: &Logger,
 ) -> Result<()> {
+    ensure!(
+        min_id < max_id,
+        "The minimum ID ({min_id}) must be smaller than the maximum ID ({max_id})"
+    );
+
     // Check if the token file is valid and load the tokens.
     let tokens: Vec<String> = logger.log_tokens(tokens)?;
 
@@ -300,22 +305,15 @@ pub fn run(
                     break;
                 }
             }
-            // Handle "Not Found" error or unknown response format.
-            _ => {
-                if !request.has_key("message")
-                    || request["message"].as_str().with_context(|| {
-                        format!("Could not parse message as string in {request}")
-                    })? != "Not Found"
-                {
-                    bail!("Unknown response format: {request} ")
-                }
-            }
+            _ => bail!("Unknown response format: {request}"),
         }
 
         requests += 1;
     }
 
-    Ok(())
+    output_file
+        .flush()
+        .with_context(|| format!("Could not write to file {output_path}"))
 }
 
 /// Information about a GitHub project.
@@ -542,6 +540,23 @@ mod tests {
         delete_file(&id_half, false)?;
         delete_file(&id_full, false)?;
         delete_file(&id_force, false)
+    }
+
+    #[test]
+    fn empty_id_range() {
+        let output = format!("{TEST_DATA}/out_empty_range.csv");
+        let result = run(
+            &output,
+            "nonexistent_tokens.csv",
+            SEED,
+            10,
+            10,
+            Some(1),
+            "random",
+            false,
+            test_logger(),
+        );
+        assert!(result.is_err_and(|e| e.to_string().contains("minimum ID")));
     }
 
     #[test]

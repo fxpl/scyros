@@ -321,6 +321,7 @@ pub fn run(
             }
         }
     }
+    output_file.flush()?;
     Ok(())
 }
 
@@ -388,18 +389,23 @@ impl ProjectInfo {
         })
     }
 
-    /// Returns a string representation of the language map. Each entry is separated by a semicolon to avoid conflicts with the CSV format.\
+    /// Returns a string representation of the language map. Each entry is separated by a semicolon to avoid conflicts with the CSV format.
+    /// Languages are sorted by decreasing size, then by name, so that the output is the same in every run.
     ///
     /// # Arguments
     ///
     /// * `languages` - The map from the name of each language to the total size of the files written in that language.
     ///
     /// # Example
-    ///     
+    ///
     /// `languages = {"Rust": 1000, "Python": 500} -> "Rust:1000;Python:500"`
     fn print_languages(languages: &HashMap<String, i64>) -> String {
-        languages
-            .iter()
+        let mut by_size: Vec<(&String, &i64)> = languages.iter().collect();
+        by_size.sort_by(|(name_a, size_a), (name_b, size_b)| {
+            size_b.cmp(size_a).then(name_a.cmp(name_b))
+        });
+        by_size
+            .into_iter()
             .map(|(k, v)| format!("{k}:{v}"))
             .collect::<Vec<String>>()
             .join(";")
@@ -412,6 +418,19 @@ mod tests {
     use anyhow::ensure;
 
     const TEST_DATA: &str = "tests/data/phases/languages";
+
+    #[test]
+    fn languages_are_sorted_by_size_then_name() {
+        let languages: HashMap<String, i64> = HashMap::from([
+            ("Python".to_string(), 53),
+            ("C".to_string(), 53),
+            ("Java".to_string(), 253),
+        ]);
+        assert_eq!(
+            ProjectInfo::print_languages(&languages),
+            "Java:253;C:53;Python:53"
+        );
+    }
 
     #[test]
     #[ignore = "requires network access and valid GitHub tokens"]

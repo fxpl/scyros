@@ -16,7 +16,7 @@
 
 use std::iter::FromIterator;
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IntoLazy, Schema};
@@ -116,6 +116,12 @@ pub fn run(
 
     info!("{} entries found in the file.", projects_count);
 
+    let missing_fork_values: usize = projects.column(forks)?.null_count();
+    ensure!(
+        missing_fork_values == 0,
+        "{missing_fork_values} entries have no value in the column {forks}"
+    );
+
     // Filter out forked projects
     projects = projects
         .lazy()
@@ -154,6 +160,18 @@ mod tests {
 
     const INPUT: &str = "tests/data/phases/forks/forks.csv";
     const EXPECTED: &str = "tests/data/phases/forks/forks.csv.non-forks.csv.expected";
+
+    #[test]
+    fn missing_fork_values() -> Result<()> {
+        let input = "tests/data/phases/forks/missing_fork_values.csv";
+        let output = "tests/data/phases/forks/out_missing_fork_values.csv";
+        write_file(input, b"id,name,fork\n1,a/b,0\n2,c/d,\n")?;
+        let result = run(input, Some(output), "fork", false, false, test_logger());
+        delete_file(input, false)?;
+        delete_file(output, true)?;
+        ensure!(result.is_err_and(|e| e.to_string().contains("no value")));
+        Ok(())
+    }
 
     #[test]
     fn remove_forks() -> Result<()> {

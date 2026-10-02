@@ -15,6 +15,11 @@ linusbrew](https://github.com/linusbrew)).
 - An `overlap` similarity criterion for the `duplicate_files` subcommand, which detects near-miss duplicates, that is, files that differ by a few statements rather than matching exactly. Files are compared by how many tokens they have in common, using the prefix filtering technique of SourcererCC and its adaptive extension. The proportion of how many tokens two files must share to be considered duplicates can be set with the `--threshold` flag (defaults to 0.8).
 The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates may be deepened. A deeper prefix rejects more candidates before the full comparison, at the cost of more index lookups. Defaults to 1. The `--languages` (or `-l`) maps file extensions to languages, in the same JSON format used by the other subcommands. The `overlap` criterion compares files only against others of the same language, and leaves files whose extension belongs to no listed language uncompared. The other criteria ignore the flag. (PR [#2](https://github.com/fxpl/scyros/pull/2) by [@swartling](https://github.com/swartling))
 
+### Changed
+
+- The number of threads of the `download` subcommand is now given with `-n` or `--threads` instead of as a value without a flag. A number after `--keywords` was read as a keywords file.
+- The `parse` and `duplicate_files` subcommands also accept `--threads` in addition to `-n`.
+
 ### Fixed
 
 - An issue with the `--regex` flag in the `download` and `parse` subcommands that added word delimiters to the regexes when the flag was used (reported by [@Smexykex](https://github.com/Smexykex)).
@@ -38,6 +43,12 @@ The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates
 - An issue that caused GitHub tokens to be read from the first column of the tokens file instead of the `token` column.
 - An issue that caused empty values in columns of ids, names or tokens to be read as 0 or as an empty string. They are now reported as errors. For example, a corrupted last row in the output of the `ids` subcommand made a resumed run sample ids again from the first request.
 - An issue that caused a crash when a `keywords` or `extensions` field of a keywords JSON file contained a value that is not a string. Such files, and fields that are not arrays, are now reported as errors.
+- An issue with the `languages` subcommand that wrote the languages of a repository in a different order in every run. They are now sorted by decreasing size, then by name.
+- An issue that could lose the last rows of an output file without any error, for example when the disk is full. Output files are now flushed and write errors are reported.
+- A crash of the `ids` subcommand in random mode when `--min` is not smaller than `--max`. It is now reported as an error.
+- An issue with the `forks` subcommand that silently discarded entries without a value in the fork column and counted them as forks. They are now reported as errors.
+- An issue that created the parent directories of a file when the file was only read, and that ignored the error when a directory had to be created where a file exists.
+- An issue with the `download` subcommand that accepted a number of threads without `--skip`, although threads are only used with `--skip`.
 
 ### Removed
 

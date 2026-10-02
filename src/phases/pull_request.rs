@@ -304,6 +304,7 @@ pub fn run(
             }
         }
     }
+    output_file.flush()?;
     Ok(())
 }
 
@@ -633,6 +634,7 @@ fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<()> 
     }
 
     write!(&mut output_file, "{file_content}")?;
+    output_file.flush()?;
     Ok(())
 }
 

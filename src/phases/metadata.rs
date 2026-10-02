@@ -327,6 +327,7 @@ pub fn run(
             }
         }
     }
+    output_file.flush()?;
     Ok(())
 }
 

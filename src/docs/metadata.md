@@ -19,11 +19,12 @@ Output CSV file format:
   * updated: date of most recent update;
   * fork: whether the repository is a fork (1) or not (0);
   * disabled: whether the repository is disabled (1) or not (0);
-  * stars: number of stars
+  * archived: whether the repository is archived (1) or not (0);
+  * stars: number of stars;
   * forks: number of forks;
   * issues: number of open issues;
   * has_issues: whether issues are enabled (1) or not (0);
   * watchers_count: number of watchers;
-  * susbcribers: number of subscribers;
+  * subscribers: number of subscribers;
   * size: repository size in kB;
   * license: repository license.

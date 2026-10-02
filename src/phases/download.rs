@@ -157,8 +157,12 @@ pub fn cli() -> Command {
         )
         .arg(
             Arg::new("threads")
-                .help("Number of threads to use when not downloading and computing statistic locally instead.")
-                .requires("skip")
+                .short('n')
+                .long("threads")
+                .value_name("THREADS")
+                .help("Number of threads to use when not downloading and computing statistic locally instead (with --skip).")
+                // `requires("skip")` is always satisfied because flags have a default value, but `--tokens` is required unless `--skip` is used.
+                .conflicts_with("tokens")
                 .default_value("1")
                 .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..)),
         )

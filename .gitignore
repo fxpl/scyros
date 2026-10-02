@@ -12,6 +12,8 @@ data/
 ### Scyros ###
 ghtokens.csv
 !tests/data
+tests/data/phases/download/*.project_log.csv
+tests/data/phases/download/*.file_log.csv
 outputs/
 src/phases/alt_parse.rs //Got broken by refactoring but is not in use currently, so ignoring for now
 *.zip

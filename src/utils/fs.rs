@@ -22,7 +22,7 @@ use polars::{frame::DataFrame, io::SerReader};
 use walkdir::WalkDir;
 
 use std::fs;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::{Component, PathBuf};
 use std::sync::Arc;
 use std::{
@@ -38,7 +38,7 @@ pub enum FileMode {
     Append,
 }
 
-/// Opens a file. In overwrite or append mode, creates the file if it does not exist.
+/// Opens a file. In overwrite or append mode, creates the file and its parent directories if they do not exist.
 ///
 /// # Arguments
 ///
@@ -49,9 +49,9 @@ pub enum FileMode {
 ///
 /// A file in the specified mode or an error if the file could not be opened or created.
 pub fn open_file(path: impl AsRef<Path>, mode: FileMode) -> Result<File> {
-    if let Some(parent) = path.as_ref().parent() {
-        if let Some(parent_path) = parent.to_str() {
-            create_dir(parent_path)?;
+    if mode != FileMode::Read {
+        if let Some(parent) = path.as_ref().parent() {
+            create_dir(parent)?;
         }
     }
     match mode {
@@ -142,23 +142,10 @@ pub fn file_lines_count(path: impl AsRef<Path>) -> Result<usize, Error> {
 ///
 /// # Returns
 ///
-/// An error if the directory could not be created.
+/// An error if the directory could not be created, for example because the path is a file.
 pub fn create_dir(path: impl AsRef<Path>) -> Result<(), Error> {
-    let path_buf = path.as_ref().to_path_buf();
-    match std::fs::create_dir_all(&path_buf) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            if e.kind() != std::io::ErrorKind::AlreadyExists {
-                bail!(format!(
-                    "Could not create directory {}: {}",
-                    path_buf.display(),
-                    e
-                ))
-            } else {
-                Ok(())
-            }
-        }
-    }
+    std::fs::create_dir_all(&path)
+        .with_context(|| format!("Could not create directory {}", path.as_ref().display()))
 }
 
 /// Deletes a directory.
@@ -266,10 +253,14 @@ pub fn open_csv(
 /// # Returns
 /// An error if the DataFrame could not be written to the CSV file.
 pub fn write_csv(path: &str, df: &mut DataFrame) -> Result<()> {
-    CsvWriter::new(BufWriter::new(open_file(path, FileMode::Overwrite)?))
+    let mut writer: BufWriter<File> = BufWriter::new(open_file(path, FileMode::Overwrite)?);
+    CsvWriter::new(&mut writer)
         .include_header(true)
         .with_separator(b',')
         .finish(df)
+        .with_context(|| format!("Could not write to {path}"))?;
+    writer
+        .flush()
         .with_context(|| format!("Could not write to {path}"))
 }
 
@@ -436,6 +427,19 @@ mod io_tests {
 
         open_file("tests/data/empty.csv", FileMode::Read)?;
         Ok(())
+    }
+
+    #[test]
+    fn read_does_not_create_directories() -> Result<()> {
+        let missing_dir = "tests/data/missing_dir_for_read";
+        ensure!(open_file(format!("{missing_dir}/file.txt"), FileMode::Read).is_err());
+        ensure!(!Path::new(missing_dir).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn create_dir_on_file_fails() {
+        assert!(create_dir("tests/data/small_file.csv").is_err());
     }
 
     #[test]

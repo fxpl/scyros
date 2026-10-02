@@ -55,7 +55,7 @@ nix profile install github:fxpl/scyros
 
 ### Build from source
 
-Install Rust (version 1.94 or newer) by following the instructions on the [official website](https://rust-lang.org/tools/install/).
+Install Rust (version 1.93 or newer) by following the instructions on the [official website](https://rust-lang.org/tools/install/).
 
 Then clone the repository and build:
 ```bash
@@ -92,9 +92,9 @@ Some modules interact with the GitHub API and require personal access tokens (PA
 
 Tokens must be provided as a CSV file passed via a command-line argument. The file must contain a single column named token, with one token per line:
 ```csv
-    token
-    fa56454....
-    hj73647.... 
+token
+fa56454....
+hj73647....
 ```
 
 GitHub enforces API rate limits. Using multiple tokens from the same account does not increase these limits. Users are expected to comply with GitHub’s API terms and rate-limit policies:

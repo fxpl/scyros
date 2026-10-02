@@ -106,6 +106,8 @@ pub fn cli() -> Command {
         .arg(
             Arg::new("threads")
                 .short('n')
+                .long("threads")
+                .value_name("THREADS")
                 .help("Number of threads to use.")
                 .default_value("1")
                 .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..))
