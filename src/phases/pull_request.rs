@@ -152,8 +152,11 @@ pub fn run(
     sub: Option<usize>,
     logger: &Logger,
 ) -> Result<()> {
-    // Check if the token file is valid.
-    logger.log_tokens(tokens)?;
+    // Column index of the id in the output file.
+    const ID_COL: usize = 0;
+
+    // Check if the token file is valid and load the tokens.
+    let tokens: Vec<String> = logger.log_tokens(tokens)?;
 
     // Load input file
     let input_file: DataFrame = logger.run_task("Loading input file", || {
@@ -201,17 +204,11 @@ pub fn run(
         HashSet::new()
     } else {
         logger.run_task("Resuming progress", || {
-            // Open output file if it exists and load the ids of the projects that have already been processed.
             Ok(if Path::new(output_file_path).exists() {
-                let df_res: DataFrame = open_csv(
-                    output_file_path,
-                    Some(Schema::from_iter(vec![Field::new(
-                        ids.into(),
-                        DataType::UInt32,
-                    )])),
-                    Some(vec![ids]),
-                )?;
-                u32(&df_res, ids)?.into_iter().collect()
+                CSVFile::new(output_file_path, FileMode::Read)?
+                    .column(ID_COL)?
+                    .into_iter()
+                    .collect()
             } else {
                 HashSet::new()
             })
@@ -243,7 +240,10 @@ pub fn run(
     // Number of projects to sample.
     let mut n: usize = match sub {
         Some(m) => m,
-        None => n_pr - previous_results.len(),
+        None => u32(&input_file, ids)?
+            .into_iter()
+            .filter(|id| !previous_results.contains(id))
+            .count(),
     };
 
     // Create a progress bar

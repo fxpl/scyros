@@ -382,7 +382,9 @@ impl KeywordFiles {
                     .with_context(|| anyhow!("Language name is not a string"))?;
 
                 let extensions: HashSet<String> = match language.get("extensions") {
-                    Some(ext) => json_to_set(ext),
+                    Some(ext) => json_to_set(ext).with_context(|| {
+                        format!("Invalid extensions for language {name} in {path}")
+                    })?,
                     None => {
                         if warning {
                             warn!("Language {} in {} has no extensions field", name, path);
@@ -394,6 +396,8 @@ impl KeywordFiles {
                 let keywords: HashSet<String> = language
                     .get("keywords")
                     .map(|json| json_to_set(json))
+                    .transpose()
+                    .with_context(|| format!("Invalid keywords for language {name} in {path}"))?
                     .unwrap_or_default();
                 (name, extensions, keywords)
             };
@@ -424,6 +428,8 @@ impl KeywordFiles {
         let global_kw = categories
             .get(cat2)
             .map(|json| json_to_set(json))
+            .transpose()
+            .with_context(|| format!("Invalid global keywords in {path}"))?
             .unwrap_or_default();
 
         let file_matchers = Matcher::keywords_matchers(
@@ -479,7 +485,7 @@ impl KeywordFiles {
                 .iter()
                 .map(|m| m.count_matches_in_file(path_ref))
                 .collect(),
-            None => Ok(vec![0, self.paths.len()]),
+            None => Ok(vec![0; self.paths.len()]),
         }
     }
 

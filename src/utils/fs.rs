@@ -229,6 +229,7 @@ pub fn write_file(path: impl AsRef<Path>, content: impl AsRef<[u8]>) -> Result<(
 ///   This list does not need to contain all the columns of the CSV file, nor does it need to strictly contain columns of the CSV file.
 ///   The columns of the CSV file that are not in the schema will be read with an inferred data type.
 /// * `columns` - A list of column names to read from the CSV file. If None, reads all columns.
+///   The columns of the DataFrame are in the order of this list, whatever their order in the file.
 ///
 /// # Returns
 /// A DataFrame containing the data from the CSV file or an error if the file could not be read or if the data could not be parsed according to the schema.
@@ -237,15 +238,23 @@ pub fn open_csv(
     schema: Option<Schema>,
     columns: Option<Vec<&str>>,
 ) -> Result<DataFrame, Error> {
-    CsvReadOptions::default()
+    let df: DataFrame = CsvReadOptions::default()
         .with_columns(
-            columns.map(|cols| Arc::from(cols.into_iter().map(|s| s.into()).collect::<Vec<_>>())),
+            columns
+                .as_ref()
+                .map(|cols| Arc::from(cols.iter().map(|&s| s.into()).collect::<Vec<_>>())),
         )
         .with_schema_overwrite(schema.map(Arc::new))
         .with_has_header(true)
         .into_reader_with_file_handle(BufReader::new(open_file(path, FileMode::Read)?))
         .finish()
-        .with_context(|| format!("Could not read {path}"))
+        .with_context(|| format!("Could not read {path}"))?;
+    match columns {
+        Some(cols) => df
+            .select(cols)
+            .with_context(|| format!("Could not select the columns of {path}")),
+        None => Ok(df),
+    }
 }
 
 /// Writes a DataFrame to a CSV file.
@@ -426,6 +435,13 @@ mod io_tests {
         ensure!(file.is_err());
 
         open_file("tests/data/empty.csv", FileMode::Read)?;
+        Ok(())
+    }
+
+    #[test]
+    fn open_csv_keeps_requested_column_order() -> Result<()> {
+        let df = open_csv("tests/data/small_file.csv", None, Some(vec!["name", "id"]))?;
+        assert_eq!(df.get_column_names(), ["name", "id"]);
         Ok(())
     }
 

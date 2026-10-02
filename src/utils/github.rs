@@ -17,12 +17,12 @@ use crate::utils::dataframes;
 use super::fs::*;
 use super::json::*;
 use anyhow::ensure;
-use anyhow::{bail, Context, Error, Result};
+use anyhow::{Context, Error, Result};
 use curl::easy::{Easy, List as CurlList};
 use json::JsonValue;
 use polars::prelude::{DataFrame, DataType, Field, Schema};
 use std::iter::FromIterator as _;
-/// Checks if a file is a valid GitHub token file.
+/// Reads the tokens of a GitHub token file and checks that each of them is accepted by the GitHub API.
 ///
 /// A valid GitHub token file is a CSV file with a header "token" and that contains at least one token.
 /// Every line in the file must contain exactly one token.
@@ -30,7 +30,11 @@ use std::iter::FromIterator as _;
 /// # Arguments
 ///
 /// * `file_path` - The token file
-pub fn is_valid_token_file(file_path: &str) -> Result<()> {
+///
+/// # Returns
+///
+/// The tokens in the file, or an error if the file is invalid or one of the tokens is rejected.
+pub fn read_tokens(file_path: &str) -> Result<Vec<String>> {
     let token_file: DataFrame = open_csv(
         file_path,
         Some(Schema::from_iter(vec![Field::new(
@@ -41,38 +45,37 @@ pub fn is_valid_token_file(file_path: &str) -> Result<()> {
     )
     .with_context(|| format!("Invalid token file {file_path}"))?;
 
-    if token_file.height() == 0 {
-        bail!("Token file is empty");
-    } else {
-        // Safe unwrap
-        for (i, token) in dataframes::str(&token_file, "token")?
-            .into_iter()
-            .enumerate()
-        {
-            let mut headers: CurlList = CurlList::new();
+    let tokens: Vec<String> = dataframes::str(&token_file, "token")?
+        .into_iter()
+        .map(String::from)
+        .collect();
 
-            let mut easy = Easy::new();
+    ensure!(!tokens.is_empty(), "Token file is empty");
 
-            easy.url("https://api.github.com").and_then(|_| {
-                easy.get(true)
-                    .and_then(|_| headers.append(&format!("Authorization: token {token}")))
-                    .and_then(|_| headers.append("User-Agent: Rust-curl"))
-                    .and_then(|_| easy.http_headers(headers))
-            })?;
+    for (i, token) in tokens.iter().enumerate() {
+        let mut headers: CurlList = CurlList::new();
 
-            let perform = easy.perform();
-            if perform.is_err() {
-                perform.with_context(|| format!("Token in line {} is invalid", i + 2))?
-            }
-            ensure!(
-                easy.response_code()? == 200,
-                "Token in line {} is invalid: response code {}",
-                i + 2,
-                easy.response_code()?
-            );
+        let mut easy = Easy::new();
+
+        easy.url("https://api.github.com").and_then(|_| {
+            easy.get(true)
+                .and_then(|_| headers.append(&format!("Authorization: token {token}")))
+                .and_then(|_| headers.append("User-Agent: Rust-curl"))
+                .and_then(|_| easy.http_headers(headers))
+        })?;
+
+        let perform = easy.perform();
+        if perform.is_err() {
+            perform.with_context(|| format!("Token in line {} is invalid", i + 2))?
         }
-        Ok(())
+        ensure!(
+            easy.response_code()? == 200,
+            "Token in line {} is invalid: response code {}",
+            i + 2,
+            easy.response_code()?
+        );
     }
+    Ok(tokens)
 }
 
 /// Objects that can be converted to CSV rows.
@@ -133,52 +136,53 @@ mod tests {
     fn valid_tokens() -> Result<()> {
         let token_path = Path::new("ghtokens.csv");
         ensure!(token_path.exists(), "Token file does not exist");
-        is_valid_token_file(
+        read_tokens(
             token_path
                 .to_str()
                 .with_context(|| "Path is not valid unicode")?,
-        )
+        )?;
+        Ok(())
     }
 
     #[test]
     fn invalid_three_token_file() -> Result<()> {
-        ensure!(is_valid_token_file("tests/data/dummy_tokens.csv").is_err());
+        ensure!(read_tokens("tests/data/dummy_tokens.csv").is_err());
         Ok(())
     }
 
     #[test]
     fn invalid_non_existent_file() -> Result<()> {
-        ensure!(is_valid_token_file("tests/data/non_existent.csv").is_err());
+        ensure!(read_tokens("tests/data/non_existent.csv").is_err());
         Ok(())
     }
 
     #[test]
     fn invalid_empty_file() -> Result<()> {
-        ensure!(is_valid_token_file("tests/data/empty.csv").is_err());
+        ensure!(read_tokens("tests/data/empty.csv").is_err());
         Ok(())
     }
 
     #[test]
     fn invalid_title() -> Result<()> {
-        ensure!(is_valid_token_file("tests/data/invalid_token_title.csv").is_err());
+        ensure!(read_tokens("tests/data/invalid_token_title.csv").is_err());
         Ok(())
     }
 
     #[test]
     fn invalid_title_only_file() -> Result<()> {
-        ensure!(is_valid_token_file("tests/data/token_title_only.csv").is_err());
+        ensure!(read_tokens("tests/data/token_title_only.csv").is_err());
         Ok(())
     }
 
     #[test]
     fn two_token_same_line() -> Result<()> {
-        ensure!(is_valid_token_file("tests/data/two_tokens_same_line.csv").is_err());
+        ensure!(read_tokens("tests/data/two_tokens_same_line.csv").is_err());
         Ok(())
     }
 
     #[test]
     fn invalid_file() -> Result<()> {
-        ensure!(is_valid_token_file("tests/data/invalid_csv.csv").is_err());
+        ensure!(read_tokens("tests/data/invalid_csv.csv").is_err());
         Ok(())
     }
 }

@@ -157,11 +157,11 @@ pub fn run(
     sub: Option<usize>,
     logger: &Logger,
 ) -> Result<()> {
-    // Column index of the id in the input and cache files.
+    // Column index of the id in the input, output and cache files.
     const ID_COL: usize = 0;
 
-    // Check if the token file is valid.
-    logger.log_tokens(tokens)?;
+    // Check if the token file is valid and load the tokens.
+    let tokens: Vec<String> = logger.log_tokens(tokens)?;
 
     // Load input file
     let input_file: DataFrame = logger.run_task("Loading input file", || {
@@ -209,20 +209,11 @@ pub fn run(
         HashSet::new()
     } else {
         logger.run_task("Resuming progress", || {
-            Ok(if Path::new(&output_file_path).exists() {
-                dataframes::u32(
-                    &open_csv(
-                        input_path,
-                        Some(Schema::from_iter(vec![Field::new(
-                            ids.into(),
-                            DataType::UInt32,
-                        )])),
-                        Some(vec![ids]),
-                    )?,
-                    ids,
-                )?
-                .into_iter()
-                .collect()
+            Ok(if Path::new(output_file_path).exists() {
+                CSVFile::new(output_file_path, FileMode::Read)?
+                    .column(ID_COL)?
+                    .into_iter()
+                    .collect()
             } else {
                 HashSet::new()
             })
@@ -270,7 +261,10 @@ pub fn run(
     // Number of projects to sample.
     let mut n: usize = match sub {
         Some(m) => m,
-        None => n_proj - previous_results.len(),
+        None => dataframes::u32(&input_file, ids)?
+            .into_iter()
+            .filter(|id| !previous_results.contains(id))
+            .count(),
     };
 
     // Create a progress bar
@@ -310,8 +304,8 @@ pub fn run(
                                 ProjectInfo::from_json(&json_lang, &json_commits)?
                                     .to_csv((id, full_name.to_string()))
                             }
-                            (Err(e), _) => ProjectInfo::default().to_csv((id, e.to_string())),
-                            (_, Err(e)) => ProjectInfo::default().to_csv((id, e.to_string())),
+                            (Err(e), _) | (_, Err(e)) => ProjectInfo::default()
+                                .to_csv((id, clean_string_to_csv(&e.to_string()))),
                         }
                     };
 

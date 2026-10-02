@@ -141,14 +141,14 @@ pub fn run(
     force: bool,
     logger: &Logger,
 ) -> Result<()> {
-    // Check if the token file is valid.
-    logger.log_tokens(tokens)?;
+    // Check if the token file is valid and load the tokens.
+    let tokens: Vec<String> = logger.log_tokens(tokens)?;
 
     // Load the previous results if the file exists.
     let (mut last_id, mut requests): (u32, usize) = if force {
         info!("Overwriting previous results");
         (min_id, 0)
-    } else if Path::new(output_path).exists() {
+    } else if Path::new(output_path).exists() && std::fs::metadata(output_path)?.len() > 0 {
         let input_df: DataFrame = logger.run_task("Loading previous results", || {
             open_csv(
                 output_path,
@@ -161,18 +161,16 @@ pub fn run(
                 Some(ProjectInfo::header().to_vec()),
             )
         })?;
-        let last_id: u32 = dataframes::u32(&input_df, "id")?
+        let last_id: Option<u32> = dataframes::u32(&input_df, "id")?.into_iter().last();
+        let last_request_number: Option<u32> = dataframes::u32(&input_df, "request_number")?
             .into_iter()
-            .last()
-            .with_context(|| "Could not get last id")?;
-
-        let last_request_number: u32 = dataframes::u32(&input_df, "request_number")?
-            .into_iter()
-            .last()
-            .with_context(|| "Could not get last request number")?;
+            .last();
 
         info!("  {} ids already sampled.", input_df.height());
-        (last_id, last_request_number as usize + 1)
+        match (last_id, last_request_number) {
+            (Some(id), Some(request_number)) => (id, request_number as usize + 1),
+            _ => (min_id, 0),
+        }
     } else {
         info!("No previous data found");
         (min_id, 0)
@@ -229,10 +227,7 @@ pub fn run(
     // Collects as long as this number is positive
     let mut remaining: Option<usize> = n;
 
-    while remaining
-        .map(|x| x > 0)
-        .unwrap_or(mode == "random" || last_id < max_id)
-    {
+    while remaining.map(|x| x > 0).unwrap_or(true) && (mode == "random" || last_id < max_id) {
         // Generate a random id.
         let first_id: u32 = if mode == "random" {
             rng.gen_range(min_id..max_id)
@@ -271,6 +266,8 @@ pub fn run(
                 // Skipped null responses
                 let mut skipped: usize = 0;
 
+                let previous_last_id: u32 = last_id;
+
                 // If the response is an array, process each repository.
                 for repo in repos.iter() {
                     if repo.is_null() {
@@ -296,6 +293,12 @@ pub fn run(
 
                 write!(&mut output_file, "{builder}")
                     .with_context(|| format!("Could not write to file {output_path}"))?;
+
+                let reached_newest_repository: bool = last_id == previous_last_id;
+                if mode == "linear" && reached_newest_repository {
+                    info!("No repository with an ID above {last_id} was found.");
+                    break;
+                }
             }
             // Handle "Not Found" error or unknown response format.
             _ => {

@@ -17,7 +17,7 @@ The format of the keyword JSON files is as follows:
   "keywords": ["globalKeyword1", "globalKeyword2", ...]      // optional
 }
 
-For each retained function, the command writes the function source code to a separate file in a directory named after the source file with the suffix .functions. It also computes structural statistics such as the number and nesting depth of loops, conditionals, and function calls, as well as parameter counts.
+For each retained function, the command writes the function source code to a separate file in a directory named after the source file with the suffix .functions, unless --count is used. It also computes structural statistics such as the number and nesting depth of loops, conditionals, and function calls, as well as parameter counts.
 
 The command writes two CSV files: one containing function-level statistics and one containing file-level parsing statistics. By default, these files are named by appending '.functions.csv' and '.function_logs.csv' to the input file name.
 
@@ -36,7 +36,7 @@ Output functions CSV format:
   * loop_nestings: maximum loop nesting depth
   * if_statements: number of conditional statements
   * if_nestings: maximum conditional nesting depth
-  * function_calls: number of function or method calls
+  * functions_calls: number of function or method calls
   * function_calls_nestings: maximum nesting depth of function or method calls
   * params: number of parameters
   * param_kw_match: number of parameters whose type matches a keyword

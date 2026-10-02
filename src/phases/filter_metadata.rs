@@ -18,7 +18,7 @@ use std::vec;
 use anyhow::{ensure, Context, Result};
 use clap::{value_parser, Arg, ArgAction, Command};
 use polars::frame::DataFrame;
-use polars::prelude::{col, lit, DataType, Field, IntoLazy, Schema};
+use polars::prelude::{col, lit, when, DataType, Field, IntoLazy, Schema};
 use tracing::info;
 
 use crate::utils::dataframes;
@@ -172,8 +172,17 @@ pub fn run(
 
     projects = projects
         .lazy()
-        .filter(col("name").str().starts_with(lit("http/2 ")).not())
-        .with_column((col("pushed") - col("created")).alias("age"))
+        .filter(col("name").str().starts_with(lit("http/")).not())
+        .with_column(
+            (col("pushed").cast(DataType::Int64) - col("created").cast(DataType::Int64))
+                .alias("age"),
+        )
+        .with_column(
+            when(col("age").lt(lit(0)))
+                .then(lit(0))
+                .otherwise(col("age"))
+                .alias("age"),
+        )
         .drop(vec!["created", "pushed"])
         .with_column(
             (col("age") / lit(60 * 60 * 24))
@@ -385,6 +394,38 @@ mod tests {
         );
 
         delete_file(output, false)
+    }
+
+    #[test]
+    fn failed_queries_and_negative_ages() -> Result<()> {
+        let input = "tests/data/phases/filter_metadata/failed_queries.csv";
+        let output = "tests/data/phases/filter_metadata/out_failed_queries.csv";
+        delete_file(output, true)?;
+        run(
+            input,
+            Some(output),
+            0,
+            0,
+            false,
+            false,
+            true,
+            false,
+            test_logger(),
+        )?;
+
+        let output_df = open_csv(
+            output,
+            Some(Schema::from_iter(vec![
+                Field::new("id".into(), DataType::UInt32),
+                Field::new("age".into(), DataType::UInt32),
+            ])),
+            Some(vec!["id", "age"]),
+        )?;
+        delete_file(output, false)?;
+
+        assert_eq!(dataframes::u32(&output_df, "id")?, vec![1, 5]);
+        assert_eq!(dataframes::u32(&output_df, "age")?, vec![0, 10]);
+        Ok(())
     }
 
     #[test]

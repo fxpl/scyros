@@ -160,7 +160,7 @@ pub fn cli() -> Command {
                 .help("Number of threads to use when not downloading and computing statistic locally instead.")
                 .requires("skip")
                 .default_value("1")
-                .value_parser(clap::value_parser!(usize)),
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..)),
         )
         .arg(
             Arg::new("seed")

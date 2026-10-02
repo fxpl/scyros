@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{error, info, warn, Level};
 
-use crate::utils::{csv::CSVFile, fs::FileMode, github::is_valid_token_file};
+use crate::utils::{csv::CSVFile, fs::FileMode, github::read_tokens};
 
 use super::fs::write_csv;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -124,8 +124,13 @@ impl std::io::Write for MultiProgressLineWriter {
     fn flush(&mut self) -> io::Result<()> {
         if !self.buf.is_empty() {
             let s = String::from_utf8_lossy(&self.buf);
-            for line in s.lines() {
-                let _ = self.progress.println(line);
+            // indicatif drops printed lines when stderr is not a terminal (pipes, files, batch jobs).
+            if self.progress.is_hidden() {
+                eprint!("{s}");
+            } else {
+                for line in s.lines() {
+                    let _ = self.progress.println(line);
+                }
             }
             self.buf.clear();
         }
@@ -166,6 +171,7 @@ impl Logger {
             .with_target(false)
             .without_time()
             .with_level(true)
+            .with_ansi(!logger.progress.is_hidden())
             .with_max_level(max_level)
             .finish();
 
@@ -207,10 +213,7 @@ impl Logger {
     ///
     /// A result containing a vector of strings representing the tokens, or an error if the file is invalid.
     pub fn log_tokens(&self, tokens_file: &str) -> Result<Vec<String>> {
-        self.run_task("Loading tokens", || {
-            is_valid_token_file(tokens_file)
-                .and_then(|_| CSVFile::new(tokens_file, FileMode::Read)?.column(0))
-        })
+        self.run_task("Loading tokens", || read_tokens(tokens_file))
     }
 }
 

@@ -21,6 +21,23 @@ The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates
 - A parsing error in the `download` subcommand when the `--sub` flag was used ([#6](https://github.com/fxpl/scyros/issues/6), reported by [@Michago6](https://github.com/Michago6)).
 - An issue with the `download` subcommand that caused it to not resume progress when restarted ([#7](https://github.com/fxpl/scyros/issues/7), reported by [@Smexykex](https://github.com/Smexykex)).
 - An issue with the `download` subcommand that caused it to match extension prefixes instead of the full name ([#8](https://github.com/fxpl/scyros/issues/8), reported by [@Smexykex](https://github.com/Smexykex)).
+- An issue with the `languages` and `metadata` subcommands that caused them to read the input file instead of the output file when resuming. A restarted run considered every project as done and stopped without processing any.
+- An issue with the `pull_request` subcommand that caused it to fail when resuming if the `--ids` column was not named `id`.
+- An issue with the `parse` subcommand that caused it to hang when using 0 threads. The `parse` and `download` subcommands now require at least one thread.
+- An issue that caused no log message to be printed when the standard error is not a terminal, for example when it is redirected to a file or in a batch job.
+- An issue with the `ids` subcommand in linear mode that caused it to ignore `--max` and to send requests forever after reaching the most recent repository when `-n` was used. Resuming from an output file containing only a header no longer fails.
+- Several issues with the requests to the GitHub API used by the `ids`, `languages`, `metadata` and `pull_request` subcommands:
+  - the status of the first response was used instead of the status of the final response after redirects;
+  - secondary rate limits, responses with status 429, server errors and network errors were not retried, and were therefore written as error rows that are never queried again;
+  - error responses were printed to the standard output;
+  - every `%` in the responses was doubled, for example in the body of pull requests and comments.
+- An issue with the `languages` and `metadata` subcommands that caused rows with too many columns when an error message contained a comma. Error rows of the `languages` subcommand also ended with a carriage return, which made them unusable as `--cache`.
+- An issue with the `filter_languages` and `filter_metadata` subcommands that kept repositories that could not be queried when the error was not an HTTP/2 error, for example an HTTP/1.1 error.
+- An issue with the `filter_metadata` subcommand that discarded repositories whose last push is earlier than their creation date, even with `--age 0`. Their age is now 0.
+- An issue that caused input files to be read by column position instead of column name, so that the `languages`, `metadata`, `pull_request` and `download` subcommands failed or mixed up columns when the columns of the input file were in another order.
+- An issue that caused GitHub tokens to be read from the first column of the tokens file instead of the `token` column.
+- An issue that caused empty values in columns of ids, names or tokens to be read as 0 or as an empty string. They are now reported as errors. For example, a corrupted last row in the output of the `ids` subcommand made a resumed run sample ids again from the first request.
+- An issue that caused a crash when a `keywords` or `extensions` field of a keywords JSON file contained a value that is not a string. Such files, and fields that are not arrays, are now reported as errors.
 
 ### Removed
 

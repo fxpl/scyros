@@ -5,6 +5,8 @@ Note: GitHub assigns repository IDs in approximately increasing chronological or
 
 By default, the maximum allowed ID corresponds to a repository created on 2026-01-05.
 
+In linear mode, sampling stops at the maximum ID, or earlier if no repository with a higher ID exists.
+
 Results are written to a CSV file at the path specified by the user. If the program is interrupted, it can be restarted and will resume from the last sampled ID.
 
 IDs are processed in sequential batches of 100, with one GitHub API request per batch.
@@ -13,4 +15,4 @@ Output CSV file format:
  * id: repository ID.
  * name: full repository name (owner/repository).
  * fork: whether the repository is a fork (1) or not (0).
- * requests: number of GitHub API requests performed (approximatively row_number / 100).
+ * request_number: number of GitHub API requests performed (approximatively row_number / 100).

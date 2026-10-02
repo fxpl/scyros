@@ -1,0 +1,5 @@
+id,name,language,created,pushed,updated,fork,disabled,archived,stars,forks,issues,has_issues,watchers_count,subscribers,size,license
+1,owner/pushed_before_created,Rust,1700086400,1700000000,1700086400,1,0,0,0,0,0,1,0,0,10,unknown
+2,http/1.1 404,,0,0,0,0,0,0,0,0,0,0,0,0,0,
+4,http/2 451,,0,0,0,0,0,0,0,0,0,0,0,0,0,
+5,owner/ten_days_old,C,1700000000,1700864000,1700864000,0,0,0,0,0,0,1,0,0,10,MIT License

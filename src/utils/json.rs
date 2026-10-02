@@ -30,17 +30,27 @@ pub fn open_json_from_path(path: &str) -> Result<JsonValue> {
         .with_context(|| format!("Could not parse JSON file at path {path}"))
 }
 
-/// Converts a JSON array to a HashSet of strings.
+/// Converts a JSON array of strings to a HashSet of strings.
 ///
 /// # Arguments
 ///
 /// * `json` - The JSON array to convert.
-pub fn json_to_set(json: &JsonValue) -> HashSet<String> {
-    let mut set = HashSet::<String>::new();
-    json.members().for_each(|x| {
-        set.insert(x.as_str().unwrap().to_owned());
-    });
-    set
+///
+/// # Returns
+///
+/// The set of strings in the array, or an error if the value is not an array or contains a value that is not a string.
+pub fn json_to_set(json: &JsonValue) -> Result<HashSet<String>> {
+    ensure!(
+        json.is_array(),
+        "Expected an array of strings, found {json}"
+    );
+    json.members()
+        .map(|x| {
+            x.as_str()
+                .map(str::to_owned)
+                .with_context(|| format!("Expected a string, found {x}"))
+        })
+        .collect()
 }
 
 pub fn json_to_map<'a>(json: &'a JsonValue) -> HashMap<String, &'a JsonValue> {
@@ -153,7 +163,7 @@ mod tests {
     #[test]
     fn test_json_to_set() -> Result<()> {
         let json = json::parse(r#"["a", "b", "c"]"#)?;
-        let set = json_to_set(&json);
+        let set = json_to_set(&json)?;
         assert_eq!(set.len(), 3);
         ensure!(set.contains("a"));
         ensure!(set.contains("b"));
@@ -164,11 +174,19 @@ mod tests {
     #[test]
     fn test_json_to_set_with_convert() -> Result<()> {
         let json = json::parse(r#"["\\", "\\(", "\\t"]"#)?;
-        let set = json_to_set(&json);
+        let set = json_to_set(&json)?;
         assert_eq!(set.len(), 3);
         ensure!(set.contains("\\"));
         ensure!(set.contains("\\("));
         ensure!(set.contains("\\t"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_set_rejects_non_strings() -> Result<()> {
+        ensure!(json_to_set(&json::parse(r#"["a", 1.0]"#)?).is_err());
+        ensure!(json_to_set(&json::parse(r#"["a", null]"#)?).is_err());
+        ensure!(json_to_set(&json::parse(r#""float""#)?).is_err());
         Ok(())
     }
 }

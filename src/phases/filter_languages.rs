@@ -127,10 +127,11 @@ pub fn run(
     let projects_count = projects.height();
 
     info!("{} projects found in the file", projects_count);
-    const UNREACHABLE_PREFIX: &str = "http/2 ";
+    const UNREACHABLE_PREFIX: &str = "http/";
     projects = projects
         .lazy()
         .filter(col("name").str().starts_with(lit(UNREACHABLE_PREFIX)).not())
+        .with_column(col("languages").fill_null(lit("")))
         .collect()
         .with_context(|| "Could not filter unreachable projects")?;
 

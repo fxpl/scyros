@@ -108,7 +108,7 @@ pub fn cli() -> Command {
                 .short('n')
                 .help("Number of threads to use.")
                 .default_value("1")
-                .value_parser(clap::value_parser!(usize))
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..))
         )
         .arg(
             Arg::new("seed")
@@ -1554,8 +1554,8 @@ mod tests {
                 0,
                 false,
                 ignore_comments,
-                write_out,
                 lambdas,
+                write_out,
                 test_logger()
             )
             .is_err());

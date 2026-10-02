@@ -14,8 +14,24 @@
 
 //! Utility functions for working with DataFrames.
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use polars::frame::DataFrame;
+use polars::prelude::Column;
+
+/// Returns the column with the given name, or an error if it does not exist or contains null values.
+///
+/// # Arguments
+/// * `df` - The DataFrame containing the column.
+/// * `column` - The name of the column.
+fn column_without_nulls<'a>(df: &'a DataFrame, column: &str) -> Result<&'a Column> {
+    let col: &Column = df.column(column)?;
+    ensure!(
+        col.null_count() == 0,
+        "Column {column} contains {} null values",
+        col.null_count()
+    );
+    Ok(col)
+}
 
 /// Extracts a column of 32 bits integers from a DataFrame and returns it as a vector. The column must not contain null values.
 ///
@@ -26,8 +42,7 @@ use polars::frame::DataFrame;
 /// # Returns
 /// A vector containing the values of the column, or an error if the column does not exist, cannot be converted to 32 bits integers, or contains null values.
 pub fn i32(df: &DataFrame, column: &str) -> Result<Vec<i32>> {
-    let i32_col = df
-        .column(column)?
+    let i32_col = column_without_nulls(df, column)?
         .i32()
         .with_context(|| format!("Could not convert column {column} to 32 bits integers"))?;
     Ok(i32_col.into_no_null_iter().collect())
@@ -42,12 +57,13 @@ pub fn i32(df: &DataFrame, column: &str) -> Result<Vec<i32>> {
 /// # Returns
 /// A vector containing the values of the column, or an error if the column does not exist, cannot be converted to 32 bits unsigned integers, or contains null values.
 pub fn u32(df: &DataFrame, column: &str) -> Result<Vec<u32>> {
-    let u32_col = df.column(column)?.u32().with_context(|| {
+    let u32_col = column_without_nulls(df, column)?.u32().with_context(|| {
         format!("Could not convert column {column} to 32 bits unsigned integers")
     })?;
     Ok(u32_col.into_no_null_iter().collect())
 }
-/// Extracts a column of strings from a DataFrame and returns it as a vector.
+
+/// Extracts a column of strings from a DataFrame and returns it as a vector. The column must not contain null values.
 ///
 /// # Arguments
 /// * `df` - The DataFrame containing the column.
@@ -56,14 +72,10 @@ pub fn u32(df: &DataFrame, column: &str) -> Result<Vec<u32>> {
 /// # Returns
 /// A vector containing the values of the column, or an error if the column does not exist, cannot be converted to strings, or contains null values.
 pub fn str<'a>(df: &'a DataFrame, column: &str) -> Result<Vec<&'a str>> {
-    let str_col = df
-        .column(column)?
+    let str_col = column_without_nulls(df, column)?
         .str()
         .with_context(|| format!("Could not convert column {column} to strings"))?;
-    Ok(str_col
-        .into_iter()
-        .map(|opt| opt.unwrap_or_default())
-        .collect())
+    Ok(str_col.into_no_null_iter().collect())
 }
 
 /// Checks if a DataFrame contains all the specified columns.
@@ -83,4 +95,25 @@ pub fn has_columns<'a>(df: &DataFrame, columns: impl IntoIterator<Item = &'a str
 /// * `column` - The name of the column to check for.
 pub fn has_column(df: &DataFrame, column: &str) -> bool {
     has_columns(df, [column])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use polars::df;
+
+    #[test]
+    fn null_values_are_rejected() -> Result<()> {
+        let df = df!(
+            "id" => [Some(1u32), None],
+            "name" => [Some("a"), None],
+        )?;
+        ensure!(u32(&df, "id").is_err());
+        ensure!(str(&df, "name").is_err());
+
+        let df = df!("id" => [1u32, 2], "name" => ["a", "b"])?;
+        assert_eq!(u32(&df, "id")?, vec![1, 2]);
+        assert_eq!(str(&df, "name")?, vec!["a", "b"]);
+        Ok(())
+    }
 }
