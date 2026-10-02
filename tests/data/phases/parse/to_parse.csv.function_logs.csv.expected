@@ -1,6 +1,6 @@
 id,name,language,functions,functions_with_kw,tests/data/keywords/fp_types.json,tests/data/keywords/fp_transcendental.json,tests/data/keywords/fp_others.json,tests/data/keywords/long_double.json,parse_error
 0,tests/data/phases/parse/several_functions.c,c,24,4,4,1,1,1,none
-0,tests/data/phases/parse/SeveralFunctions.java,java,8,8,7,2,1,0,none
+0,tests/data/phases/parse/SeveralFunctions.java,java,10,10,9,2,1,0,none
 2,tests/data/phases/parse/several_functions.ts,typescript,9,5,5,3,0,0,none
 4,tests/data/phases/parse/several_functions.rs,rust,12,10,10,2,3,0,none
 1,tests/data/phases/parse/several_functions.cpp,c++,12,11,11,2,3,0,none

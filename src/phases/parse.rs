@@ -618,7 +618,7 @@ fn function_error_row(
     .collect()
 }
 
-/// Returns the name of a function, without its parameters and whitespace.
+/// Returns the name of a function, without its parameters and whitespace. Anonymous functions have no name.
 ///
 /// # Arguments
 ///
@@ -626,9 +626,13 @@ fn function_error_row(
 /// * `grammar` - The grammar of the language.
 /// * `source` - The source code of the whole file.
 fn function_name(function: &Node, grammar: &Grammar, source: &[u8]) -> String {
+    if grammar.anon_function_nodes.contains(function.kind()) {
+        return String::new();
+    }
     let mut name: String = String::from_utf8_lossy(
-        find_first_field(function, grammar.name_field)
-            .map(|n| node_source_code(&n, source))
+        find_signature_fields(function, grammar.name_field, grammar)
+            .first()
+            .map(|n| node_source_code(n, source))
             .unwrap_or(b""),
     )
     .to_string();
@@ -709,7 +713,7 @@ fn extract_functions(
     let mut cursor = root.walk();
 
     while let Some(node) = call_stack.pop() {
-        if grammar.function_nodes(lambdas).contains(node.kind()) {
+        if grammar.is_function(&node, lambdas) {
             let has_error: bool = node.has_error();
 
             let function_position: (usize, usize) = (
@@ -788,36 +792,34 @@ fn extract_functions(
                         count_nodes_of_kind(&node, &grammar.function_call_nodes);
 
                     let params_vec: Vec<Node<'_>> =
-                        find_first_node_of_kind(&node, &grammar.param_seq_nodes, true);
+                        find_signature_fields(&node, grammar.param_seq_field, grammar);
 
                     let name: String = function_name(&node, grammar, source);
 
                     let mut n_param: usize = 0;
                     let mut param_match: usize = 0;
                     for params in params_vec {
-                        let matches = match grammar.param_type_field {
-                            Some(field) => {
-                                // Safe unwrap: whole source code was read as utf8 before
-                                // Safe unwrap: the pattern is already checked above
-                                find_fields(&params, field)
-                                    .into_iter()
-                                    .map(|x| node_source_code(&x, source))
-                                    .filter(|x| keyword_files.has_matches_in_text(language, x))
-                                    .count()
-                            }
-                            None => 0,
-                        };
+                        for (param, declared_names) in parameters(&params, grammar) {
+                            let type_matches: bool = grammar
+                                .param_type_field
+                                .and_then(|field| param.child_by_field_name(field))
+                                .map(|x| node_source_code(&x, source))
+                                .is_some_and(|x| keyword_files.has_matches_in_text(language, x));
 
-                        n_param += count_nodes_of_kind(&params, &grammar.param_nodes).0;
-                        param_match += matches;
+                            n_param += declared_names;
+                            if type_matches {
+                                param_match += declared_names;
+                            }
+                        }
                     }
 
                     let return_type_match = match grammar.return_type_field {
                         Some(field) => {
                             // Safe unwrap: whole source code was read as utf8 before
                             // Safe unwrap: the pattern is already checked above
-                            find_first_field(&node, field)
-                                .map(|x| node_source_code(&x, source))
+                            find_signature_fields(&node, field, grammar)
+                                .first()
+                                .map(|x| node_source_code(x, source))
                                 .filter(|x| keyword_files.has_matches_in_text(language, x))
                                 .map(|_| 1)
                                 .unwrap_or(0)
@@ -916,9 +918,6 @@ struct Grammar {
     /// Nodes representing function or method calls.
     function_call_nodes: HashSet<&'static str>,
 
-    /// Nodes representing a sequence of parameters of a function or method.  
-    param_seq_nodes: HashSet<&'static str>,
-
     /// Nodes representing a parameter of a function or method.
     param_nodes: HashSet<&'static str>,
 
@@ -928,21 +927,27 @@ struct Grammar {
     /// The field name of the return type.
     return_type_field: Option<&'static str>,
 
-    /// The field name of the function or method name.
+    /// The field name of the function or method name, which also holds the names declared by a parameter.
     name_field: &'static str,
+
+    /// The field holding the parameter lists of a function, either in the function itself or deeper in its
+    /// signature, such as in the declarator of a C function.
+    param_seq_field: &'static str,
+
+    /// The field of a function holding its body. It is skipped when looking for the name or the return type.
+    function_body_field: &'static str,
 }
 
 impl Grammar {
-    /// Returns the set of nodes representing functions or methods in the grammar.
+    /// Returns whether a node represents a function or method in the grammar.
     ///
     /// # Arguments
-    /// * `with_lambdas` - Whether to include lambda functions in the returned set. If false, only named functions are included.
-    fn function_nodes(&self, with_lambdas: bool) -> HashSet<&'static str> {
-        let mut functions = self.named_function_nodes.clone();
-        if with_lambdas {
-            functions.extend(self.anon_function_nodes.clone());
-        }
-        functions
+    /// * `node` - The node to check.
+    /// * `with_lambdas` - Whether lambda functions count as functions. If false, only named functions do.
+    fn is_function(&self, node: &Node, with_lambdas: bool) -> bool {
+        let kind: &str = node.kind();
+        self.named_function_nodes.contains(kind)
+            || (with_lambdas && self.anon_function_nodes.contains(kind))
     }
 }
 
@@ -961,11 +966,12 @@ fn c_grammar() -> Grammar {
         named_function_nodes: vec!["function_definition"].into_iter().collect(),
         anon_function_nodes: HashSet::new(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
-        param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration"].into_iter().collect(),
         param_type_field: Some("type"),
         return_type_field: Some("type"),
         name_field: "declarator",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -988,12 +994,9 @@ fn cpp_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "switch_statement", "conditional_expression"]
             .into_iter()
             .collect(),
-        named_function_nodes: vec!["function_definition", "template_declaration"]
-            .into_iter()
-            .collect(),
+        named_function_nodes: vec!["function_definition"].into_iter().collect(),
         anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
-        param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec![
             "parameter_declaration",
             "optional_parameter_declaration",
@@ -1004,6 +1007,8 @@ fn cpp_grammar() -> Grammar {
         param_type_field: Some("type"),
         return_type_field: Some("type"),
         name_field: "declarator",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1047,11 +1052,12 @@ fn cs_grammar() -> Grammar {
             .into_iter()
             .collect(),
         function_call_nodes: vec!["invocation_expression"].into_iter().collect(),
-        param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
         param_type_field: Some("type"),
         return_type_field: Some("returns"),
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1079,13 +1085,14 @@ fn ts_grammar() -> Grammar {
         function_call_nodes: vec!["new_expression", "call_expression"]
             .into_iter()
             .collect(),
-        param_seq_nodes: vec!["formal_parameters"].into_iter().collect(),
         param_nodes: vec!["required_parameter", "optional_parameter"]
             .into_iter()
             .collect(),
         param_type_field: Some("type"),
         return_type_field: Some("return_type"),
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1110,13 +1117,14 @@ fn go_grammar() -> Grammar {
             .collect(),
         anon_function_nodes: vec!["func_literal"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
-        param_seq_nodes: vec!["parameter_list"].into_iter().collect(),
         param_nodes: vec!["parameter_declaration", "variadic_parameter_declaration"]
             .into_iter()
             .collect(),
         param_type_field: Some("type"),
         return_type_field: Some("result"),
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1137,20 +1145,25 @@ fn java_grammar() -> Grammar {
         cond_nodes: vec!["if_statement", "ternary_expression", "switch_expression"]
             .into_iter()
             .collect(),
-        named_function_nodes: vec!["method_declaration", "compact_constructor_declaration"]
-            .into_iter()
-            .collect(),
+        named_function_nodes: vec![
+            "method_declaration",
+            "constructor_declaration",
+            "compact_constructor_declaration",
+        ]
+        .into_iter()
+        .collect(),
         anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["method_invocation", "explicit_constructor_invocation"]
             .into_iter()
             .collect(),
-        param_seq_nodes: vec!["formal_parameters"].into_iter().collect(),
         param_nodes: vec!["formal_parameter", "spread_parameter"]
             .into_iter()
             .collect(),
         param_type_field: Some("type"),
         return_type_field: Some("type"),
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1169,11 +1182,12 @@ fn scala_grammar() -> Grammar {
         named_function_nodes: vec!["function_definition"].into_iter().collect(),
         anon_function_nodes: vec!["lambda_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
-        param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
         param_type_field: Some("type"),
         return_type_field: Some("return_type"),
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1205,11 +1219,12 @@ fn fortran_grammar() -> Grammar {
         function_call_nodes: vec!["call_expression", "subroutine_call"]
             .into_iter()
             .collect(),
-        param_seq_nodes: vec!["parameters"].into_iter().collect(),
         param_nodes: vec!["identifier"].into_iter().collect(),
         param_type_field: None,
         return_type_field: None,
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1228,11 +1243,21 @@ fn python_grammar() -> Grammar {
         named_function_nodes: vec!["function_definition"].into_iter().collect(),
         anon_function_nodes: vec!["lambda"].into_iter().collect(),
         function_call_nodes: vec!["call"].into_iter().collect(),
-        param_seq_nodes: vec!["parameters"].into_iter().collect(),
-        param_nodes: vec!["parameter"].into_iter().collect(),
+        param_nodes: vec![
+            "identifier",
+            "typed_parameter",
+            "default_parameter",
+            "typed_default_parameter",
+            "list_splat_pattern",
+            "dictionary_splat_pattern",
+        ]
+        .into_iter()
+        .collect(),
         param_type_field: None,
         return_type_field: None,
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1253,13 +1278,12 @@ fn rust_grammar() -> Grammar {
         named_function_nodes: vec!["function_item"].into_iter().collect(),
         anon_function_nodes: vec!["closure_expression"].into_iter().collect(),
         function_call_nodes: vec!["call_expression"].into_iter().collect(),
-        param_seq_nodes: vec!["parameters", "closure_parameters"]
-            .into_iter()
-            .collect(),
         param_nodes: vec!["parameter"].into_iter().collect(),
         param_type_field: Some("type"),
         return_type_field: Some("return_type"),
         name_field: "name",
+        param_seq_field: "parameters",
+        function_body_field: "body",
     }
 }
 
@@ -1386,14 +1410,6 @@ fn find_first_node<'a>(
     vec![]
 }
 
-fn find_first_node_of_kind<'a>(
-    root: &Node<'a>,
-    kind: &HashSet<&str>,
-    breadth: bool,
-) -> Vec<Node<'a>> {
-    find_first_node(root, &|n: &Node| kind.contains(n.kind()), breadth)
-}
-
 /// Finds the first error node in the tree
 ///
 /// # Arguments
@@ -1452,40 +1468,72 @@ fn find_fields<'a>(root: &Node<'a>, field: &str) -> Vec<Node<'a>> {
     res
 }
 
-/// Finds the first field with the given name in the tree
+/// Finds the nodes in a field of the signature of a function, that is, outside of its body and of its
+/// parameter lists. The nodes are those of the first node of the signature having this field.
 ///
 /// # Arguments
 ///
-/// * `root` - The root node of the tree.
+/// * `function` - The node of the function.
 /// * `field` - The name of the field to find.
+/// * `grammar` - The grammar of the language.
 ///
 /// # Returns
 ///
-/// The first node found with the given field name, or `None` if no such node is found.
-fn find_first_field<'a>(root: &Node<'a>, field: &str) -> Option<Node<'a>> {
-    let mut cursor = root.walk();
-
+/// The named nodes in the field, or no node if the signature has no such field.
+fn find_signature_fields<'a>(function: &Node<'a>, field: &str, grammar: &Grammar) -> Vec<Node<'a>> {
     // Simulating call stack
-    let mut call_stack: Vec<Node> = Vec::new();
-    call_stack.push(*root);
+    let mut call_stack: Vec<Node<'a>> = vec![*function];
 
     while let Some(node) = call_stack.pop() {
-        if let Some(c) = node.child_by_field_name(field) {
-            return Some(c);
+        let mut cursor = node.walk();
+        let found: Vec<Node<'a>> = node
+            .children_by_field_name(field, &mut cursor)
+            .filter(|c| c.is_named())
+            .collect();
+        if !found.is_empty() {
+            return found;
         }
 
-        // We don't reverse nodes for performance (yields the same result)
-        for c in node
-            .children(&mut cursor)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-        {
-            call_stack.push(c);
+        let mut signature_children: Vec<Node<'a>> = Vec::new();
+        let mut cursor = node.walk();
+        if cursor.goto_first_child() {
+            loop {
+                let skipped: bool = matches!(
+                    cursor.field_name(),
+                    Some(name) if name == grammar.function_body_field || name == grammar.param_seq_field
+                );
+                if !skipped {
+                    signature_children.push(cursor.node());
+                }
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
         }
+        call_stack.extend(signature_children.into_iter().rev());
     }
 
-    None
+    Vec::new()
+}
+
+/// Returns the parameters declared directly in a parameter list, each with the number of names it declares.
+///
+/// # Arguments
+///
+/// * `list` - The node of the parameter list.
+/// * `grammar` - The grammar of the language.
+fn parameters<'a>(list: &Node<'a>, grammar: &Grammar) -> Vec<(Node<'a>, usize)> {
+    let mut cursor = list.walk();
+    list.children(&mut cursor)
+        .filter(|c| grammar.param_nodes.contains(c.kind()))
+        .map(|c| {
+            let declared_names: usize = c
+                .children_by_field_name(grammar.name_field, &mut c.walk())
+                .count()
+                .max(1);
+            (c, declared_names)
+        })
+        .collect()
 }
 
 fn find_kind<'a>(root: &Node<'a>, kinds: &HashSet<&str>) -> Vec<Node<'a>> {

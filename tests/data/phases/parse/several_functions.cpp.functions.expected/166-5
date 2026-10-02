@@ -1,0 +1,1 @@
+double root(T value) { return std::sqrt(value); }

@@ -1,0 +1,3 @@
+MoreFloatingPoint(double base) {
+        this.base = base;
+    }

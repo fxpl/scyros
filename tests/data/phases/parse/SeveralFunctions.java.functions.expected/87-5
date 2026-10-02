@@ -1,0 +1,3 @@
+MoreFloatingPoint(double base, double... others) {
+        this(base);
+    }

@@ -1,4 +1,3 @@
-template<typename... Args>
 double sum(Args... args) {
     return (args + ...);
 }

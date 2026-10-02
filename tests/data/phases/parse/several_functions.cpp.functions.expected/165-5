@@ -1,0 +1,1 @@
+double average(T sum, int n) { return static_cast<double>(sum) / n; }
