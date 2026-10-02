@@ -24,11 +24,11 @@ use blake3::Hash;
 use clap::{Arg, ArgAction, Command};
 use indicatif::ProgressBar;
 use polars::frame::DataFrame;
-use polars::prelude::{DataFrameJoinOps as _, DataType, Field, Schema};
+use polars::prelude::{DataFrameJoinOps as _, DataType, Field, Schema, UniqueKeepStrategy};
 use tracing::{info, warn};
 
 use crate::utils::bow::{Bow, RankedToken, Token};
-use crate::utils::dataframes::has_column;
+use crate::utils::dataframes::{self, has_column};
 use crate::utils::fs::*;
 use crate::utils::logger::{log_output_file, log_write_dataframe, log_write_rows, Logger};
 use crate::utils::parallel::parallel_pipeline;
@@ -79,7 +79,7 @@ pub fn cli() -> Command {
                 .value_name("THREADS")
                 .help("Number of threads to use.")
                 .default_value("1")
-                .value_parser(clap::value_parser!(usize)),
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..)),
         )
         .arg(
             Arg::new("similarity")
@@ -181,6 +181,7 @@ pub fn run(
 
     check_path(input_path)?;
     log_output_file(output_path, false, force)?;
+    log_output_file(map_path, false, force)?;
 
     let files: DataFrame = open_csv(
         input_path,
@@ -198,17 +199,25 @@ pub fn run(
         "File {input_path} does not contain column '{input_header}'."
     );
 
+    // A path listed several times is one file: it is grouped, counted and written once.
+    let rows_count: usize = files.height();
+    let files: DataFrame = files.unique_stable(
+        Some(&[input_header.to_string()]),
+        UniqueKeepStrategy::First,
+        None,
+    )?;
     let file_count: usize = files.height();
 
     info!("{} files found.", file_count);
+    if file_count < rows_count {
+        info!(
+            "{} rows repeat the path of an earlier row and are ignored.",
+            rows_count - file_count
+        );
+    }
     info!("Starting file processing...\n");
 
-    let paths: Vec<&str> = files
-        .column(input_header)?
-        .str()?
-        .into_iter()
-        .flatten()
-        .collect();
+    let paths: Vec<&str> = dataframes::str(&files, input_header)?;
 
     let groups: DuplicateGroups = criterion.group(&paths, languages_file_paths, threads, logger)?;
     groups.report(file_count);
@@ -320,6 +329,10 @@ impl DuplicateGroups {
     /// * `clone_map` - The groups found in it.
     fn extend_from(&mut self, corpus: &Corpus, clone_map: &CloneMap) {
         for file in corpus.ids() {
+            if corpus.is_too_large(file) {
+                self.unreadable += 1;
+                continue;
+            }
             if let Some(size) = clone_map.group_size(file) {
                 self.representatives.push(corpus.path(file).to_string());
                 self.sizes.push(size);
@@ -410,7 +423,12 @@ impl DuplicateGroups {
             polars::prelude::Column::new("count".into(), self.sizes),
         ])?;
 
-        let mut output_df = files.join(
+        // A `count` column of an earlier run is outdated.
+        let mut input_rows: DataFrame = files.clone();
+        if has_column(&input_rows, "count") {
+            input_rows = input_rows.drop("count")?;
+        }
+        let mut output_df = input_rows.join(
             &clusters,
             [input_header],
             [input_header],
@@ -436,17 +454,15 @@ fn group_by_hash(paths: &[&str], bag_of_words: bool, threads: usize) -> Result<D
         indicatif::ProgressStyle::default_bar().template("{elapsed} {wide_bar} {percent}%")?,
     );
 
-    // The first file to reach a given hash stands for every file that reaches it afterwards.
-    let mut first_seen: HashMap<Hash, usize> = HashMap::new();
-    let mut representatives: Vec<String> = Vec::new();
-    let mut sizes: Vec<u32> = Vec::new();
-    let mut representative_of: Vec<[String; 2]> = Vec::with_capacity(paths.len());
-    let mut unreadable: usize = 0;
+    // Files are hashed in parallel, so the hashes arrive in any order. They are grouped afterwards
+    // in input order, so that the first file of the input stands for its group in every run.
+    let items: Vec<(usize, &str)> = paths.iter().copied().enumerate().collect();
+    let mut hashes: Vec<Option<Hash>> = vec![None; paths.len()];
 
     parallel_pipeline(
-        paths,
+        &items,
         workers,
-        |matcher: &mut Matcher, name: &&str| -> Result<(&str, Option<Hash>)> {
+        |matcher: &mut Matcher, (index, name): &(usize, &str)| -> Result<(usize, Option<Hash>)> {
             match load_file(name, MAX_FILE_SIZE)? {
                 Ok(contents) => {
                     let hash: Hash = if bag_of_words {
@@ -454,29 +470,39 @@ fn group_by_hash(paths: &[&str], bag_of_words: bool, threads: usize) -> Result<D
                     } else {
                         blake3::hash(&contents)
                     };
-                    Ok((name, Some(hash)))
+                    Ok((*index, Some(hash)))
                 }
-                Err(_) => Ok((name, None)),
+                Err(_) => Ok((*index, None)),
             }
         },
-        |(name, opt_hash)| {
-            match opt_hash {
-                None => unreadable += 1,
-                Some(hash) => {
-                    let group = *first_seen.entry(hash).or_insert_with(|| {
-                        representatives.push(name.to_string());
-                        sizes.push(0);
-                        representatives.len() - 1
-                    });
-                    sizes[group] += 1;
-                    representative_of.push([name.to_string(), representatives[group].clone()]);
-                    progress.inc(1);
-                }
-            }
+        |(index, opt_hash)| {
+            hashes[index] = opt_hash;
+            progress.inc(1);
             Ok(())
         },
     )?;
     progress.finish();
+
+    let mut first_seen: HashMap<Hash, usize> = HashMap::new();
+    let mut representatives: Vec<String> = Vec::new();
+    let mut sizes: Vec<u32> = Vec::new();
+    let mut representative_of: Vec<[String; 2]> = Vec::with_capacity(paths.len());
+    let mut unreadable: usize = 0;
+
+    for (name, opt_hash) in paths.iter().zip(hashes) {
+        match opt_hash {
+            None => unreadable += 1,
+            Some(hash) => {
+                let group = *first_seen.entry(hash).or_insert_with(|| {
+                    representatives.push(name.to_string());
+                    sizes.push(0);
+                    representatives.len() - 1
+                });
+                sizes[group] += 1;
+                representative_of.push([name.to_string(), representatives[group].clone()]);
+            }
+        }
+    }
 
     Ok(DuplicateGroups {
         representative_of,
@@ -561,6 +587,8 @@ struct Corpus {
     rankings: HashMap<Token, usize>,
     /// The tokenizer every code block is read with.
     matcher: Matcher,
+    /// Whether each code block was too large to be read.
+    too_large: Vec<bool>,
 }
 
 impl Corpus {
@@ -573,8 +601,8 @@ impl Corpus {
     /// Association for Computing Machinery, New York, NY, USA, 1157–1168.
     /// [https://doi.org/10.1145/2884781.2884877]
     ///
-    /// Blocks that cannot be read are kept, with a length of zero, so that identifiers still line
-    /// up with the input.
+    /// Blocks that are too large to be read are kept, with a length of zero, so that identifiers
+    /// still line up with the input.
     ///
     /// # Arguments
     ///
@@ -584,6 +612,7 @@ impl Corpus {
         let items: Vec<(FileId, &str)> = paths.iter().copied().enumerate().collect();
         let mut corpus_bow: Bow = Bow::new(true);
         let mut lengths: Vec<u32> = vec![0u32; items.len()];
+        let mut too_large: Vec<bool> = vec![false; items.len()];
         let workers: Vec<Matcher> = (0..threads).map(|_| Matcher::words_matcher()).collect();
 
         parallel_pipeline(
@@ -591,19 +620,22 @@ impl Corpus {
             workers,
             |matcher: &mut Matcher,
              (file_id, name): &(FileId, &str)|
-             -> Result<Option<(FileId, Bow)>> {
+             -> Result<(FileId, Option<Bow>)> {
                 match load_file(name, MAX_FILE_SIZE)? {
                     Ok(file_content) => {
                         let file_bow: Bow = matcher.bag_of_words(&file_content, true);
-                        Ok(Some((*file_id, file_bow)))
+                        Ok((*file_id, Some(file_bow)))
                     }
-                    Err(_) => Ok(None),
+                    Err(_) => Ok((*file_id, None)),
                 }
             },
-            |res_opt| {
-                if let Some((file_id, file_bow)) = res_opt {
-                    lengths[file_id] = file_bow.sum();
-                    corpus_bow.extend(file_bow);
+            |(file_id, bow_opt)| {
+                match bow_opt {
+                    Some(file_bow) => {
+                        lengths[file_id] = file_bow.sum();
+                        corpus_bow.extend(file_bow);
+                    }
+                    None => too_large[file_id] = true,
                 }
                 Ok(())
             },
@@ -614,6 +646,7 @@ impl Corpus {
             lengths,
             rankings: corpus_bow.token_rankings(),
             matcher: Matcher::words_matcher(),
+            too_large,
         })
     }
 
@@ -629,6 +662,15 @@ impl Corpus {
     /// * `codeblock` - The code block to measure.
     fn length(&self, codeblock: FileId) -> u32 {
         self.lengths[codeblock]
+    }
+
+    /// Whether a code block is too large to be read.
+    ///
+    /// # Arguments
+    ///
+    /// * `codeblock` - The code block to check.
+    fn is_too_large(&self, codeblock: FileId) -> bool {
+        self.too_large[codeblock]
     }
 
     /// The path a code block was read from.
@@ -889,8 +931,8 @@ fn detect_clones(
 /// * `sorted_tokens` - The origin's rank-sorted tokens with their frequencies.
 /// * `candidate_map` - The candidates that survived filtering, updated with the matches found here.
 /// * `clone_map` - Receives every confirmed clone pair.
-/// * `p_prefix` - The prefix scheme the candidate map was built with; candidates below this many
-///   matches cannot reach the threshold and are skipped.
+/// * `p_prefix` - The prefix scheme the candidate map was built with; candidates with fewer matches
+///   than this, or than the matches they require if that is smaller, cannot reach the threshold and are skipped.
 /// * `token_rankings` - The rank of each token in the global corpus.
 /// * `threshold` - The similarity threshold for duplicate detection (0.0 to 1.0).
 /// * `corpus` - The code blocks being compared, which the lengths are read from.
@@ -907,7 +949,7 @@ fn verify_candidates(
     let origin_token_count = corpus.length(origin_codeblock);
     let origin_unique_tokens = sorted_tokens.len();
     for candidate in candidate_map
-        .candidates_with_at_least(p_prefix as u32)
+        .candidates_with_at_least(0)
         .collect::<HashSet<FileId>>()
     {
         if clone_map.contains(candidate) {
@@ -915,6 +957,13 @@ fn verify_candidates(
         }
         if candidate == origin_codeblock {
             continue; //skip comparing the code block to itself
+        }
+        // A pair sharing at least the required tokens shares at least min(p, required) tokens of
+        // the p-prefix: a pair that needs fewer matches than p can have fewer than p in the prefix.
+        let required: u32 =
+            threshold.required_matches(origin_token_count, corpus.length(candidate));
+        if candidate_map.get_token_matches(candidate) < min(p_prefix as u32, required) {
+            continue;
         }
         let mut origin_last_seen_token = Cursor::new();
 
@@ -1233,6 +1282,10 @@ impl<'w> DeltaInvertedIndex<'w> {
             &corpus.ids().collect::<Vec<_>>(),
             (0..threads).map(|_| ()).collect(),
             |_: &mut (), file_id: &FileId| -> Result<Option<(FileId, Vec<RankedToken<'w>>)>> {
+                // A block without tokens, for example one too large to be read, has nothing to index.
+                if corpus.length(*file_id) == 0 {
+                    return Ok(None);
+                }
                 Ok(Some((*file_id, corpus.sorted_tokens(*file_id)?)))
             },
             |res_opt| {
@@ -1341,6 +1394,8 @@ struct CandidateMap {
     match_histogram: HashMap<u32, HashSet<FileId>>,
     /// A list of pending updates to be applied to the candidate map
     pending_updates: Vec<(FileId, CandidateEntry)>,
+    /// The matches staged in `pending_updates` for each candidate.
+    pending_matches: HashMap<FileId, u32>,
     /// The length of the shortest code block in the candidate map
     min_length: u32,
     /// The length of the longest code block in the candidate map
@@ -1362,6 +1417,7 @@ impl CandidateMap {
             min_length: u32::MAX,
             max_length: 0,
             pending_updates: Vec::new(),
+            pending_matches: HashMap::new(),
         }
     }
 
@@ -1395,6 +1451,7 @@ impl CandidateMap {
         last_token_seen_pos: usize,
         last_token_seen_cumul_freq: u32,
     ) {
+        *self.pending_matches.entry(codeblock).or_default() += new_matches;
         self.pending_updates.push((
             codeblock,
             CandidateEntry {
@@ -1452,7 +1509,14 @@ impl CandidateMap {
         );
         let required: u32 = threshold.required_matches(origin_token_count, candidate_token_count);
 
-        if self.get_token_matches(posting.codeblock) + upper_bound + new_matches >= required {
+        // Earlier tokens of the same scheme may already have staged matches against this block.
+        let matched: u32 = self.get_token_matches(posting.codeblock)
+            + self
+                .pending_matches
+                .get(&posting.codeblock)
+                .copied()
+                .unwrap_or(0);
+        if matched + upper_bound + new_matches >= required {
             self.add_pending_update(
                 posting.codeblock,
                 new_matches,
@@ -1471,6 +1535,7 @@ impl CandidateMap {
     ///
     /// * `corpus` - The code blocks being compared, which the lengths are read from.
     fn apply_pending_updates(&mut self, corpus: &Corpus) {
+        self.pending_matches.clear();
         let updates = self.pending_updates.drain(..).collect::<Vec<_>>();
         for (codeblock, candidate_entry) in updates {
             self.add_candidate(
@@ -1651,6 +1716,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, _)| format!("file{i}.rs").into_boxed_str())
                 .collect(),
+            too_large: vec![false; lengths.len()],
             lengths,
             rankings,
             matcher: Matcher::words_matcher(),
@@ -2252,6 +2318,100 @@ mod tests {
 
     // ---- detect_clones ----
 
+    /// Groups the code blocks by comparing every pair in full, as `detect_clones` should.
+    fn brute_force_representatives(corpus: &Corpus, threshold: Threshold) -> Result<Vec<FileId>> {
+        let overlap = |a: FileId, b: FileId| -> Result<u32> {
+            let tokens_a: HashMap<_, u32> = corpus
+                .sorted_tokens(a)?
+                .into_iter()
+                .map(|t| (t.token, t.frequency))
+                .collect();
+            Ok(corpus
+                .sorted_tokens(b)?
+                .into_iter()
+                .map(|t| min(t.frequency, tokens_a.get(t.token).copied().unwrap_or(0)))
+                .sum())
+        };
+        let mut representative: Vec<Option<FileId>> = vec![None; corpus.ids().count()];
+        for origin in corpus.ids() {
+            if representative[origin].is_some() || corpus.length(origin) == 0 {
+                continue;
+            }
+            for candidate in corpus.ids() {
+                if candidate == origin
+                    || representative[candidate].is_some()
+                    || corpus.length(candidate) == 0
+                {
+                    continue;
+                }
+                let required =
+                    threshold.required_matches(corpus.length(origin), corpus.length(candidate));
+                if overlap(origin, candidate)? >= required {
+                    representative[origin] = Some(origin);
+                    representative[candidate] = Some(origin);
+                }
+            }
+        }
+        Ok(corpus
+            .ids()
+            .map(|id| representative[id].unwrap_or(id))
+            .collect())
+    }
+
+    #[test]
+    fn detect_clones_matches_brute_force_at_every_depth() -> Result<()> {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let vocabulary = ["foo", "bar", "baz", "qux", "if", "x", "y"];
+        let dir = "target/tests/overlap_brute_force";
+        for case in 0..200 {
+            delete_dir(dir, true)?;
+            create_dir(dir)?;
+            let mut contents: Vec<Vec<&str>> = Vec::new();
+            for _ in 0..rng.gen_range(2..7) {
+                let content: Vec<&str> = match contents.last() {
+                    // Near duplicates of the previous file are what the filters can get wrong.
+                    Some(previous) if rng.gen_bool(0.5) => {
+                        let mut copy = previous.clone();
+                        copy.push(vocabulary[rng.gen_range(0..vocabulary.len())]);
+                        if copy.len() > 1 && rng.gen_bool(0.5) {
+                            copy.remove(rng.gen_range(0..copy.len()));
+                        }
+                        copy
+                    }
+                    _ => (0..rng.gen_range(1..10))
+                        .map(|_| vocabulary[rng.gen_range(0..vocabulary.len())])
+                        .collect(),
+                };
+                contents.push(content);
+            }
+            let paths: Vec<String> = (0..contents.len())
+                .map(|i| format!("{dir}/{i}.txt"))
+                .collect();
+            for (path, content) in paths.iter().zip(&contents) {
+                write_file(path, content.join(" ").as_bytes())?;
+            }
+
+            let threshold = Threshold([0.5, 0.6, 0.75, 0.8, 0.9, 1.0][rng.gen_range(0..6)]);
+            let corpus = Corpus::build(&path_refs(&paths), 1)?;
+            let expected = brute_force_representatives(&corpus, threshold)?;
+            for depth in 1..=4 {
+                let indices = DeltaInvertedIndex::new(&corpus, depth, threshold, 1)?;
+                let clone_map =
+                    detect_clones(&corpus, &indices, threshold, &ProgressBar::hidden())?;
+                let found: Vec<FileId> = corpus
+                    .ids()
+                    .map(|id| clone_map.representative_of(id))
+                    .collect();
+                assert_eq!(
+                    found, expected,
+                    "case {case}, depth {depth}, threshold {}, files {contents:?}",
+                    threshold.0
+                );
+            }
+        }
+        delete_dir(dir, true)
+    }
+
     #[test]
     fn detect_clones_identical_files_are_clones() -> Result<()> {
         // c_float.json and c_float.copy have the same content.
@@ -2679,6 +2839,95 @@ mod tests {
 
     /// At full similarity overlap finds the same groups as the bag of words hash, except that it
     /// leaves the two empty files alone: they have no tokens to compare, so each is its own group.
+    /// Runs the exact criterion on files written in `dir`, and returns the unique-files and map outputs.
+    fn exact_run(
+        dir: &str,
+        input_csv: &str,
+        threads: usize,
+        force: bool,
+    ) -> Result<(DataFrame, DataFrame)> {
+        let input_path = format!("{dir}/input.csv");
+        let output_path = format!("{dir}/unique.csv");
+        let map_path = format!("{dir}/map.csv");
+        write_file(&input_path, input_csv.as_bytes())?;
+        run(
+            &input_path,
+            Some(&output_path),
+            Some(&map_path),
+            force,
+            "exact",
+            1.0,
+            1,
+            &[],
+            threads,
+            "name",
+            test_logger(),
+        )?;
+        Ok((
+            open_csv(
+                &output_path,
+                Some(Schema::from_iter(vec![Field::new(
+                    "count".into(),
+                    DataType::UInt32,
+                )])),
+                None,
+            )?,
+            open_csv(&map_path, None, None)?,
+        ))
+    }
+
+    #[test]
+    fn exact_representative_is_the_first_file_of_the_input() -> Result<()> {
+        let dir = "target/tests/duplicate_files_first_representative";
+        delete_dir(dir, true)?;
+        create_dir(dir)?;
+        let paths: Vec<String> = (0..50).map(|i| format!("{dir}/f{i:02}.txt")).collect();
+        for path in &paths {
+            write_file(path, b"same content")?;
+        }
+        let input_csv = format!("name\n{}\n", paths.join("\n"));
+        for _ in 0..3 {
+            let (unique, map) = exact_run(dir, &input_csv, 8, true)?;
+            assert_eq!(dataframes::str(&unique, "name")?, vec![paths[0].as_str()]);
+            ensure!(dataframes::str(&map, "original")?
+                .iter()
+                .all(|original| *original == paths[0]));
+        }
+        delete_dir(dir, false)
+    }
+
+    #[test]
+    fn repeated_rows_and_old_counts_are_not_carried_over() -> Result<()> {
+        let dir = "target/tests/duplicate_files_repeated_rows";
+        delete_dir(dir, true)?;
+        create_dir(dir)?;
+        let (a, b) = (format!("{dir}/a.txt"), format!("{dir}/b.txt"));
+        write_file(&a, b"same content")?;
+        write_file(&b, b"same content")?;
+        let input_csv = format!("name,count\n{a},7\n{a},7\n{b},7\n");
+        let (unique, _) = exact_run(dir, &input_csv, 1, true)?;
+        assert_eq!(unique.get_column_names(), ["name", "count"]);
+        assert_eq!(dataframes::str(&unique, "name")?, vec![a.as_str()]);
+        assert_eq!(dataframes::u32(&unique, "count")?, vec![2]);
+        delete_dir(dir, false)
+    }
+
+    #[test]
+    fn existing_map_file_needs_force() -> Result<()> {
+        let dir = "target/tests/duplicate_files_map_force";
+        delete_dir(dir, true)?;
+        create_dir(dir)?;
+        let a = format!("{dir}/a.txt");
+        write_file(&a, b"content")?;
+        write_file(format!("{dir}/map.csv"), b"keep me")?;
+        ensure!(exact_run(dir, &format!("name\n{a}\n"), 1, false).is_err());
+        assert_eq!(
+            std::fs::read_to_string(format!("{dir}/map.csv"))?,
+            "keep me"
+        );
+        delete_dir(dir, false)
+    }
+
     #[test]
     fn overlap_files() -> Result<()> {
         test_duplicate_files(

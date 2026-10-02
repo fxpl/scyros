@@ -35,7 +35,8 @@ The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates
 - The `filter_metadata` subcommand no longer discards repositories whose last push is earlier than their creation date.
 - The `languages` subcommand lists the languages of a repository in the same order in every run.
 - The `forks` subcommand reports entries without a fork value instead of counting them as forks.
-- The `duplicate_files` subcommand stops after the first error, and the `parse` subcommand no longer hangs with 0 threads.
+- The `duplicate_files` subcommand stops after the first error and requires at least one thread. With several threads, the file standing for a group of duplicates is now always its first file in the input instead of changing between runs. The duplicates map is no longer overwritten without `--force`, a path listed several times in the input counts as one file, and a `count` column of the input is replaced instead of producing `count_right`.
+- The `parse` subcommand no longer hangs with 0 threads.
 - Input files are read by column name instead of position, and tokens are read from the `token` column instead of the first one.
 - Empty values in id, name or token columns, and values that are not strings in keywords files, are reported as errors instead of being read as 0 or an empty string, or causing a crash.
 - Log messages are printed when the standard error is not a terminal, for example in a batch job.
