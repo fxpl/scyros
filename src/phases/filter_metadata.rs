@@ -23,6 +23,7 @@ use tracing::info;
 
 use crate::utils::dataframes;
 use crate::utils::fs::*;
+use crate::utils::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 
 /// Command line arguments parsing.
@@ -172,7 +173,13 @@ pub fn run(
 
     projects = projects
         .lazy()
-        .filter(col("name").str().starts_with(lit("http/")).not())
+        .filter(
+            col("name")
+                .str()
+                .starts_with(lit(HTTP_ERROR_PREFIX))
+                .or(col("name").str().starts_with(lit(OTHER_ERROR_PREFIX)))
+                .not(),
+        )
         .with_column(
             (col("pushed").cast(DataType::Int64) - col("created").cast(DataType::Int64))
                 .alias("age"),

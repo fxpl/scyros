@@ -395,7 +395,7 @@ mod tests {
             SEED,
             0,
             871212690,
-            Some(280),
+            Some(200),
             "random",
             false,
             test_logger(),
@@ -407,7 +407,7 @@ mod tests {
             SEED,
             0,
             871212690,
-            Some(280),
+            Some(300),
             "random",
             false,
             test_logger(),
@@ -424,6 +424,9 @@ mod tests {
             false,
             test_logger(),
         )?;
+
+        // Collecting 200 ids and resuming for 300 more gives the same ids as collecting 500 at once.
+        assert_eq!(fs::read_to_string(&id_half)?, fs::read_to_string(&id_full)?);
 
         run(
             &id_force,
@@ -477,7 +480,7 @@ mod tests {
             SEED,
             0,
             871212690,
-            Some(280),
+            Some(200),
             "linear",
             false,
             test_logger(),
@@ -489,7 +492,7 @@ mod tests {
             SEED,
             0,
             871212690,
-            Some(280),
+            Some(300),
             "linear",
             false,
             test_logger(),
@@ -506,6 +509,9 @@ mod tests {
             false,
             test_logger(),
         )?;
+
+        // Collecting 200 ids and resuming for 300 more gives the same ids as collecting 500 at once.
+        assert_eq!(fs::read_to_string(&id_half)?, fs::read_to_string(&id_full)?);
 
         run(
             &id_force,

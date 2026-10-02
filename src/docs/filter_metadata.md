@@ -1,6 +1,6 @@
 Filters a CSV file containing metadata of GitHub repositories according to user-specified criteria.
 The input file must be a valid CSV file produced by the 'metadata' command.
-Repositories that could not be queried by the 'metadata' command (their name column contains an HTTP error such as 'http/2 404') are always discarded.
+Repositories that could not be queried by the 'metadata' command (their name column contains an error message starting with 'http/' or 'error:') are always discarded.
 Repositories can be filtered using the following criteria:
   *  Size: repositories with a size (in kB) below a specified threshold are discarded.
   *  Age: repositories with an age (in days) below a specified threshold are discarded.

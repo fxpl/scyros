@@ -4,7 +4,7 @@ The input file must be a valid CSV file containing repository IDs and full repos
 
 Repositories are processed in random order using a reproducible seed. For each repository, the command queries the GitHub API for its language breakdown and latest commit SHA. Optionally, a cache file from a previous run can be used to reuse earlier results.
 
-If a repository cannot be queried, for example because it was deleted or turned private, its row contains the error message (such as 'http/2 404') in the name column.
+If a repository cannot be queried, for example because it was deleted or turned private, its row contains the error message in the name column: the HTTP status, such as 'http/2 404', or a message starting with 'error:' for other errors, such as network errors.
 
 Results are written to a CSV file. By default, the output file name is the input file name with the suffix '.languages.csv'.
 

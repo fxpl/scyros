@@ -6,7 +6,7 @@ The command queries the GitHub API to retrieve metadata for each repository. Rep
 
 By default, the output file name is the input file name with the suffix '.metadata.csv'.
 
-If a repository cannot be queried, for example because it was deleted or turned private, its row contains the error message (such as 'http/2 404') in the name column.
+If a repository cannot be queried, for example because it was deleted or turned private, its row contains the error message in the name column: the HTTP status, such as 'http/2 404', or a message starting with 'error:' for other errors, such as network errors.
 
 If the program is interrupted, it can be restarted and will resume from where it left off. Optionally, a cache file can be used to store API responses and avoid repeating requests.
 

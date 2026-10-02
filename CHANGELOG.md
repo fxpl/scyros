@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A `--case-sensitive` flag for the `download` subcommand. The documentation now states that file extensions are always case-sensitive ([#9](https://github.com/fxpl/scyros/issues/9), reported by [@Sparcraps](https://github.com/Sparcraps)).
 - A `--no-output` (or `--count`) flag for the `parse` subcommand that allows users to skip writing the extracted functions to disk and only collect their statistics ([#5](https://github.com/fxpl/scyros/issues/5), reported by [@Michago6](https://github.com/Michago6)).
 - A `--lambdas` flag for the `parse` subcommand that allows users to choose whether to extract lambda functions as well. By default, lambda functions are not extracted ([#3](https://github.com/fxpl/scyros/issues/3), reported by [@
 linusbrew](https://github.com/linusbrew)).
@@ -17,8 +18,7 @@ The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates
 
 ### Changed
 
-- The number of threads of the `download` subcommand is now given with `-n` or `--threads` instead of as a value without a flag. A number after `--keywords` was read as a keywords file.
-- The `parse` and `duplicate_files` subcommands also accept `--threads` in addition to `-n`.
+- The `download` subcommand takes its number of threads with `-n` or `--threads` instead of as a value without a flag, and rejects it without `--skip`. The `parse` and `duplicate_files` subcommands also accept `--threads`.
 
 ### Fixed
 
@@ -26,29 +26,23 @@ The  `--prefix` (or `-p`) flag sets how far the prefix used to reject candidates
 - A parsing error in the `download` subcommand when the `--sub` flag was used ([#6](https://github.com/fxpl/scyros/issues/6), reported by [@Michago6](https://github.com/Michago6)).
 - An issue with the `download` subcommand that caused it to not resume progress when restarted ([#7](https://github.com/fxpl/scyros/issues/7), reported by [@Smexykex](https://github.com/Smexykex)).
 - An issue with the `download` subcommand that caused it to match extension prefixes instead of the full name ([#8](https://github.com/fxpl/scyros/issues/8), reported by [@Smexykex](https://github.com/Smexykex)).
-- An issue with the `languages` and `metadata` subcommands that caused them to read the input file instead of the output file when resuming. A restarted run considered every project as done and stopped without processing any.
-- An issue with the `pull_request` subcommand that caused it to fail when resuming if the `--ids` column was not named `id`.
-- An issue with the `parse` subcommand that caused it to hang when using 0 threads. The `parse` and `download` subcommands now require at least one thread.
-- An issue that caused no log message to be printed when the standard error is not a terminal, for example when it is redirected to a file or in a batch job.
-- An issue with the `ids` subcommand in linear mode that caused it to ignore `--max` and to send requests forever after reaching the most recent repository when `-n` was used. Resuming from an output file containing only a header no longer fails.
-- Several issues with the requests to the GitHub API used by the `ids`, `languages`, `metadata` and `pull_request` subcommands:
-  - the status of the first response was used instead of the status of the final response after redirects;
-  - secondary rate limits, responses with status 429, server errors and network errors were not retried, and were therefore written as error rows that are never queried again;
-  - error responses were printed to the standard output;
-  - every `%` in the responses was doubled, for example in the body of pull requests and comments.
-- An issue with the `languages` and `metadata` subcommands that caused rows with too many columns when an error message contained a comma. Error rows of the `languages` subcommand also ended with a carriage return, which made them unusable as `--cache`.
-- An issue with the `filter_languages` and `filter_metadata` subcommands that kept repositories that could not be queried when the error was not an HTTP/2 error, for example an HTTP/1.1 error.
-- An issue with the `filter_metadata` subcommand that discarded repositories whose last push is earlier than their creation date, even with `--age 0`. Their age is now 0.
-- An issue that caused input files to be read by column position instead of column name, so that the `languages`, `metadata`, `pull_request` and `download` subcommands failed or mixed up columns when the columns of the input file were in another order.
-- An issue that caused GitHub tokens to be read from the first column of the tokens file instead of the `token` column.
-- An issue that caused empty values in columns of ids, names or tokens to be read as 0 or as an empty string. They are now reported as errors. For example, a corrupted last row in the output of the `ids` subcommand made a resumed run sample ids again from the first request.
-- An issue that caused a crash when a `keywords` or `extensions` field of a keywords JSON file contained a value that is not a string. Such files, and fields that are not arrays, are now reported as errors.
-- An issue with the `languages` subcommand that wrote the languages of a repository in a different order in every run. They are now sorted by decreasing size, then by name.
-- An issue that could lose the last rows of an output file without any error, for example when the disk is full. Output files are now flushed and write errors are reported.
-- A crash of the `ids` subcommand in random mode when `--min` is not smaller than `--max`. It is now reported as an error.
-- An issue with the `forks` subcommand that silently discarded entries without a value in the fork column and counted them as forks. They are now reported as errors.
-- An issue that created the parent directories of a file when the file was only read, and that ignored the error when a directory had to be created where a file exists.
-- An issue with the `download` subcommand that accepted a number of threads without `--skip`, although threads are only used with `--skip`.
+- Resuming: the `languages` and `metadata` subcommands read the input file instead of the output file and processed nothing, `pull_request` failed when `--ids` was not `id`, and `ids` failed on an output file with only a header.
+- Requests to the GitHub API (`ids`, `languages`, `metadata`, `pull_request`): the final status after redirects is used, rate limits, server errors and network errors are retried instead of being written as error rows, `%` is no longer doubled, and nothing is printed to the standard output.
+- Error rows of the `languages` and `metadata` subcommands no longer break the CSV format when the message contains a comma, and start with `http/` or `error:`. The `filter_languages` and `filter_metadata` subcommands discard both, instead of only HTTP/2 errors.
+- The `download` subcommand retries failed downloads, stops all threads after an error instead of working on without logging, no longer hangs when a thread panics, and logs archives that cannot be extracted as error rows. Re-extracting over symbolic links and paths that are not valid UTF-8 no longer stop the run.
+- Keyword matching (`download`, `parse`): keywords such as `c++` or `#include` now match as whole words, the longer of two overlapping keywords (`long double`, `long`) is always preferred, and an inline regex flag only applies to its own keyword. Results of earlier runs can differ. The Ada keyword `**` of the example file `fp_others.json` is fixed as well.
+- The `ids` subcommand stops at `--max` or at the most recent repository in linear mode, and reports `--min` not smaller than `--max` instead of crashing.
+- The `filter_metadata` subcommand no longer discards repositories whose last push is earlier than their creation date.
+- The `languages` subcommand lists the languages of a repository in the same order in every run.
+- The `forks` subcommand reports entries without a fork value instead of counting them as forks.
+- The `duplicate_files` subcommand stops after the first error, and the `parse` subcommand no longer hangs with 0 threads.
+- Input files are read by column name instead of position, and tokens are read from the `token` column instead of the first one.
+- Empty values in id, name or token columns, and values that are not strings in keywords files, are reported as errors instead of being read as 0 or an empty string, or causing a crash.
+- Log messages are printed when the standard error is not a terminal, for example in a batch job.
+- Output files are flushed, so that write errors, for example on a full disk, are reported.
+- Paths with mixed separators, such as `.\projects\/0/`, in the outputs ([#10](https://github.com/fxpl/scyros/issues/10), reported by [@Sparcraps](https://github.com/Sparcraps)).
+- The `--cache` flag of the `languages` and `metadata` subcommands could assign the row of a project to another one.
+- Reading a file no longer creates its parent directories, and creating a directory where a file exists is reported as an error.
 
 ### Removed
 

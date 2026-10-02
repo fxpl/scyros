@@ -5,7 +5,7 @@ The languages to keep are read from a JSON file. The format of the JSON file is 
     "languages": ["lang1", "lang2", ...],    // list of languages to keep
 }
 
-Repositories that could not be queried by the 'languages' command, such as deleted or private repositories, are discarded before filtering. A repository is retained if its languages field contains at least one language from the provided list.
+Repositories that could not be queried by the 'languages' command, such as deleted or private repositories, are discarded before filtering. Their name column contains an error message starting with 'http/' or 'error:'. A repository is retained if its languages field contains at least one language from the provided list.
 
 By default, the filtered data are written to a CSV file whose name is the input file name with the suffix '.filtered_lang.csv'.
 

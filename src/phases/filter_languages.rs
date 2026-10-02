@@ -22,6 +22,7 @@ use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IdxCa, IntoLazy, Schema};
 use tracing::info;
 
+use crate::utils::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 use crate::utils::regex::KeywordFiles;
 use crate::utils::{dataframes, fs::*};
@@ -127,10 +128,15 @@ pub fn run(
     let projects_count = projects.height();
 
     info!("{} projects found in the file", projects_count);
-    const UNREACHABLE_PREFIX: &str = "http/";
     projects = projects
         .lazy()
-        .filter(col("name").str().starts_with(lit(UNREACHABLE_PREFIX)).not())
+        .filter(
+            col("name")
+                .str()
+                .starts_with(lit(HTTP_ERROR_PREFIX))
+                .or(col("name").str().starts_with(lit(OTHER_ERROR_PREFIX)))
+                .not(),
+        )
         .with_column(col("languages").fill_null(lit("")))
         .collect()
         .with_context(|| "Could not filter unreachable projects")?;

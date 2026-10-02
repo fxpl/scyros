@@ -404,14 +404,13 @@ impl FromGitHub for PRMetadata {
         let user_json: &JsonValue = &json["user"];
         let user: String = get_field::<String>(user_json, "login")?;
         let user_id: u64 = get_field::<u64>(user_json, "id")?;
-        let path: String = format!(
-            "{}/{}/{}/{}_{}.csv",
-            complement.1,
-            complement.0 % 10000,
-            complement.0,
-            complement.0,
-            pr_number
-        );
+        let (project_id, target): (u32, String) = complement;
+        let path: String = Path::new(&target)
+            .join((project_id % 10000).to_string())
+            .join(project_id.to_string())
+            .join(format!("{project_id}_{pr_number}.csv"))
+            .to_string_lossy()
+            .into_owned();
         let body: String = if field_is_null(json, "body")? {
             "".to_string()
         } else {

@@ -15,7 +15,7 @@
 #![doc = include_str!("../docs/download.md")]
 
 use crate::utils::logger::Logger;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use indicatif::ProgressBar;
 use polars::frame::DataFrame;
@@ -23,17 +23,19 @@ use polars::prelude::{AnyValue, DataType, Field, Schema};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
-use reqwest::blocking::Response;
+use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use reqwest::Url;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{copy, BufRead};
 use std::iter::FromIterator as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
@@ -122,6 +124,12 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("case-sensitive")
+                .long("case-sensitive")
+                .help("Match the keywords case-sensitively. By default, letter case is ignored when matching keywords. File extensions are always case-sensitive.")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("skip")
                 .long("skip")
                 .help("Skip the downloading of the repositories.")
@@ -191,6 +199,7 @@ type ProjectRow = Vec<String>;
 /// * `tokens_file` - Path to the file containing the GitHub tokens to use.
 /// * `keywords_file_paths` - Path to the files containing the list of extensions and keywords to use.
 /// * `regex_syntax` - Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
+/// * `case_sensitive` - Whether keywords are matched case-sensitively.
 /// * `skip` - If true, skip the downloading of the repositories.
 /// * `count` - If true, compute statistics on the downloaded projects without deleting any file.
 /// * `overwrite` - If true, overwrite the log files if they exist.
@@ -207,6 +216,7 @@ pub fn run(
     tokens_file: Option<&str>,
     keywords_file_paths: &[&str],
     regex_syntax: bool,
+    case_sensitive: bool,
     skip: bool,
     count: bool,
     overwrite: bool,
@@ -288,7 +298,7 @@ pub fn run(
 
         // Create subsubdirectories to avoid reaching the limit of 32k subdirectories on some filesystems.
         for i in 0..(n_proj / MAX_SUBDIRS + 1) {
-            create_dir(format!("{target}/{i}"))?;
+            create_dir(Path::new(target).join(i.to_string()))?;
         }
     }
 
@@ -331,7 +341,9 @@ pub fn run(
     }
 
     let keyword_files: KeywordFiles = logger.run_task("Loading keywords", || {
-        KeywordFiles::new(regex_syntax).add_files(keywords_file_paths, true)
+        KeywordFiles::new(regex_syntax)
+            .case_sensitive(case_sensitive)
+            .add_files(keywords_file_paths, true)
     })?;
 
     info!(
@@ -437,6 +449,9 @@ pub fn run(
     // Iterate over the projects and collect metadata.
     let iter = Mutex::new(shuffled_rows);
 
+    // Set when a thread fails, so that the other threads stop instead of downloading projects that are never logged.
+    let failed = AtomicBool::new(false);
+
     info!("Starting download...");
 
     // Numbers of threads to be spawned.
@@ -455,14 +470,16 @@ pub fn run(
             let word_counter = &word_counter;
             let iter = &iter;
             let previous_results = &previous_results;
+            let failed = &failed;
             s.spawn(move |_| {
                 // The main loop of the thread.
                 // Download the repositories until the iterator is empty.
                 loop {
                     // Lock the repository iterator and retrieve the next item.
-                    let next_item = {
-                        let mut iter_guard = iter.lock().expect("Mutex poisoned");
-                        iter_guard.next()
+                    let next_item = if failed.load(Ordering::Relaxed) {
+                        None
+                    } else {
+                        iter.lock().expect("Mutex poisoned").next()
                     };
 
                     match next_item {
@@ -473,13 +490,11 @@ pub fn run(
                                     // If not, download it and send the information back to the main thread.
 
                                     let project_path: String = match (last_commit, id_opt) {
-                                        (Some(commit), Some(id)) => format!(
-                                            "{}/{}/{}-{}",
-                                            target,
-                                            row_nr / MAX_SUBDIRS,
-                                            id,
-                                            commit
-                                        ),
+                                        (Some(commit), Some(id)) => Path::new(target)
+                                            .join((row_nr / MAX_SUBDIRS).to_string())
+                                            .join(format!("{id}-{commit}"))
+                                            .to_string_lossy()
+                                            .into_owned(),
                                         (None, None) => full_name.to_string(),
                                         _ => unreachable!(),
                                     };
@@ -508,6 +523,7 @@ pub fn run(
                                                 let _ = my_tx.send(Some(Ok(r)));
                                             }
                                             Err(e) => {
+                                                failed.store(true, Ordering::Relaxed);
                                                 let _ = my_tx.send(Some(Err(e)));
                                                 break;
                                             }
@@ -515,8 +531,10 @@ pub fn run(
                                     }
                                 }
                                 Err(row_nr) => {
+                                    failed.store(true, Ordering::Relaxed);
                                     let _ = my_tx
                                         .send(Some(Err(anyhow!("Could not parse row {row_nr}"))));
+                                    break;
                                 }
                             }
                         }
@@ -530,6 +548,9 @@ pub fn run(
                 anyhow::Ok(())
             });
         }
+
+        // Only the threads hold senders now, so `rx.recv()` fails instead of blocking if a thread panics.
+        drop(tx);
 
         let mut ended_threads: usize = 0;
 
@@ -669,75 +690,34 @@ fn download_repo(
             ))?
         );
 
-        let url: reqwest::Url =
+        let url: Url =
             reqwest::Url::parse(&url_str).with_context(|| format!("Bad URL {url_str}"))?;
 
-        let mut response_res: Result<Response> = Err(anyhow!("Did not send request yet"));
-        const MAX_RETRIES: usize = 5;
-        let mut attempts: usize = 0;
-
-        fn retry_delay(attempt: usize) -> Duration {
-            // exp backoff: 250ms, 500ms, 1s, 2s, 4s ...
-            let base_ms: u64 = 250u64.saturating_mul(1u64 << attempt.min(MAX_RETRIES));
-            Duration::from_millis(base_ms)
-        }
-
-        while attempts < MAX_RETRIES && response_res.is_err() {
-            attempts += 1;
-            response_res = http_client
-                .get(url.clone())
-                .headers(headers.clone())
-                .send()
-                .with_context(|| {
-                    format!(
-                    "Could not download repository {full_name} (id: {id}), error while sending HTTP request"
-                )
-                });
-            if response_res.is_err() {
-                if attempts < MAX_RETRIES {
-                    // Wait before retrying
-                    sleep(retry_delay(attempts));
-                } else {
-                    response_res = Err(anyhow!(
-                        "Could not download repository {full_name} (id: {id}), maximum number of retries reached"
-                    ));
-                }
-            }
-        }
-
-        let mut response = response_res?;
-
-        if !response.status().is_success() {
+        let zip_path: String = format!("{project_path}.zip");
+        let downloaded: bool = fetch_zipball(&http_client, &url, &headers, &zip_path)
+            .with_context(|| format!("Could not download repository {full_name} (id: {id})"))?;
+        if !downloaded {
             return Ok((
                 error_row(id, full_name, last_commit, keywords_files.len()),
                 Vec::new(),
             ));
         }
 
-        // Create output file
-        let mut out: File = open_file(format!("{project_path}.zip"), FileMode::Overwrite)?;
-
-        // Stream response to file
-        match copy(&mut response, &mut out) {
-            Ok(_) => (),
-            Err(_) => {
-                return Ok((
-                    error_row(id, full_name, last_commit, keywords_files.len()),
-                    Vec::new(),
-                ));
-            }
-        }
-
-        let zip_path: String = format!("{project_path}.zip");
-        let mut archive: ZipArchive<File> = ZipArchive::new(
+        // Extract into an empty directory: the extraction refuses to write through symbolic links left by an earlier run.
+        delete_dir(project_path, true)?;
+        let extracted = ZipArchive::new(
             File::open(&zip_path).with_context(|| format!("Failed to open archive {zip_path}"))?,
         )
-        .with_context(|| format!("Failed to read archive {zip_path}"))?;
-        archive
-            .extract(Path::new(project_path))
-            .with_context(|| format!("Failed to extract archive to {project_path}"))?;
-
-        delete_file(zip_path, true)?;
+        .and_then(|mut archive| archive.extract(Path::new(project_path)));
+        delete_file(&zip_path, true)?;
+        if let Err(e) = extracted {
+            warn!("Could not extract repository {full_name} (id: {id}): {e}");
+            delete_dir(project_path, true)?;
+            return Ok((
+                error_row(id, full_name, last_commit, keywords_files.len()),
+                Vec::new(),
+            ));
+        }
     }
 
     if delete {
@@ -831,9 +811,7 @@ fn download_repo(
 
                     // Remove commas from the filename to avoid issues with the CSV format.
 
-                    let path_str = path.to_str().with_context(|| {
-                        format!("Could not convert path to string: {}", &path.display())
-                    })?;
+                    let path_str = path.to_string_lossy();
 
                     let mut row: Vec<String> = Vec::new();
                     if let Some(id) = id_opt {
@@ -879,6 +857,92 @@ fn download_repo(
     project_row.extend(dir_matches.iter().map(|m| m.to_string()));
 
     Ok((project_row, file_rows))
+}
+
+/// Downloads the zip archive of a repository to a file.
+/// Rate limits are waited out, and server errors and interrupted transfers are retried a few times.
+///
+/// # Arguments
+///
+/// * `client` - The HTTP client to use.
+/// * `url` - The URL of the archive.
+/// * `headers` - The headers of the request, including the token.
+/// * `zip_path` - The path of the file to write the archive to.
+///
+/// # Returns
+///
+/// Whether the archive was downloaded. It is not when GitHub answers with an error that retrying does not solve, such as 404.
+/// An error is returned when all attempts failed.
+fn fetch_zipball(client: &Client, url: &Url, headers: &HeaderMap, zip_path: &str) -> Result<bool> {
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut failures: u32 = 0;
+    loop {
+        let attempt = || -> Result<Option<bool>> {
+            let mut response: Response = client.get(url.clone()).headers(headers.clone()).send()?;
+            let status = response.status();
+            if let Some(wait) = rate_limit_wait(&response) {
+                warn!("Rate limit reached: waiting {} s", wait.as_secs());
+                sleep(wait);
+                Ok(None)
+            } else if status.is_server_error() {
+                bail!("Server error: {status}")
+            } else if !status.is_success() {
+                Ok(Some(false))
+            } else {
+                copy(
+                    &mut response,
+                    &mut open_file(zip_path, FileMode::Overwrite)?,
+                )?;
+                Ok(Some(true))
+            }
+        };
+        match attempt() {
+            Ok(Some(downloaded)) => return Ok(downloaded),
+            Ok(None) => (),
+            Err(e) => {
+                delete_file(zip_path, true)?;
+                failures += 1;
+                if failures >= MAX_ATTEMPTS {
+                    return Err(e.context(format!("{MAX_ATTEMPTS} attempts failed")));
+                }
+                warn!("Download of {url} failed ({e}), retrying");
+                sleep(Duration::from_secs(2u64.pow(failures)));
+            }
+        }
+    }
+}
+
+/// Returns how long to wait before retrying a request that GitHub rate limited, or `None` if the request was not rate limited.
+///
+/// # Arguments
+///
+/// * `response` - The response of GitHub.
+fn rate_limit_wait(response: &Response) -> Option<Duration> {
+    const MAX_WAIT: Duration = Duration::from_secs(60 * 60);
+    let header = |name: &str| -> Option<u64> {
+        response
+            .headers()
+            .get(name)?
+            .to_str()
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    };
+    let status = response.status().as_u16();
+    let token_exhausted = header("x-ratelimit-remaining") == Some(0);
+    if status != 429 && !(status == 403 && token_exhausted) {
+        return None;
+    }
+    let until_reset = header("x-ratelimit-reset").and_then(|reset| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        Some(reset.saturating_sub(now) + 1)
+    });
+    let wait = header("retry-after").or(until_reset).unwrap_or(60);
+    Some(Duration::from_secs(wait).min(MAX_WAIT))
 }
 
 fn error_row(
@@ -961,6 +1025,7 @@ mod tests {
             &target_def,
             Some(&tokens_file),
             keywords_files,
+            false,
             false,
             skip,
             count,
@@ -1066,6 +1131,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             true,
             None,
             0,
@@ -1086,6 +1152,7 @@ mod tests {
             target,
             Some(tokens_file),
             keywords_files,
+            false,
             false,
             false,
             false,
@@ -1129,6 +1196,7 @@ mod tests {
             None,
             keywords_files,
             false,
+            false,
             true,
             true,
             true,
@@ -1151,6 +1219,7 @@ mod tests {
             "",
             None,
             keywords_files,
+            false,
             false,
             true,
             true,

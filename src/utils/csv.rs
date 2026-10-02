@@ -241,16 +241,40 @@ impl CSVFile {
     where
         T: FromStr + Eq + Hash,
     {
-        let keys: Vec<T> = self.column(i)?;
-        let lines: Vec<String> = std::fs::read_to_string(&self.path)?
-            .lines()
-            .map(|s| s.to_string())
-            .collect();
-        if lines.is_empty() {
-            Ok(HashMap::new())
-        } else {
-            Ok(keys.into_iter().zip(lines[1..].to_vec()).collect())
+        let content: String = std::fs::read_to_string(&self.path)?;
+        let mut reader = csv::ReaderBuilder::new().from_reader(content.as_bytes());
+        // The text of each record is taken from where the CSV reader found it, so that blank lines and
+        // quoted fields spanning several lines do not shift the records against their keys.
+        let mut starts_and_keys: Vec<(usize, T)> = Vec::new();
+        for (line, record) in reader.records().enumerate() {
+            let record = record?;
+            let start = record
+                .position()
+                .with_context(|| format!("Record {line} has no position"))?
+                .byte() as usize;
+            let key: T = record
+                .get(i)
+                .with_context(|| format!("Record {line} has no column {i}"))?
+                .parse()
+                .map_err(|_| anyhow!("Could not parse record {line}"))?;
+            starts_and_keys.push((start, key));
         }
+        let ends: Vec<usize> = starts_and_keys
+            .iter()
+            .skip(1)
+            .map(|(start, _)| *start)
+            .chain(std::iter::once(content.len()))
+            .collect();
+        Ok(starts_and_keys
+            .into_iter()
+            .zip(ends)
+            .map(|((start, key), end)| {
+                (
+                    key,
+                    content[start..end].trim_matches(['\r', '\n']).to_string(),
+                )
+            })
+            .collect())
     }
 }
 
@@ -345,6 +369,19 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn indexed_lines_with_blank_lines_and_quoted_newlines() -> Result<()> {
+        let path = "tests/data/indexed_lines_irregular.csv";
+        write_file(path, b"id,name\n1,a\n\n2,\"b\nc\"\r\n3,d")?;
+        let lines = CSVFile::new(path, FileMode::Read)?.indexed_lines::<u32>(0);
+        delete_file(path, false)?;
+        let lines = lines?;
+        assert_eq!(lines.get(&1).map(String::as_str), Some("1,a"));
+        assert_eq!(lines.get(&2).map(String::as_str), Some("2,\"b\nc\""));
+        assert_eq!(lines.get(&3).map(String::as_str), Some("3,d"));
+        Ok(())
+    }
+
+    #[test]
     fn indexed_lines_test() -> Result<()> {
         let file = CSVFile::new("tests/data/small_file.csv", FileMode::Read)?;
         let indexed_lines = file.indexed_lines::<i32>(0)?;
@@ -417,7 +454,7 @@ mod tests {
         let _ = delete_file(path, true);
 
         let mut file = CSVFile::new(path, FileMode::Overwrite)?;
-        file.write_header(&["name", "note"])?;
+        file.write_header(["name", "note"])?;
         file.write_record(["alice", "hello"])?;
         file.write_record(["bob", "he said \"hi\""])?;
         file.write_record(["carol", "a, b, c"])?;

@@ -72,19 +72,22 @@ impl Matcher {
     where
         T: ToString,
     {
-        let joined_keywords = keywords
+        let mut keywords: Vec<String> = keywords
             .into_iter()
-            .filter_map(|s| Some(s.to_string()).filter(|s| !s.is_empty()))
-            .map(|s| if !regex_syntax { regex::escape(&s) } else { s })
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        // The first alternative that matches wins: longer keywords come first so that `long double` is preferred to `long`,
+        // and the order is the same in every run.
+        keywords.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+        keywords.dedup();
+
+        let new_pattern: String = keywords
+            .iter()
+            .map(|k| keyword_pattern(k, whole_words, regex_syntax))
             .collect::<Vec<String>>()
             .join("|");
-        if !joined_keywords.is_empty() {
-            let new_pattern: String = if whole_words {
-                format!(r"\b(?:{joined_keywords})\b")
-            } else {
-                joined_keywords
-            };
-
+        if !new_pattern.is_empty() {
             let new_pattern_with_sensitivity: String = if case_sensitive {
                 new_pattern
             } else {
@@ -167,10 +170,10 @@ impl Matcher {
     pub fn count_matches_in_file(&self, path: impl AsRef<Path>) -> Result<usize> {
         let path_ref = path.as_ref();
         let mut count: usize = 0;
-        for l in BufReader::new(open_file(path_ref, FileMode::Read)?).lines() {
+        for l in BufReader::new(open_file(path_ref, FileMode::Read)?).split(b'\n') {
             let line =
                 l.with_context(|| format!("Could not read lines from {}", path_ref.display()))?;
-            count += self.count_matches_in_text(line.as_bytes());
+            count += self.count_matches_in_text(&line);
         }
         Ok(count)
     }
@@ -187,6 +190,40 @@ impl Matcher {
             bow.add_all(re.find_iter(text).map(|w| w.as_bytes()));
         }
         bow
+    }
+}
+
+/// Returns the regex pattern matching one keyword.
+///
+/// In whole word mode, a word boundary is required on each side of the keyword that starts or ends with a word character.
+/// A keyword such as `c++` would never match with a word boundary after its last character.
+///
+/// # Arguments
+/// * `keyword` - The keyword or regex pattern.
+/// * `whole_words` - Whether only whole words should be matched.
+/// * `regex_syntax` - Whether the keyword is a regex pattern or a plain word.
+fn keyword_pattern(keyword: &str, whole_words: bool, regex_syntax: bool) -> String {
+    if regex_syntax {
+        if whole_words {
+            format!(r"\b(?:{keyword})\b")
+        } else {
+            format!("(?:{keyword})")
+        }
+    } else {
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+        let boundary = |edge: Option<char>| {
+            if whole_words && edge.is_some_and(is_word_char) {
+                r"\b"
+            } else {
+                ""
+            }
+        };
+        format!(
+            "{}(?:{}){}",
+            boundary(keyword.chars().next()),
+            regex::escape(keyword),
+            boundary(keyword.chars().last())
+        )
     }
 }
 
@@ -220,10 +257,12 @@ pub fn count_text_lines(text: &[u8]) -> usize {
 /// keywords to be matched only for that language. The "keywords" field contains a list of global keywords to be matched for all languages.
 ///
 /// The matchers produced from this file will be the following regex patterns:
-/// LanguageName -> [\blocalKeyword1\b|\blocalKeyword2\b|...|\bglobalKeyword1\b|\bglobalKeyword2\b|...] (case insensitive)
+/// LanguageName -> [\b(?:localKeyword1)\b|\b(?:localKeyword2)\b|...|\b(?:globalKeyword1)\b|...] (case insensitive)
 /// ...
 ///
-/// Note that the keywords are matched as whole words but case insensitively.
+/// Note that the keywords are matched as whole words, and case insensitively unless [`KeywordFiles::case_sensitive`] is set.
+/// The word boundary `\b` is only required next to a word character, so that keywords such as `c++` can match.
+/// Longer keywords are tried first.
 /// Adding an other keyword file will add a new matcher for each language, in addition to the existing ones.
 ///
 /// # Invariants:
@@ -237,6 +276,8 @@ pub struct KeywordFiles {
     pub extensions_to_language: HashMap<String, String>,
     /// Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
     pub regex_syntax: bool,
+    /// Whether keywords are matched case-sensitively. File extensions are always matched case-sensitively.
+    pub case_sensitive: bool,
 }
 
 impl KeywordFiles {
@@ -247,6 +288,19 @@ impl KeywordFiles {
             matchers: HashMap::new(),
             extensions_to_language: HashMap::new(),
             regex_syntax,
+            case_sensitive: false,
+        }
+    }
+
+    /// Sets whether the keywords of the files added afterwards are matched case-sensitively. By default, they are not.
+    ///
+    /// # Arguments
+    ///
+    /// * `case_sensitive` - Whether keywords are matched case-sensitively.
+    pub fn case_sensitive(self, case_sensitive: bool) -> KeywordFiles {
+        KeywordFiles {
+            case_sensitive,
+            ..self
         }
     }
 
@@ -435,7 +489,7 @@ impl KeywordFiles {
         let file_matchers = Matcher::keywords_matchers(
             &local_kw,
             &global_kw,
-            false,
+            self.case_sensitive,
             !self.regex_syntax,
             self.regex_syntax,
         )?;
@@ -467,6 +521,7 @@ impl KeywordFiles {
             matchers: updated_matchers,
             extensions_to_language,
             regex_syntax: self.regex_syntax,
+            case_sensitive: self.case_sensitive,
         })
     }
 
@@ -663,6 +718,51 @@ mod tests {
                 .count_matches_in_text(text),
             6
         );
+        Ok(())
+    }
+
+    #[test]
+    fn keywords_with_non_word_edges_match_as_whole_words() -> Result<()> {
+        let matcher =
+            Matcher::keywords_matcher(["c++", "**", "#include", "float"], false, true, false)?;
+        assert_eq!(
+            matcher.count_matches_in_text(b"c++ x ** y #include <a> float floats"),
+            4
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn longest_keyword_wins_in_every_order() -> Result<()> {
+        for keywords in [
+            ["long", "double", "long double"],
+            ["long double", "double", "long"],
+        ] {
+            let matcher = Matcher::keywords_matcher(keywords, false, true, false)?;
+            assert_eq!(matcher.count_matches_in_text(b"long double x;"), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inline_flags_stay_in_their_keyword() -> Result<()> {
+        let matcher = Matcher::keywords_matcher(["(?-i)Foo", "bar"], false, false, true)?;
+        assert_eq!(matcher.count_matches_in_text(b"foo Foo BAR bar"), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn case_sensitive_keyword_files() -> Result<()> {
+        let path = ["tests/data/keywords/c_float.json"];
+        let text = b"double Double DOUBLE float";
+
+        let insensitive = KeywordFiles::new(false).add_files(&path, false)?;
+        assert_eq!(insensitive.count_matches_in_text("c", text), vec![4]);
+
+        let sensitive = KeywordFiles::new(false)
+            .case_sensitive(true)
+            .add_files(&path, false)?;
+        assert_eq!(sensitive.count_matches_in_text("c", text), vec![2]);
         Ok(())
     }
 

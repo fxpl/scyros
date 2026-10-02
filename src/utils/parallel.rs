@@ -14,7 +14,8 @@
 
 //! Generic parallel worker-pool pipeline with per-worker owned state.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// Run a parallel pipeline: spawn one thread per worker, distribute items
@@ -37,7 +38,8 @@ use std::sync::Mutex;
 /// # Panics
 ///
 /// Returns an error (does not panic) if a worker thread panics; the panic
-/// payload is included in the error message.
+/// payload is included in the error message. Also returns an error if there
+/// are items but no worker to process them.
 pub fn parallel_pipeline<T, W, P, R, H>(
     items: &[T],
     workers: Vec<W>,
@@ -51,7 +53,13 @@ where
     R: Send,
     H: FnMut(R) -> Result<()>,
 {
+    ensure!(
+        items.is_empty() || !workers.is_empty(),
+        "At least one worker is needed to process the items"
+    );
+
     let queue = Mutex::new(items.iter());
+    let stopped = AtomicBool::new(false);
     let (tx, rx) = crossbeam_channel::unbounded::<Result<R>>();
 
     crossbeam::thread::scope(|s| -> Result<()> {
@@ -59,7 +67,11 @@ where
             let tx = tx.clone();
             let queue = &queue;
             let process = &process;
+            let stopped = &stopped;
             s.spawn(move |_| loop {
+                if stopped.load(Ordering::Relaxed) {
+                    break;
+                }
                 let item = match queue.lock().expect("queue mutex poisoned").next() {
                     Some(x) => x,
                     None => break,
@@ -72,10 +84,13 @@ where
         }
         drop(tx);
 
-        while let Ok(result) = rx.recv() {
-            handle(result?)?;
+        let outcome = rx
+            .iter()
+            .try_for_each(|result| result.and_then(&mut handle));
+        if outcome.is_err() {
+            stopped.store(true, Ordering::Relaxed);
         }
-        Ok(())
+        outcome
     })
     .map_err(|e| anyhow!("Worker thread panicked: {e:?}"))?
 }
@@ -139,11 +154,14 @@ mod tests {
     fn first_error_aborts() -> Result<()> {
         let items: Vec<i32> = (1..=1000).collect();
         let workers = vec![(); 4];
+        let processed = AtomicUsize::new(0);
 
         let result = parallel_pipeline(
             &items,
             workers,
             |_, n: &i32| {
+                processed.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(std::time::Duration::from_millis(1));
                 if *n == 42 {
                     Err(anyhow!("hit 42"))
                 } else {
@@ -155,7 +173,15 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("hit 42"));
+        assert!(processed.load(Ordering::Relaxed) < 100);
         Ok(())
+    }
+
+    #[test]
+    fn items_without_workers_fail() {
+        let items: Vec<i32> = vec![1];
+        let workers: Vec<()> = vec![];
+        assert!(parallel_pipeline(&items, workers, |_, n: &i32| Ok(*n), |_| Ok(())).is_err());
     }
 
     #[test]

@@ -40,7 +40,7 @@ fn cli() -> Command {
         .arg(
             Arg::new("debug")
                 .long("debug")
-                .help("Print stack trace on error.")
+                .help("Print debug messages, and the causes of an error. A stack trace is also printed if the environment variable RUST_BACKTRACE is set to 1.")
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -163,6 +163,7 @@ fn main() {
                                         .map(|s| s.as_str())
                                         .collect::<Vec<&str>>(),
                                         cli_subargs.get_flag("regex"),
+                                        cli_subargs.get_flag("case-sensitive"),
                                     cli_subargs.get_flag("skip"),
                                     cli_subargs.get_flag("count"),
                                     cli_subargs.get_flag("force"),

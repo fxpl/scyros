@@ -8,6 +8,12 @@ use curl::easy::*;
 use std::sync::*;
 use tracing::warn;
 
+/// Start of the message of an error that GitHub returned as an HTTP status, such as `http/2 404`.
+pub const HTTP_ERROR_PREFIX: &str = "http/";
+
+/// Start of the message of any other error of a request, such as a network error.
+pub const OTHER_ERROR_PREFIX: &str = "error:";
+
 pub struct Github {
     tokens: Mutex<TokensManager>,
 }
@@ -22,8 +28,19 @@ impl Github {
     /// Performs a github request of the specified url and returns the result string.
     ///
     /// Rate limits are waited out. Server errors (5xx) and transport errors are retried a few times.
-    /// Other errors are returned with the status line of the final response, such as `http/2 404`.
+    /// The message of an error starts with [`HTTP_ERROR_PREFIX`] when GitHub answered with an error status,
+    /// followed by the status line of the final response (such as `http/2 404`), and with [`OTHER_ERROR_PREFIX`] otherwise.
     pub fn request(&self, url: &str) -> Result<json::JsonValue, std::io::Error> {
+        self.request_with_retries(url).map_err(|e| {
+            if e.to_string().starts_with(HTTP_ERROR_PREFIX) {
+                e
+            } else {
+                std::io::Error::new(e.kind(), format!("{OTHER_ERROR_PREFIX} {e}"))
+            }
+        })
+    }
+
+    fn request_with_retries(&self, url: &str) -> Result<json::JsonValue, std::io::Error> {
         const MAX_TRANSIENT_FAILURES: u32 = 3;
         let mut attempts = 0;
         let mut transient_failures: u32 = 0;

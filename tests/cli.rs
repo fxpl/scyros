@@ -184,16 +184,19 @@ fn download_sub_flag_does_not_panic() {
 
 #[test]
 fn debug_flag_emits_error_chain() {
-    let without_debug = bin()
-        .args(["forks", "--input", "nonexistent.csv"])
-        .output()
-        .unwrap();
-    let with_debug = bin()
-        .args(["--debug", "forks", "--input", "nonexistent.csv"])
-        .output()
-        .unwrap();
+    // Reading a malformed CSV file fails with an error that has a cause.
+    let args = [
+        "filter_metadata",
+        "--input",
+        "tests/data/invalid_csv.csv",
+        "--no-output",
+    ];
+    let without_debug = bin().args(args).output().unwrap();
+    let with_debug = bin().arg("--debug").args(args).output().unwrap();
     assert!(!without_debug.status.success());
     assert!(!with_debug.status.success());
-    // --debug prints the full error chain ({:?}), which is longer than the plain message
-    assert!(with_debug.stderr.len() >= without_debug.stderr.len());
+    let without_debug = String::from_utf8_lossy(&without_debug.stderr);
+    let with_debug = String::from_utf8_lossy(&with_debug.stderr);
+    assert!(!without_debug.contains("Caused by"));
+    assert!(with_debug.contains("Caused by"));
 }
