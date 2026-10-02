@@ -19,11 +19,10 @@ impl Github {
         }
     }
 
-    /** Performs a github request of the specified url and returns the result string.
-
-       Rate limits are waited out. Server errors (5xx) and transport errors are retried a few times.
-       Other errors are returned with the status line of the final response, such as `http/2 404`.
-    */
+    /// Performs a github request of the specified url and returns the result string.
+    ///
+    /// Rate limits are waited out. Server errors (5xx) and transport errors are retried a few times.
+    /// Other errors are returned with the status line of the final response, such as `http/2 404`.
     pub fn request(&self, url: &str) -> Result<json::JsonValue, std::io::Error> {
         const MAX_TRANSIENT_FAILURES: u32 = 3;
         let mut attempts = 0;
@@ -114,8 +113,7 @@ impl Github {
     }
 }
 
-/** Returns the headers of the final response. When redirects are followed, the headers of every response are concatenated.
- */
+/// Returns the headers of the final response. When redirects are followed, the headers of every response are concatenated.
 fn final_response_headers(all_headers: &str) -> &str {
     match all_headers.rfind("\nhttp/") {
         Some(i) => &all_headers[i + 1..],
@@ -123,15 +121,13 @@ fn final_response_headers(all_headers: &str) -> &str {
     }
 }
 
-/** Waits before retrying a request that failed for a transient reason, longer after each failure.
- */
+/// Waits before retrying a request that failed for a transient reason, longer after each failure.
 fn wait_before_retry(failures: u32) {
     std::thread::sleep(std::time::Duration::from_secs(2u64.pow(failures)));
 }
 
-/** Returns whether a response reports a secondary rate limit, i.e. GitHub asks to slow down although the token has requests left.
-   GitHub signals it with 403 or 429 responses containing a `retry-after` header or a message about the secondary rate limit.
-*/
+/// Returns whether a response reports a secondary rate limit, i.e. GitHub asks to slow down although the token has requests left.
+/// GitHub signals it with 403 or 429 responses containing a `retry-after` header or a message about the secondary rate limit.
 fn is_secondary_rate_limit(headers: &str, body: &[u8]) -> bool {
     retry_after_seconds(headers).is_some()
         || String::from_utf8_lossy(body)
@@ -139,8 +135,7 @@ fn is_secondary_rate_limit(headers: &str, body: &[u8]) -> bool {
             .contains("secondary rate limit")
 }
 
-/** Returns the number of seconds in the `retry-after` header of a response, if any.
- */
+/// Returns the number of seconds in the `retry-after` header of a response, if any.
 fn retry_after_seconds(headers: &str) -> Option<u64> {
     headers
         .lines()
