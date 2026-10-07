@@ -18,7 +18,7 @@ use std::vec;
 use anyhow::{ensure, Context, Result};
 use clap::{value_parser, Arg, ArgAction, Command};
 use polars::frame::DataFrame;
-use polars::prelude::{col, lit, when, DataType, Field, IntoLazy, Schema};
+use polars::prelude::{col, cols, lit, when, DataType, Field, IntoLazy, Schema};
 use tracing::info;
 
 use crate::utils::dataframes;
@@ -190,7 +190,7 @@ pub fn run(
                 .otherwise(col("age"))
                 .alias("age"),
         )
-        .drop(vec!["created", "pushed"])
+        .drop(cols(["created", "pushed"]))
         .with_column(
             (col("age") / lit(60 * 60 * 24))
                 .cast(DataType::UInt32)

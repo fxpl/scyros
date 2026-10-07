@@ -4,6 +4,8 @@ The input must be a valid CSV file where one column (by default 'name') contains
 
 The command queries the GitHub API to retrieve metadata for each repository. Repositories are processed in random order without replacement. The collected metadata are written to a new CSV file.
 
+With `--threads`, several requests are sent at the same time (one by default). The rows are then written in the order in which the requests complete.
+
 By default, the output file name is the input file name with the suffix '.metadata.csv'.
 
 If a repository cannot be queried, for example because it was deleted or turned private, its row contains the error message in the name column: the HTTP status, such as 'http/2 404', or a message starting with 'error:' for other errors, such as network errors.

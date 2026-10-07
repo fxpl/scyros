@@ -264,7 +264,7 @@ pub fn run(
     let name_mask: BooleanChunked = input_file
         .column("name")?
         .str()?
-        .into_iter()
+        .iter()
         .map(|opt_name| {
             opt_name
                 .and_then(|s| keyword_files.file_language(s))

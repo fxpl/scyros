@@ -418,7 +418,7 @@ impl DuplicateGroups {
             self.representative_of,
         )?;
 
-        let clusters = DataFrame::new(vec![
+        let clusters = DataFrame::new_infer_height(vec![
             polars::prelude::Column::new(input_header.into(), self.representatives),
             polars::prelude::Column::new("count".into(), self.sizes),
         ])?;
@@ -2976,9 +2976,9 @@ mod tests {
         let names = map_df.column("name")?.str()?;
         let originals = map_df.column("original")?.str()?;
         let pairs: HashMap<&str, &str> = names
-            .into_iter()
+            .iter()
             .flatten()
-            .zip(originals.into_iter().flatten())
+            .zip(originals.iter().flatten())
             .collect();
 
         let copy = format!("{FILES}/c_float.copy");

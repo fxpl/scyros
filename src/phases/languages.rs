@@ -21,12 +21,12 @@ use std::iter::FromIterator as _;
 use std::path::Path;
 
 use crate::utils::csv::*;
-use crate::utils::dataframes;
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::Github;
 use crate::utils::json::*;
 use crate::utils::logger::*;
+use crate::utils::parallel::parallel_pipeline;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
@@ -118,6 +118,15 @@ pub fn cli() -> Command {
                        If not specified, all remaining projects in the input file are used.")
                 .value_parser(clap::value_parser!(usize))
         )
+        .arg(
+            Arg::new("threads")
+                .short('n')
+                .long("threads")
+                .value_name("THREADS")
+                .help("Number of projects queried from the GitHub API at the same time.")
+                .default_value("1")
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..)),
+        )
 }
 
 /// Collects the list of all languages with the number of bytes written in each language of GitHub projects. Also logs the latest commit SHA.
@@ -138,6 +147,7 @@ pub fn cli() -> Command {
 /// * `tokens` - The path to the file containing the GitHub tokens.
 /// * `cache_opt` - The path to the cache file. If not provided, the program will not use a cache.
 /// * `seed` - The seed to use for the random number generator.
+/// * `threads` - The number of projects queried from the GitHub API at the same time.
 /// * `logger` - The logger to use to display the progress of the program.
 ///
 ///
@@ -155,6 +165,7 @@ pub fn run(
     ids: &str,
     names: &str,
     sub: Option<usize>,
+    threads: usize,
     logger: &Logger,
 ) -> Result<()> {
     // Column index of the id in the input, output and cache files.
@@ -256,64 +267,17 @@ pub fn run(
 
     let gh = Github::new(tokens);
 
-    info!("Starting to query the GitHub API...");
-
-    // Number of projects to sample.
-    let mut n: usize = match sub {
-        Some(m) => m,
-        None => dataframes::u32(&input_file, ids)?
-            .into_iter()
-            .filter(|id| !previous_results.contains(id))
-            .count(),
-    };
-
-    // Create a progress bar
-    let progress_bar: ProgressBar = ProgressBar::new(n_proj as u64);
-
-    progress_bar.set_style(
-        indicatif::ProgressStyle::default_bar()
-            .template("{elapsed} {wide_bar} {percent}% | Requests from cache: {msg}")?,
-    );
-
-    if sub.is_some() {
-        progress_bar.set_length(n as u64);
-    }
-
+    // Projects that have not been processed yet, in random order, up to the number of projects to sample.
+    let n: usize = sub.unwrap_or(usize::MAX);
+    let mut projects: Vec<(u32, &str)> = Vec::new();
     for row in shuffled_rows {
-        if n == 0 {
+        if projects.len() == n {
             break;
         }
         match row {
             Ok((id, full_name)) => {
-                // We first check if the project has already been processed. If not, we check the cache.
-                // If the project is not in the cache, we make a request to the API.
                 if !previous_results.contains(&id) {
-                    // Row to write in the output file.
-                    let csv_row: String = if cache.contains_key(&id) {
-                        // Safe call to unwrap because the key is guaranteed to be in the cache.
-                        request_from_cache += 1;
-                        cache.get(&id).unwrap().clone()
-                    } else {
-                        let request1 = gh.request(&format!(
-                            "https://api.github.com/repos/{full_name}/languages"
-                        ));
-                        let request2 = gh
-                            .request(&format!("https://api.github.com/repos/{full_name}/commits"));
-                        match (request1, request2) {
-                            (Ok(json_lang), Ok(json_commits)) => {
-                                ProjectInfo::from_json(&json_lang, &json_commits)?
-                                    .to_csv((id, full_name.to_string()))
-                            }
-                            (Err(e), _) | (_, Err(e)) => ProjectInfo::default()
-                                .to_csv((id, clean_string_to_csv(&e.to_string()))),
-                        }
-                    };
-
-                    writeln!(&mut output_file, "{csv_row}")?;
-
-                    progress_bar.inc(1);
-                    progress_bar.set_message(request_from_cache.to_string());
-                    n -= 1;
+                    projects.push((id, full_name));
                 }
             }
             Err(idx) => {
@@ -321,6 +285,51 @@ pub fn run(
             }
         }
     }
+
+    info!("Starting to query the GitHub API...");
+
+    // Create a progress bar
+    let progress_bar: ProgressBar = ProgressBar::new(projects.len() as u64);
+
+    progress_bar.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("{elapsed} {wide_bar} {percent}% | Requests from cache: {msg}")?,
+    );
+
+    // Rows are written in the order in which the requests complete.
+    parallel_pipeline(
+        &projects,
+        vec![(); threads],
+        |_, &(id, full_name)| {
+            // We first check the cache. If the project is not in the cache, we make a request to the API.
+            if let Some(csv_row) = cache.get(&id) {
+                return Ok((csv_row.clone(), true));
+            }
+            let request1 = gh.request(&format!(
+                "https://api.github.com/repos/{full_name}/languages"
+            ));
+            let request2 = gh.request(&format!("https://api.github.com/repos/{full_name}/commits"));
+            let csv_row: String = match (request1, request2) {
+                (Ok(json_lang), Ok(json_commits)) => {
+                    ProjectInfo::from_json(&json_lang, &json_commits)?
+                        .to_csv((id, full_name.to_string()))
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    ProjectInfo::default().to_csv((id, clean_string_to_csv(&e.to_string())))
+                }
+            };
+            Ok((csv_row, false))
+        },
+        |(csv_row, from_cache): (String, bool)| {
+            writeln!(&mut output_file, "{csv_row}")?;
+            if from_cache {
+                request_from_cache += 1;
+            }
+            progress_bar.inc(1);
+            progress_bar.set_message(request_from_cache.to_string());
+            Ok(())
+        },
+    )?;
     output_file.flush()?;
     Ok(())
 }
@@ -453,6 +462,7 @@ mod tests {
             "id",
             "name",
             None,
+            1,
             test_logger(),
         )?;
 
@@ -471,6 +481,7 @@ mod tests {
             "id",
             "name",
             None,
+            1,
             test_logger(),
         );
         assert!(result.is_err());

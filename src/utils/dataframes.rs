@@ -75,7 +75,7 @@ pub fn str<'a>(df: &'a DataFrame, column: &str) -> Result<Vec<&'a str>> {
     let str_col = column_without_nulls(df, column)?
         .str()
         .with_context(|| format!("Could not convert column {column} to strings"))?;
-    Ok(str_col.into_no_null_iter().collect())
+    Ok(str_col.no_null_iter().collect())
 }
 
 /// Checks if a DataFrame contains all the specified columns.

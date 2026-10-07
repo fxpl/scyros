@@ -8,6 +8,8 @@ If a repository cannot be queried, for example because it was deleted or turned 
 
 Results are written to a CSV file. By default, the output file name is the input file name with the suffix '.languages.csv'.
 
+With `--threads`, several repositories are queried at the same time (one by default). The rows are then written in the order in which the queries complete.
+
 If interrupted, the command can resume from the existing output file unless --force is used. A random subset of repositories can also be processed.
 
 Output CSV format:

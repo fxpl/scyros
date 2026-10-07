@@ -2,8 +2,8 @@
 
 [![Actions status](https://github.com/fxpl/scyros/actions/workflows/ci.yml/badge.svg)](https://github.com/fxpl/scyros/actions)
 ![License](https://img.shields.io/crates/l/scyros.svg)
-[![Rust](https://img.shields.io/badge/rust-1.93-blue)](
-https://releases.rs/docs/1.93.0/
+[![Rust](https://img.shields.io/badge/rust-1.95-blue)](
+https://releases.rs/docs/1.95.0/
 )
 [![Crates.io](https://img.shields.io/crates/v/scyros.svg)](https://crates.io/crates/scyros)
 
@@ -55,7 +55,7 @@ nix profile install github:fxpl/scyros
 
 ### Build from source
 
-Install Rust (version 1.93 or newer) by following the instructions on the [official website](https://rust-lang.org/tools/install/).
+Install Rust (version 1.95 or newer) by following the instructions on the [official website](https://rust-lang.org/tools/install/).
 
 Then clone the repository and build:
 ```bash

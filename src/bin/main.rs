@@ -114,6 +114,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("ids").unwrap(),
                                     cli_subargs.get_one::<String>("names").unwrap(),
                                     cli_subargs.get_one::<usize>("sub").copied(),
+                                    *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     &logger,
                                 )
                             } else if subcommand == filter_metadata::cli().get_name() {
@@ -139,6 +140,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("ids").unwrap(),
                                     cli_subargs.get_one::<String>("names").unwrap(),
                                     cli_subargs.get_one::<usize>("sub").copied(),
+                                    *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     &logger,
                                 )
                             } else if subcommand == filter_languages::cli().get_name() {
