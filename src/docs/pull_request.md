@@ -1,5 +1,5 @@
 Collects pull requests for GitHub repositories and stores their metadata together with the associated discussion comments.
-The input file must be a valid CSV file containing one column with repository IDs and one column with full repository names. By default, these columns are named 'id' and 'name', but both can be customized.
+The input file must be a valid CSV file with the IDs of the repositories (column 'repo_id'), their full names (column 'repo_name') and their source (column 'source'). The other repository columns of the input ('repo_license' and 'latest_commit') are copied to the output, and its other columns are ignored. With --infer-source, repositories without a source are on GitHub if they have an ID, and local otherwise. Columns of the input can be read under other names with --rename OLD=NEW, for example --rename id=repo_id.
 
 Repositories are processed in random order using a reproducible shuffle controlled by a seed. For each repository, the command queries the GitHub API to retrieve all pull requests, including open, closed, and merged pull requests.
 
@@ -7,11 +7,16 @@ For each pull request, the command also retrieves the pull request body and all 
 
 The pull request metadata are written to a CSV file. By default, the output file name is the input file name with the suffix .pulls.csv.
 
+A repository that is not on GitHub gets a single row with the message 'error: unsupported source local' in its repo_name column, and empty url and pull request columns. If the pull requests of a repository cannot be retrieved, no row is written, and the repository is queried again by the next run.
+
 If the program is interrupted, it can be restarted and will resume from the repositories already present in the output file, unless --force is used. A random subset of repositories can also be processed by specifying --sub.
 
 Output pull-requests CSV format:
-  * id: repository ID
-  * name: full repository name (owner/repository)
+  * repo_id: repository ID
+  * source: where the repository comes from
+  * repo_name: full repository name (owner/repository)
+  * repo_license, latest_commit: copied from the input
+  * url: link to the repository on GitHub
   * pr_number: pull request number
   * file_path: path to the CSV file containing the pull request discussion
   * user: login of the pull request author

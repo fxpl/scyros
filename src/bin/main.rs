@@ -240,10 +240,10 @@ fn main() {
                                     cli_subargs.get_one::<String>("tokens").unwrap(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     cli_subargs.get_flag("force"),
-                                    cli_subargs.get_one::<String>("ids").unwrap(),
-                                    cli_subargs.get_one::<String>("names").unwrap(),
+                                    cli_subargs.get_flag("infer-source"),
                                     cli_subargs.get_one::<String>("dest").unwrap(),
                                     cli_subargs.get_one::<usize>("sub").copied(),
+                                    &renames(cli_subargs),
                                     &logger,
                                 )
                             }

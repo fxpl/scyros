@@ -12,14 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Columns `repo_id`, `source` (`github` or `local`) and `repo_name`, followed by a `url` linking to the repository on GitHub, at the start of the output of `ids`.
 - Repository columns (`repo_id`, `source`, `repo_name`, `repo_license`, `latest_commit`) and a `url` at the start of the output of `metadata`, copied from its input and completed with the license.
 - Repository columns and a `url` at the start of the output of `languages`, copied from its input and completed with the latest commit.
-- A `--infer-source` flag for `metadata` and `languages` to read inputs without a `source` column.
-- A `--rename OLD=NEW` flag for `duplicate_ids`, `forks`, `metadata`, `filter_metadata`, `languages` and `filter_languages` to read a column of the input under another name. A missing input column is reported with the columns the command reads and how to rename them.
+- Repository columns, copied from the input, then `pr_number` and a `url` linking to the pull request on GitHub, at the start of each row of `pr`. A repository that is not on GitHub gets an error row.
+- A `--infer-source` flag for `metadata`, `languages` and `pr` to read inputs without a `source` column.
+- A `--rename OLD=NEW` flag for `duplicate_ids`, `forks`, `metadata`, `filter_metadata`, `languages`, `filter_languages` and `pr` to read a column of the input under another name. A missing input column is reported with the columns the command reads and how to rename them.
 
 ### Changed
 
 - The `id` and `name` columns of `ids` are renamed `repo_id` and `repo_name`, and `duplicate_ids` uses `repo_id` by default.
 - `metadata` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its `license` column is renamed `repo_license`, and values are quoted instead of having their commas replaced. `filter_metadata` reads the new column names.
 - `languages` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its latest commit moves to the repository columns, before the languages, and values are quoted instead of having their commas replaced. `filter_languages` reads the new column names.
+- `pr` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Values are quoted instead of being written as they are.
 
 ### Fixed
 

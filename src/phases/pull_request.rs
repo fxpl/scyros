@@ -21,13 +21,14 @@ use std::iter::FromIterator as _;
 use std::path::Path;
 
 use crate::utils::csv::*;
-use crate::utils::dataframes::u32;
+use crate::utils::dataframes::{self, has_column, require_columns};
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::*;
 use crate::utils::json::*;
 use crate::utils::logger::{log_seed, Logger};
-use anyhow::{bail, Context, Error, Result};
+use crate::utils::repo::{Repo, RepoColumn, Source, Unit};
+use anyhow::{bail, ensure, Context, Error, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -38,6 +39,8 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
 use tracing::info;
+
+use super::rename_arg;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -98,18 +101,11 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("ids")
-                .long("ids")
-                .help("Name of the column containing the ids of the projects.")
-                .value_name("COLUMN_NAME")
-                .default_value("id")
-        )
-        .arg(
-            Arg::new("names")
-                .long("names")
-                .help("Name of the column containing the full names of the projects.")
-                .value_name("COLUMN_NAME")
-                .default_value("name")
+            Arg::new("infer-source")
+                .long("infer-source")
+                .help("Infer the source of the projects without one: github if they have an id, local otherwise. \
+                       Without this flag, a project without a source is an error.")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("sub")
@@ -119,21 +115,22 @@ pub fn cli() -> Command {
                        If not specified, all remaining projects in the input file are used.")
                 .value_parser(clap::value_parser!(usize))
         )
+        .arg(rename_arg())
 }
 
 /// Entry point of the program.
 ///
 /// # Arguments
 ///
-/// * `input_path` - The path to the input file.
+/// * `input_path` - The path to the input file. It has the columns `repo_id`, `repo_name` and `source`.
 /// * `output_path` - The path to the output file. If None, the output file will be named as the input file + ".pulls.csv".
 /// * `tokens` - The path to the file containing the GitHub tokens.
 /// * `seed` - The seed to use for the random number generator.
 /// * `force` - Whether to override the output file if it already exists.
-/// * `ids` - The name of the column containing the ids of the projects.
-/// * `names` - The name of the column containing the full names of the projects.
+/// * `infer_source` - Whether to infer the source of the projects without one (see [`Repo::from_csv_row`]).
 /// * `target` - The target directory where to store the pull request files.
 /// * `sub` - The number of projects to sample from the input file. If not specified, all remaining projects in the input file are used.
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - Logger for logging progress.
 ///
 /// # Returns
@@ -146,10 +143,10 @@ pub fn run(
     tokens: &str,
     seed: u64,
     force: bool,
-    ids: &str,
-    names: &str,
+    infer_source: bool,
     target: &str,
     sub: Option<usize>,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     // Column index of the id in the output file.
@@ -160,15 +157,23 @@ pub fn run(
 
     // Load input file
     let input_file: DataFrame = logger.run_task("Loading input file", || {
-        open_csv(
+        let df: DataFrame = open_csv(
             input_path,
-            Some(Schema::from_iter(vec![
-                Field::new(ids.into(), DataType::UInt32),
-                Field::new(names.into(), DataType::String),
-            ])),
-            Some(vec![ids, names]),
-            &[],
-        )
+            Some(Schema::from_iter(RepoColumn::fields())),
+            None,
+            renames,
+        )?;
+        require_columns(
+            &df,
+            input_path,
+            &[RepoColumn::RepoId.name(), RepoColumn::RepoName.name()],
+        )?;
+        ensure!(
+            infer_source || has_column(&df, RepoColumn::Source.name()),
+            "{input_path} has no column source. Add it, read another column as source with \
+             --rename OLD=source, or infer the sources with --infer-source."
+        );
+        Ok(df)
     })?;
 
     log_seed(seed);
@@ -182,13 +187,11 @@ pub fn run(
         Ok(())
     })?;
 
-    let shuffled_rows = shuffled_idx.into_iter().map(|idx| {
-        // Safe unwrap
-        let row = input_file.get_row(idx).unwrap().0;
-
-        match (row[0].clone(), row[1].clone()) {
-            (AnyValue::UInt32(id), AnyValue::String(name)) => Ok((id, name)),
-            _ => Err(idx),
+    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<(u32, Repo)> {
+        let repo: Repo = Repo::from_csv_row(&input_file, idx, infer_source)?;
+        match (repo.id, &repo.name) {
+            (Some(id), Some(_)) => Ok((id, repo)),
+            _ => bail!("Row {idx} of the input file has no id or no full name"),
         }
     });
 
@@ -232,7 +235,7 @@ pub fn run(
         },
     )?;
 
-    output_file.write_header(PRMetadata::header())?;
+    output_file.write_header(Repo::header().into_iter().chain(PRMetadata::COLUMNS))?;
 
     let gh = Github::new(tokens);
 
@@ -241,7 +244,7 @@ pub fn run(
     // Number of projects to sample.
     let mut n: usize = match sub {
         Some(m) => m,
-        None => u32(&input_file, ids)?
+        None => dataframes::u32(&input_file, RepoColumn::RepoId.name())?
             .into_iter()
             .filter(|id| !previous_results.contains(id))
             .count(),
@@ -263,50 +266,70 @@ pub fn run(
         if n == 0 {
             break;
         }
-        match row {
-            Ok((id, full_name)) => {
-                if !previous_results.contains(&id) {
-                    // Row to write in the output file.
-                    let mut pull_requests: String = String::new();
-
-                    // PRs are fetched page by page (100 PRs per page).
-
-                    if let Ok(pages) = scrape_pages(
-                        &gh,
-                        &|per_page, page| {
-                            format!("https://api.github.com/repositories/{id}/pulls?state=all&per_page={per_page}&page={page}")
-                        },
-                        &|json| {
-                            let mut pr_metadata: PRMetadata =
-                                PRMetadata::parse_json(&json, (id, target.to_string()))?;
-                            scrape_pr_comments(&gh, id, &pr_metadata).unwrap_or_else(|_| {
-                                pr_metadata.file_path = String::new();
-                            });
-                            Ok(pr_metadata)
-                        },
-                    ) {
-                        for pr_res in pages {
-                            let obj: PRMetadata = pr_res.unwrap_or_default();
-
-                            writeln!(
-                                &mut pull_requests,
-                                "{}",
-                                obj.to_csv((id, full_name.to_string()))
-                            )?;
-                        }
-                        write!(&mut output_file, "{pull_requests}")?;
-                    }
-                    progress_bar.inc(1);
-                    n -= 1;
+        let (id, repo): (u32, Repo) = row?;
+        if previous_results.contains(&id) {
+            continue;
+        }
+        if repo.source != Source::GitHub {
+            let error: String = repo.unsupported_source();
+            output_file.write_record(error_row(repo, error))?;
+        } else {
+            // PRs are fetched page by page (100 PRs per page).
+            // If they cannot be fetched, nothing is written and the project is queried again by the next run.
+            if let Ok(pages) = scrape_pages(
+                &gh,
+                &|per_page, page| {
+                    format!("https://api.github.com/repositories/{id}/pulls?state=all&per_page={per_page}&page={page}")
+                },
+                &|json| {
+                    let mut pr_metadata: PRMetadata =
+                        PRMetadata::parse_json(&json, (id, target.to_string()))?;
+                    scrape_pr_comments(&gh, id, &pr_metadata).unwrap_or_else(|_| {
+                        pr_metadata.file_path = String::new();
+                    });
+                    Ok(pr_metadata)
+                },
+            ) {
+                // The rows of a project are written once all its PRs are fetched.
+                let rows: Vec<Vec<String>> = pages
+                    .into_iter()
+                    .map(|pr| pr_row(&repo, &pr.unwrap_or_default()))
+                    .collect();
+                for row in rows {
+                    output_file.write_record(row)?;
                 }
             }
-            Err(idx) => {
-                bail!("Could not parse row {idx} in the input file")
-            }
         }
+        progress_bar.inc(1);
+        n -= 1;
     }
     output_file.flush()?;
     Ok(())
+}
+
+/// Returns the row of a pull request in the output.
+///
+/// # Arguments
+///
+/// * `repo` - The project of the pull request.
+/// * `pr` - The pull request.
+fn pr_row(repo: &Repo, pr: &PRMetadata) -> Vec<String> {
+    repo.row().into_iter().chain(pr.values()).collect()
+}
+
+/// Returns the row of a project that cannot be queried: its name is replaced by the error message, and its link and pull request columns are empty.
+///
+/// # Arguments
+///
+/// * `repo` - The project.
+/// * `error` - The error message.
+fn error_row(mut repo: Repo, error: String) -> Vec<String> {
+    repo.name = Some(error);
+    repo.values()
+        .into_iter()
+        .chain([String::new()])
+        .chain(PRMetadata::COLUMNS.map(|_| String::new()))
+        .collect()
 }
 
 /// Represents the metadata of a GitHub pull request.
@@ -336,43 +359,35 @@ struct PRMetadata {
     body: String,
 }
 
-impl ToCSV for PRMetadata {
-    /// Id of the project and project name
-    type Key = (u32, String);
+impl PRMetadata {
+    /// Columns of a pull request, after the repository columns and the link.
+    const COLUMNS: [&'static str; 10] = [
+        "pr_number",
+        "file_path",
+        "user",
+        "user_id",
+        "created_at",
+        "updated_at",
+        "closed_at",
+        "merged_at",
+        "draft",
+        "state",
+    ];
 
-    fn header() -> &'static [&'static str] {
-        &[
-            "id",
-            "name",
-            "pr_number",
-            "file_path",
-            "user",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "closed_at",
-            "merged_at",
-            "draft",
-            "state",
+    /// Returns the values of the pull request, in the order of [`Self::COLUMNS`].
+    fn values(&self) -> Vec<String> {
+        vec![
+            self.pr_number.to_string(),
+            self.file_path.clone(),
+            self.user.clone(),
+            self.user_id.to_string(),
+            self.created_at.to_string(),
+            self.updated_at.to_string(),
+            self.closed_at.to_string(),
+            self.merged_at.to_string(),
+            u8::from(self.draft).to_string(),
+            self.state.clone(),
         ]
-    }
-
-    fn to_csv(&self, key: Self::Key) -> String {
-        format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{}",
-            key.0,
-            key.1,
-            self.pr_number,
-            self.file_path,
-            self.user,
-            self.user_id,
-            self.created_at,
-            self.updated_at,
-            self.closed_at,
-            self.merged_at,
-            if self.draft { 1 } else { 0 },
-            self.state,
-        )
     }
 }
 
@@ -665,10 +680,10 @@ mod tests {
             &tokens_file,
             0,
             false,
-            "id",
-            "name",
+            false,
             target,
             None,
+            &[],
             test_logger(),
         )?;
 
@@ -683,6 +698,57 @@ mod tests {
         let expected_df = open_csv(&format!("{output_file}.expected"), None, None, &[])?;
         assert_eq!(expected_df, output_df);
         delete_file(output_file, false)
+    }
+
+    /// Returns a repository without license nor commit.
+    fn repo(source: Source) -> Repo {
+        Repo {
+            id: Some(42),
+            source,
+            name: Some("owner/repo".to_string()),
+            license: None,
+            commit: None,
+        }
+    }
+
+    #[test]
+    fn rows_of_pull_requests() {
+        let pr = PRMetadata {
+            pr_number: 3,
+            user: "someone".to_string(),
+            draft: true,
+            state: "open".to_string(),
+            ..Default::default()
+        };
+        let row: Vec<String> = pr_row(&repo(Source::GitHub), &pr);
+        assert_eq!(row.len(), Repo::header().len() + PRMetadata::COLUMNS.len());
+        assert_eq!(
+            row[..9],
+            [
+                "42",
+                "github",
+                "owner/repo",
+                "",
+                "",
+                "https://github.com/owner/repo",
+                "3",
+                "",
+                "someone"
+            ]
+        );
+        assert_eq!(row[row.len() - 2..], ["1", "open"]);
+    }
+
+    #[test]
+    fn rows_of_projects_not_on_github() {
+        let local: Repo = repo(Source::Local);
+        let row: Vec<String> = error_row(local.clone(), local.unsupported_source());
+        assert_eq!(row.len(), Repo::header().len() + PRMetadata::COLUMNS.len());
+        assert_eq!(
+            row[..6],
+            ["42", "local", "error: unsupported source local", "", "", ""]
+        );
+        assert!(row[6..].iter().all(String::is_empty));
     }
 
     #[test]
