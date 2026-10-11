@@ -176,6 +176,8 @@ fn main() {
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_one::<usize>("sub").copied(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
+                                    cli_subargs.get_flag("infer-source"),
+                                    &renames(cli_subargs),
                                     &logger,
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     cli_subargs.get_one::<String>("order").unwrap(),

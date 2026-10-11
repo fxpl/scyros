@@ -1,0 +1,2 @@
+repo_id,source,repo_name,repo_license,latest_commit,local_path
+42,github,owner/local-repo,MIT License,0123456789abcdef,tests/data/phases/download/local_repo

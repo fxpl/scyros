@@ -1,9 +1,11 @@
 Downloads GitHub repositories from a CSV file and filters their contents using user-defined extension and keyword rules.
 
-In normal mode, the input file must contain the columns 'id', 'name', and 'latest_commit'. With --skip, it must instead contain a 'path' column with the directories of repositories that already exist locally. Other columns are ignored.
+In normal mode, the input file must contain the columns 'repo_id' and 'latest_commit'. With --skip, it must instead contain a 'local_path' column with the directories of repositories that already exist locally. The input must also have a 'source' column, unless --infer-source is used: repositories without a source are then on GitHub if they have an ID, and local otherwise. The other repository columns of the input ('repo_name' and 'repo_license') are copied to both output files, so that every file keeps the repository it comes from. Other columns are ignored. Columns of the input can be read under other names with --rename OLD=NEW, for example --rename path=local_path.
 
 Repositories are processed in random order using a reproducible seed. In download mode, each repository is fetched from GitHub at the specified commit, extracted locally, and scanned for files whose extensions match those defined in one or more keyword JSON files. Keywords are either interpreted as regular expressions or whole words according to the --regex flag. Keywords are matched without regard to letter case, unless --case-sensitive is used. File extensions are always case-sensitive: '.c' does not match a file named 'main.C'.
-Files that do not match the allowed extensions are removed, and files that do not contain any of the specified keywords can also be discarded. Repositories that GitHub does not provide (for example deleted ones) and archives that cannot be extracted are logged as error rows.
+Files that do not match the allowed extensions are removed, and files that do not contain any of the specified keywords can also be discarded. Repositories that GitHub does not provide (for example deleted ones), repositories that are not on GitHub, and archives that cannot be extracted are logged as error rows, whose local path is 'error'.
+
+Both logs have a 'url' column with links to the repositories and to the files on GitHub, at the commit of the repositories. Links are empty for repositories that are not on GitHub or have no name.
 
 The command writes two CSV files: a project-level log with aggregate statistics and a file-level log with one row per retained file. By default, their names are the input file name with the suffixes '.project_log.csv' and '.file_log.csv'.
 
@@ -21,18 +23,19 @@ If the command is run again without --force, it resumes from the existing projec
 }
 
 Output project log format:
-  * id: repository ID
-  * path: local repository path, or error if download failed
-  * name: full repository name (owner/repository)
-  * latest_commit: commit SHA
+  * repo_id, source, repo_name, repo_license, latest_commit: repository columns, copied from the input, empty when unknown
+  * url: link to the repository on GitHub
+  * local_path: local repository path, or error if download failed
   * files / loc / words — totals before keyword filtering
   * files_with_kw / loc_with_kw / words_with_kw — totals for files matching at least one keyword set
   * files_with_... / loc_of_files_with_... / words_of_files_with_... — totals for each keyword file
   * ... — number of keyword matches for each keyword file
 
 Output file log format:
-  * id: repository ID
-  * name: file path
+  * repo_id, source, repo_name, repo_license, latest_commit: repository columns of the repository of the file
+  * local_path: local file path
+  * file: path of the file inside its repository
+  * url: link to the file on GitHub
   * language: language inferred from the file extension
   * loc: number of lines
   * words: number of words
