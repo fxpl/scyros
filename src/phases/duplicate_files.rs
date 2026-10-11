@@ -28,11 +28,14 @@ use polars::prelude::{DataFrameJoinOps as _, DataType, Field, Schema, UniqueKeep
 use tracing::{info, warn};
 
 use crate::utils::bow::{Bow, RankedToken, Token};
-use crate::utils::dataframes::{self, has_column};
+use crate::utils::dataframes::{self, has_column, require_columns};
 use crate::utils::fs::*;
 use crate::utils::logger::{log_output_file, log_write_dataframe, log_write_rows, Logger};
 use crate::utils::parallel::parallel_pipeline;
 use crate::utils::regex::{KeywordFiles, Matcher};
+use crate::utils::repo::{RepoColumn, LOCAL_PATH};
+
+use super::rename_arg;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -131,8 +134,9 @@ pub fn cli() -> Command {
             Arg::new("header")
                 .long("header")
                 .help("Name of column storing file paths in the input CSV file.")
-                .default_value("name"),
+                .default_value(LOCAL_PATH),
         )
+        .arg(rename_arg())
 }
 
 type FileId = usize;
@@ -153,6 +157,7 @@ const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024;
 ///   Only used by the overlap criterion, which compares files within a language and never across.
 /// * `threads` - The number of threads to use.
 /// * `input_header` - The name of the column storing file paths in the input CSV file.
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - The logger displaying the progress.
 ///
 /// # Returns
@@ -169,6 +174,7 @@ pub fn run(
     languages_file_paths: &[&str],
     threads: usize,
     input_header: &str,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     let default_output_path: String = format!("{input_path}.unique.csv");
@@ -185,20 +191,16 @@ pub fn run(
 
     let files: DataFrame = open_csv(
         input_path,
-        Some(Schema::from_iter(vec![
+        Some(Schema::from_iter(RepoColumn::fields().into_iter().chain([
             Field::new(input_header.into(), DataType::String),
             Field::new("extension".into(), DataType::String),
             Field::new("loc".into(), DataType::UInt32),
             Field::new("words".into(), DataType::UInt32),
-        ])),
+        ]))),
         None,
-        &[],
+        renames,
     )?;
-
-    ensure!(
-        has_column(&files, input_header),
-        "File {input_path} does not contain column '{input_header}'."
-    );
+    require_columns(&files, input_path, &[input_header])?;
 
     // A path listed several times is one file: it is grouped, counted and written once.
     let rows_count: usize = files.height();
@@ -2697,7 +2699,8 @@ mod tests {
                 1,
                 &[],
                 1,
-                "name",
+                "local_path",
+                &[],
                 test_logger(),
             );
             assert!(
@@ -2804,7 +2807,8 @@ mod tests {
             1,
             &[],
             1,
-            "name",
+            "local_path",
+            &[],
             test_logger(),
         )?;
 
@@ -2812,8 +2816,9 @@ mod tests {
 
         let output_df = open_csv(&default_output_path, None, None, &[])?;
 
-        let sorted_expected_df = expected_df.sort(vec!["name"], SortMultipleOptions::new())?;
-        let sorted_output_df = output_df.sort(vec!["name"], SortMultipleOptions::new())?;
+        let sorted_expected_df =
+            expected_df.sort(vec!["local_path"], SortMultipleOptions::new())?;
+        let sorted_output_df = output_df.sort(vec!["local_path"], SortMultipleOptions::new())?;
         assert_eq!(sorted_expected_df, sorted_output_df);
 
         delete_file(&default_output_path, false)?;
@@ -2822,8 +2827,9 @@ mod tests {
 
         let map_df = open_csv(&default_map_path, None, None, &[])?;
 
-        let sorted_expected_map = expected_map.sort(vec!["name"], SortMultipleOptions::new())?;
-        let sorted_map_df = map_df.sort(vec!["name"], SortMultipleOptions::new())?;
+        let sorted_expected_map =
+            expected_map.sort(vec!["local_path"], SortMultipleOptions::new())?;
+        let sorted_map_df = map_df.sort(vec!["local_path"], SortMultipleOptions::new())?;
         ensure!(
             sorted_expected_map.equals(&sorted_map_df),
             "Duplicate map CSV file does not match expected output."
@@ -2861,7 +2867,8 @@ mod tests {
             1,
             &[],
             threads,
-            "name",
+            "local_path",
+            &[],
             test_logger(),
         )?;
         Ok((
@@ -2887,10 +2894,13 @@ mod tests {
         for path in &paths {
             write_file(path, b"same content")?;
         }
-        let input_csv = format!("name\n{}\n", paths.join("\n"));
+        let input_csv = format!("local_path\n{}\n", paths.join("\n"));
         for _ in 0..3 {
             let (unique, map) = exact_run(dir, &input_csv, 8, true)?;
-            assert_eq!(dataframes::str(&unique, "name")?, vec![paths[0].as_str()]);
+            assert_eq!(
+                dataframes::str(&unique, "local_path")?,
+                vec![paths[0].as_str()]
+            );
             ensure!(dataframes::str(&map, "original")?
                 .iter()
                 .all(|original| *original == paths[0]));
@@ -2906,10 +2916,10 @@ mod tests {
         let (a, b) = (format!("{dir}/a.txt"), format!("{dir}/b.txt"));
         write_file(&a, b"same content")?;
         write_file(&b, b"same content")?;
-        let input_csv = format!("name,count\n{a},7\n{a},7\n{b},7\n");
+        let input_csv = format!("local_path,count\n{a},7\n{a},7\n{b},7\n");
         let (unique, _) = exact_run(dir, &input_csv, 1, true)?;
-        assert_eq!(unique.get_column_names(), ["name", "count"]);
-        assert_eq!(dataframes::str(&unique, "name")?, vec![a.as_str()]);
+        assert_eq!(unique.get_column_names(), ["local_path", "count"]);
+        assert_eq!(dataframes::str(&unique, "local_path")?, vec![a.as_str()]);
         assert_eq!(dataframes::u32(&unique, "count")?, vec![2]);
         delete_dir(dir, false)
     }
@@ -2922,7 +2932,7 @@ mod tests {
         let a = format!("{dir}/a.txt");
         write_file(&a, b"content")?;
         write_file(format!("{dir}/map.csv"), b"keep me")?;
-        ensure!(exact_run(dir, &format!("name\n{a}\n"), 1, false).is_err());
+        ensure!(exact_run(dir, &format!("local_path\n{a}\n"), 1, false).is_err());
         assert_eq!(
             std::fs::read_to_string(format!("{dir}/map.csv"))?,
             "keep me"
@@ -2963,7 +2973,8 @@ mod tests {
             1,
             &[&languages],
             1,
-            "name",
+            "local_path",
+            &[],
             test_logger(),
         )?;
 
@@ -2975,7 +2986,7 @@ mod tests {
         // Only foo_clone.java is a duplicate now, so five files remain.
         assert_eq!(unique_df.height(), 5);
 
-        let names = map_df.column("name")?.str()?;
+        let names = map_df.column("local_path")?.str()?;
         let originals = map_df.column("original")?.str()?;
         let pairs: HashMap<&str, &str> = names
             .iter()
@@ -3013,7 +3024,8 @@ mod tests {
             1,
             &[],
             1,
-            "name",
+            "local_path",
+            &[],
             test_logger()
         )
         .is_err());
@@ -3035,7 +3047,8 @@ mod tests {
             1,
             &[],
             1,
-            "name",
+            "local_path",
+            &[],
             test_logger(),
         );
         delete_file(&output, false)?;
@@ -3061,13 +3074,14 @@ mod tests {
             1,
             &[],
             1,
-            "name",
+            "local_path",
+            &[],
             test_logger(),
         )?;
         let expected_df = open_csv(&format!("{input}.unique.csv.expected"), None, None, &[])?;
         let output_df = open_csv(&output, None, None, &[])?;
-        let sorted_expected = expected_df.sort(vec!["name"], SortMultipleOptions::new())?;
-        let sorted_output = output_df.sort(vec!["name"], SortMultipleOptions::new())?;
+        let sorted_expected = expected_df.sort(vec!["local_path"], SortMultipleOptions::new())?;
+        let sorted_output = output_df.sort(vec!["local_path"], SortMultipleOptions::new())?;
         assert_eq!(sorted_expected, sorted_output);
         delete_file(&output, false)?;
         delete_file(&map, false)
@@ -3088,6 +3102,7 @@ mod tests {
             &[],
             1,
             "wrongcol",
+            &[],
             test_logger(),
         );
         delete_file(&output, true)?;

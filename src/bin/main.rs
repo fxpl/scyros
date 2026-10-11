@@ -196,6 +196,7 @@ fn main() {
                                         .collect::<Vec<&str>>(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
                                     cli_subargs.get_one::<String>("header").unwrap(),
+                                    &renames(cli_subargs),
                                     &logger,
                                 )
                             } else if subcommand == parse::cli().get_name() {

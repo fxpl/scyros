@@ -1,6 +1,6 @@
 Detects duplicate files in a dataset and retains only unique files.
 
-The input file must be a valid CSV file containing a column of file paths. By default, this column is named 'name', but another column can be selected with --header.
+The input file must be a valid CSV file containing a column of file paths. By default, this column is named 'local_path', as in the file logs of the 'download' command, but another column can be selected with --header. Columns of the input can be read under other names with --rename OLD=NEW, for example --rename name=local_path.
 
 Three similarity criteria are available through -s:
   * exact: files must match byte-for-byte. This is the only criterion sensitive to whitespace, letter case, operators and token order.
@@ -23,5 +23,5 @@ Output unique-files CSV format:
   * All columns from the input file, plus count for the duplicate-group size.
 
 Output duplicates-map CSV format:
-  * name (or the column given with --header): file path
+  * local_path (or the column given with --header): file path
   * original: representative file path
