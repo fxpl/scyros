@@ -35,6 +35,8 @@ pub const FUNCTION_NAME: &str = "function_name";
 pub const LINE: &str = "line";
 /// Column with the column where a function starts, from 1.
 pub const COLUMN: &str = "column";
+/// Column with the number of a pull request.
+pub const PR_NUMBER: &str = "pr_number";
 
 /// Where a repository comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,6 +401,41 @@ impl Unit for Function<'_> {
     }
 }
 
+/// A pull request of a repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequest<'a> {
+    /// Repository of the pull request.
+    pub repo: &'a Repo,
+    /// Number of the pull request.
+    pub number: u32,
+}
+
+impl Unit for PullRequest<'_> {
+    /// Repository columns, then `pr_number`.
+    fn columns() -> Vec<&'static str> {
+        let mut columns: Vec<&'static str> = Repo::columns();
+        columns.push(PR_NUMBER);
+        columns
+    }
+
+    fn values(&self) -> Vec<String> {
+        let mut values: Vec<String> = self.repo.values();
+        values.push(self.number.to_string());
+        values
+    }
+
+    /// Links to the pull request.
+    fn url(&self) -> Option<String> {
+        let name: &str = self
+            .repo
+            .name
+            .as_deref()
+            .filter(|_| self.repo.source == Source::GitHub)?;
+        let number: String = self.number.to_string();
+        Some(github_url(name.split('/').chain(["pull", number.as_str()])))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,6 +700,26 @@ mod tests {
                 "5",
                 "https://github.com/owner/repo/blob/abc/main.c#L12"
             ]
+        );
+    }
+
+    #[test]
+    fn pull_requests() {
+        let github = repo(Source::GitHub, Some("owner/repo"), Some("abc"));
+        let pr = PullRequest {
+            repo: &github,
+            number: 3,
+        };
+        assert_eq!(PullRequest::header()[5..], ["pr_number", "url"]);
+        assert_eq!(pr.row()[5..], ["3", "https://github.com/owner/repo/pull/3"]);
+        let local = repo(Source::Local, Some("owner/repo"), None);
+        assert_eq!(
+            PullRequest {
+                repo: &local,
+                number: 3
+            }
+            .url(),
+            None
         );
     }
 }

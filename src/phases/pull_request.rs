@@ -27,7 +27,7 @@ use crate::utils::github::*;
 use crate::utils::github_api::*;
 use crate::utils::json::*;
 use crate::utils::logger::{log_seed, Logger};
-use crate::utils::repo::{Repo, RepoColumn, Source, Unit};
+use crate::utils::repo::{PullRequest, Repo, RepoColumn, Source, Unit};
 use anyhow::{bail, ensure, Context, Error, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
@@ -235,7 +235,7 @@ pub fn run(
         },
     )?;
 
-    output_file.write_header(Repo::header().into_iter().chain(PRMetadata::COLUMNS))?;
+    output_file.write_header(header())?;
 
     let gh = Github::new(tokens);
 
@@ -307,6 +307,14 @@ pub fn run(
     Ok(())
 }
 
+/// Returns the header of the output: the columns of the pull requests, then their metadata.
+fn header() -> Vec<&'static str> {
+    PullRequest::header()
+        .into_iter()
+        .chain(PRMetadata::COLUMNS)
+        .collect()
+}
+
 /// Returns the row of a pull request in the output.
 ///
 /// # Arguments
@@ -314,10 +322,17 @@ pub fn run(
 /// * `repo` - The project of the pull request.
 /// * `pr` - The pull request.
 fn pr_row(repo: &Repo, pr: &PRMetadata) -> Vec<String> {
-    repo.row().into_iter().chain(pr.values()).collect()
+    PullRequest {
+        repo,
+        number: pr.pr_number,
+    }
+    .row()
+    .into_iter()
+    .chain(pr.values())
+    .collect()
 }
 
-/// Returns the row of a project that cannot be queried: its name is replaced by the error message, and its link and pull request columns are empty.
+/// Returns the row of a project that cannot be queried: its name is replaced by the error message, and the other columns are empty.
 ///
 /// # Arguments
 ///
@@ -325,11 +340,9 @@ fn pr_row(repo: &Repo, pr: &PRMetadata) -> Vec<String> {
 /// * `error` - The error message.
 fn error_row(mut repo: Repo, error: String) -> Vec<String> {
     repo.name = Some(error);
-    repo.values()
-        .into_iter()
-        .chain([String::new()])
-        .chain(PRMetadata::COLUMNS.map(|_| String::new()))
-        .collect()
+    let mut row: Vec<String> = repo.values();
+    row.resize(header().len(), String::new());
+    row
 }
 
 /// Represents the metadata of a GitHub pull request.
@@ -360,9 +373,8 @@ struct PRMetadata {
 }
 
 impl PRMetadata {
-    /// Columns of a pull request, after the repository columns and the link.
-    const COLUMNS: [&'static str; 10] = [
-        "pr_number",
+    /// Columns of the metadata of a pull request, after the columns of the pull request and its link.
+    const COLUMNS: [&'static str; 9] = [
         "file_path",
         "user",
         "user_id",
@@ -377,7 +389,6 @@ impl PRMetadata {
     /// Returns the values of the pull request, in the order of [`Self::COLUMNS`].
     fn values(&self) -> Vec<String> {
         vec![
-            self.pr_number.to_string(),
             self.file_path.clone(),
             self.user.clone(),
             self.user_id.to_string(),
@@ -711,6 +722,15 @@ mod tests {
         }
     }
 
+    /// Returns the cell of a row of the output in a column.
+    fn cell<'a>(row: &'a [String], column: &str) -> &'a str {
+        let index: usize = header()
+            .iter()
+            .position(|c| *c == column)
+            .expect("unknown column");
+        &row[index]
+    }
+
     #[test]
     fn rows_of_pull_requests() {
         let pr = PRMetadata {
@@ -721,34 +741,25 @@ mod tests {
             ..Default::default()
         };
         let row: Vec<String> = pr_row(&repo(Source::GitHub), &pr);
-        assert_eq!(row.len(), Repo::header().len() + PRMetadata::COLUMNS.len());
-        assert_eq!(
-            row[..9],
-            [
-                "42",
-                "github",
-                "owner/repo",
-                "",
-                "",
-                "https://github.com/owner/repo",
-                "3",
-                "",
-                "someone"
-            ]
-        );
-        assert_eq!(row[row.len() - 2..], ["1", "open"]);
+        assert_eq!(row.len(), header().len());
+        assert_eq!(cell(&row, "repo_name"), "owner/repo");
+        assert_eq!(cell(&row, "pr_number"), "3");
+        assert_eq!(cell(&row, "url"), "https://github.com/owner/repo/pull/3");
+        assert_eq!(cell(&row, "user"), "someone");
+        assert_eq!(cell(&row, "draft"), "1");
+        assert_eq!(cell(&row, "state"), "open");
     }
 
     #[test]
     fn rows_of_projects_not_on_github() {
         let local: Repo = repo(Source::Local);
         let row: Vec<String> = error_row(local.clone(), local.unsupported_source());
-        assert_eq!(row.len(), Repo::header().len() + PRMetadata::COLUMNS.len());
-        assert_eq!(
-            row[..6],
-            ["42", "local", "error: unsupported source local", "", "", ""]
-        );
-        assert!(row[6..].iter().all(String::is_empty));
+        assert_eq!(row.len(), header().len());
+        assert_eq!(cell(&row, "source"), "local");
+        assert_eq!(cell(&row, "repo_name"), "error: unsupported source local");
+        assert_eq!(cell(&row, "pr_number"), "");
+        assert_eq!(cell(&row, "url"), "");
+        assert_eq!(cell(&row, "state"), "");
     }
 
     #[test]
