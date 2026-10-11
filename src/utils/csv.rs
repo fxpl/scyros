@@ -15,7 +15,7 @@
 //! Utility functions for working with CSV files.
 
 use super::fs::*;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use csv::{Reader, StringRecord};
 use std::collections::HashMap;
 use std::fs::File;
@@ -108,8 +108,15 @@ impl CSVFile {
         }
     }
 
-    // TODO: Test
+    /// Returns the header of this file, which is empty if the file is empty.
+    pub fn header(&self) -> Result<Vec<String>> {
+        let mut reader =
+            csv::ReaderBuilder::new().from_reader(open_file(&self.path, FileMode::Read)?);
+        Ok(reader.headers()?.iter().map(str::to_string).collect())
+    }
+
     /// Writes a header to this file if it is empty.
+    /// If the file is not empty, its header must be the same, so that the records appended to it have the columns of the file.
     ///
     /// # Arguments
     ///
@@ -117,26 +124,39 @@ impl CSVFile {
     ///
     /// # Returns
     ///
-    /// An error if the file is in read-only mode or the write fails.
+    /// An error if the file is in read-only mode, the write fails, or the file has another header.
     pub fn write_header<I, S>(&mut self, header: I) -> Result<()>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<[u8]>,
     {
+        let header: Vec<String> = header
+            .into_iter()
+            .map(|field| String::from_utf8_lossy(field.as_ref()).into_owned())
+            .collect();
         let writer = self.writer.as_mut().ok_or_else(|| {
             anyhow!(
                 "Cannot write to {} since it is in read-only mode",
                 self.path
             )
         })?;
-        if writer.get_ref().metadata()?.len() != 0 {
+        if writer.get_ref().metadata()?.len() == 0 {
+            let mut csv_writer = csv::WriterBuilder::new()
+                .has_headers(false)
+                .from_writer(writer);
+            csv_writer.write_record(&header)?;
+            csv_writer.flush()?;
             return Ok(());
         }
-        let mut csv_writer = csv::WriterBuilder::new()
-            .has_headers(false)
-            .from_writer(writer);
-        csv_writer.write_record(header)?;
-        csv_writer.flush()?;
+        let existing: Vec<String> = self.header()?;
+        ensure!(
+            existing == header,
+            "{} has other columns than the ones this run writes, for instance because it was written by another version of scyros or with other options. \
+             Use --force to overwrite it, or choose another output file.\n  columns of the file: {}\n  columns of this run: {}",
+            self.path,
+            existing.join(","),
+            header.join(",")
+        );
         Ok(())
     }
 
@@ -368,6 +388,24 @@ mod tests {
         ensure!(file.column::<i8>(0).is_err());
         Ok(())
     }
+    #[test]
+    fn write_header_checks_existing_header() -> Result<()> {
+        let path = "tests/data/write_header_check.csv";
+        delete_file(path, true)?;
+        let result = (|| -> Result<()> {
+            CSVFile::new(path, FileMode::Append)?.write_header(["a", "b"])?;
+            CSVFile::new(path, FileMode::Append)?.write_header(["a", "b"])?;
+            let mut file = CSVFile::new(path, FileMode::Append)?;
+            assert_eq!(file.header()?, vec!["a", "b"]);
+            ensure!(file.write_header(["a", "c"]).is_err());
+            CSVFile::new(path, FileMode::Overwrite)?.write_header(["a", "c"])?;
+            assert_eq!(std::fs::read_to_string(path)?, "a,c\n");
+            Ok(())
+        })();
+        delete_file(path, false)?;
+        result
+    }
+
     #[test]
     fn indexed_lines_with_blank_lines_and_quoted_newlines() -> Result<()> {
         let path = "tests/data/indexed_lines_irregular.csv";
