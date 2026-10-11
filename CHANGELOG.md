@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Columns `repo_id`, `source` (`github` or `local`) and `repo_name`, followed by a `url` linking to the repository on GitHub, at the start of the output of `ids`.
+
+### Changed
+
+- The `id` and `name` columns of `ids` are renamed `repo_id` and `repo_name`, and `duplicate_ids` uses `repo_id` by default.
+
 ### Fixed
 
 - Resuming on an output file with other columns than the ones expected by the called subcommand raises an error instead of appending mismatched rows.

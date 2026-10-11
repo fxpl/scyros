@@ -12,7 +12,9 @@ Results are written to a CSV file at the path specified by the user. If the prog
 IDs are processed in sequential batches of 100, with one GitHub API request per batch.
 
 Output CSV file format:
- * id: repository ID.
- * name: full repository name (owner/repository).
+ * repo_id: repository ID.
+ * source: where the repository comes from, always 'github'.
+ * repo_name: full repository name (owner/repository).
+ * url: link to the repository on GitHub.
  * fork: whether the repository is a fork (1) or not (0).
  * request_number: number of GitHub API requests performed (approximatively row_number / 100).

@@ -90,9 +90,9 @@ pub trait ToCSV: Default {
     fn header() -> &'static [&'static str];
 }
 
-/// Objects that can be created from GitHub JSON responses and converted to CSV rows.
+/// Objects that can be created from GitHub JSON responses.
 // TODO: Tests
-pub trait FromGitHub: ToCSV {
+pub trait FromGitHub {
     type Complement;
 
     /// Parses a date time field from a JSON object and returns its epoch representation.

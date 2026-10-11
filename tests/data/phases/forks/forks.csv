@@ -1,9 +1,9 @@
-id,name,fork,request_number
-1,Test Repo 1,1,123
-2,Test Repo 2,1,456
-3,Test Repo 3,0,789
-1,Test Repo 4,1,101
-2,Test Repo 5,0,112
-3,Test Repo 6,0,131
-1,Test Repo 7,1,415
-2,Test Repo 8,1,161
+repo_id,source,repo_name,url,fork,request_number
+1,github,Test Repo 1,https://github.com/Test%20Repo%201,1,123
+2,github,Test Repo 2,https://github.com/Test%20Repo%202,1,456
+3,github,Test Repo 3,https://github.com/Test%20Repo%203,0,789
+1,github,Test Repo 4,https://github.com/Test%20Repo%204,1,101
+2,github,Test Repo 5,https://github.com/Test%20Repo%205,0,112
+3,github,Test Repo 6,https://github.com/Test%20Repo%206,0,131
+1,github,Test Repo 7,https://github.com/Test%20Repo%207,1,415
+2,github,Test Repo 8,https://github.com/Test%20Repo%208,1,161

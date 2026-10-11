@@ -23,7 +23,6 @@ use polars::prelude::DataFrame;
 use polars::prelude::DataType;
 use polars::prelude::Field;
 use polars::prelude::Schema;
-use std::fmt::Write as _;
 use std::io::Write;
 use std::iter::FromIterator as _;
 use std::path::Path;
@@ -36,6 +35,7 @@ use crate::utils::github::*;
 use crate::utils::github_api::Github;
 use crate::utils::json::*;
 use crate::utils::logger::{log_seed, Logger};
+use crate::utils::repo::{Repo, RepoColumn, Source, Unit, URL};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -157,17 +157,16 @@ pub fn run(
         let input_df: DataFrame = logger.run_task("Loading previous results", || {
             open_csv(
                 output_path,
-                Some(Schema::from_iter(vec![
-                    Field::new("id".into(), DataType::UInt32),
-                    Field::new("name".into(), DataType::String),
-                    Field::new("fork".into(), DataType::UInt32),
-                    Field::new("request_number".into(), DataType::UInt32),
-                ])),
-                Some(ProjectInfo::header().to_vec()),
+                Some(Schema::from_iter(RepoColumn::fields().into_iter().chain([
+                    Field::new(REQUEST_NUMBER.into(), DataType::UInt32),
+                ]))),
+                Some(vec![RepoColumn::RepoId.name(), REQUEST_NUMBER]),
             )
         })?;
-        let last_id: Option<u32> = dataframes::u32(&input_df, "id")?.into_iter().last();
-        let last_request_number: Option<u32> = dataframes::u32(&input_df, "request_number")?
+        let last_id: Option<u32> = dataframes::u32(&input_df, RepoColumn::RepoId.name())?
+            .into_iter()
+            .last();
+        let last_request_number: Option<u32> = dataframes::u32(&input_df, REQUEST_NUMBER)?
             .into_iter()
             .last();
 
@@ -198,7 +197,7 @@ pub fn run(
     )?;
 
     // Write the header if the file is empty.
-    output_file.write_header(ProjectInfo::header())?;
+    output_file.write_header(header())?;
 
     // Initialize Github client.
     let gh = Github::new(tokens);
@@ -262,8 +261,8 @@ pub fn run(
         }?;
         match request {
             json::JsonValue::Array(repos) => {
-                // String builder containing the content of the response
-                let mut builder: String = String::new();
+                // Rows of the response, written once the whole response is processed.
+                let mut rows: Vec<Vec<String>> = Vec::new();
 
                 // Number of repositories in the response.
                 let response_size = repos.len();
@@ -278,10 +277,9 @@ pub fn run(
                     if repo.is_null() {
                         skipped += 1;
                     } else {
-                        let project_info: ProjectInfo = ProjectInfo::parse_json(repo, ())?;
-                        last_id = project_info.id as u32;
-                        // Write the row in the CSV file.
-                        writeln!(&mut builder, "{}", project_info.to_csv(requests))?;
+                        let project: ProjectInfo = ProjectInfo::parse_json(repo, ())?;
+                        last_id = project.id;
+                        rows.push(project.row(requests));
                     }
                 }
 
@@ -295,9 +293,11 @@ pub fn run(
                 remaining = remaining.map(|x| x.saturating_sub(response_size - skipped));
 
                 // Write the response to the file.
-
-                write!(&mut output_file, "{builder}")
-                    .with_context(|| format!("Could not write to file {output_path}"))?;
+                for row in rows {
+                    output_file
+                        .write_record(row)
+                        .with_context(|| format!("Could not write to file {output_path}"))?;
+                }
 
                 let reached_newest_repository: bool = last_id == previous_last_id;
                 if mode == "linear" && reached_newest_repository {
@@ -316,34 +316,60 @@ pub fn run(
         .with_context(|| format!("Could not write to file {output_path}"))
 }
 
-/// Information about a GitHub project.
+/// Repository columns of the output. The GitHub API does not list the licenses and the commits of repositories.
+const REPO_COLUMNS: [RepoColumn; 3] =
+    [RepoColumn::RepoId, RepoColumn::Source, RepoColumn::RepoName];
+/// Column with whether a repository is a fork (1) or not (0).
+const FORK: &str = "fork";
+/// Column with the number of the request that found a repository.
+const REQUEST_NUMBER: &str = "request_number";
+
+/// A repository listed by the GitHub API.
 struct ProjectInfo {
-    /// Project ID.
-    id: i32,
-    /// Project full name <user/repository>.
+    /// GitHub id.
+    id: u32,
+    /// Full name (`owner/repository`).
     name: String,
-    /// Whether the project is a fork (1) or not (0).
+    /// Whether the repository is a fork (1) or not (0).
     fork: u32,
 }
 
-impl ToCSV for ProjectInfo {
-    /// request number
-    type Key = usize;
-
-    fn header() -> &'static [&'static str] {
-        &["id", "name", "fork", "request_number"]
-    }
-
-    fn to_csv(&self, request_number: Self::Key) -> String {
-        format!("{},{},{},{}", self.id, self.name, self.fork, request_number)
-    }
+/// Returns the header of the output: the repository columns, `url`, `fork` and `request_number`.
+fn header() -> Vec<&'static str> {
+    REPO_COLUMNS
+        .map(RepoColumn::name)
+        .into_iter()
+        .chain([URL, FORK, REQUEST_NUMBER])
+        .collect()
 }
-impl Default for ProjectInfo {
-    fn default() -> Self {
-        Self {
-            id: -1,
-            name: String::new(),
-            fork: 0,
+
+impl ProjectInfo {
+    /// Returns the row of the repository in the output.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_number` - Number of the request that found the repository.
+    fn row(&self, request_number: usize) -> Vec<String> {
+        let repo: Repo = self.repo();
+        REPO_COLUMNS
+            .map(|column| repo.value(column))
+            .into_iter()
+            .chain([
+                repo.url().unwrap_or_default(),
+                self.fork.to_string(),
+                request_number.to_string(),
+            ])
+            .collect()
+    }
+
+    /// Returns the repository, on GitHub.
+    fn repo(&self) -> Repo {
+        Repo {
+            id: Some(self.id),
+            source: Source::GitHub,
+            name: Some(self.name.clone()),
+            license: None,
+            commit: None,
         }
     }
 }
@@ -359,11 +385,7 @@ impl FromGitHub for ProjectInfo {
         let name: String = get_field::<String>(json, "full_name")?;
         let fork: u32 = get_field::<bool>(json, "fork")? as u32;
 
-        Ok(Self {
-            id: id as i32,
-            name,
-            fork,
-        })
+        Ok(Self { id, name, fork })
     }
 }
 
@@ -546,6 +568,35 @@ mod tests {
         delete_file(&id_half, false)?;
         delete_file(&id_full, false)?;
         delete_file(&id_force, false)
+    }
+
+    #[test]
+    fn rows_start_with_the_repository() -> Result<()> {
+        let json = json::parse(r#"{"id": 42, "full_name": "owner/repo", "fork": false}"#)?;
+        let project = ProjectInfo::parse_json(&json, ())?;
+        assert_eq!(
+            header(),
+            vec![
+                "repo_id",
+                "source",
+                "repo_name",
+                "url",
+                "fork",
+                "request_number"
+            ]
+        );
+        assert_eq!(
+            project.row(3),
+            vec![
+                "42",
+                "github",
+                "owner/repo",
+                "https://github.com/owner/repo",
+                "0",
+                "3"
+            ]
+        );
+        Ok(())
     }
 
     #[test]

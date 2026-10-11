@@ -24,6 +24,7 @@ use tracing::info;
 
 use crate::utils::fs::*;
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
+use crate::utils::repo::RepoColumn;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -106,10 +107,11 @@ pub fn run(
     // Reads the CSV file into a DataFrame
     let mut projects: DataFrame = open_csv(
         input_path,
-        Some(Schema::from_iter(vec![Field::new(
-            forks.into(),
-            DataType::UInt32,
-        )])),
+        Some(Schema::from_iter(
+            RepoColumn::fields()
+                .into_iter()
+                .chain([Field::new(forks.into(), DataType::UInt32)]),
+        )),
         None,
     )?;
     let projects_count = projects.height();

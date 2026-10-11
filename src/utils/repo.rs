@@ -219,12 +219,12 @@ impl Repo {
         format!("{OTHER_ERROR_PREFIX} unsupported source {}", self.source)
     }
 
-    /// Returns the value of a column for this repository.
+    /// Returns the value of a column for this repository. Unknown values are empty.
     ///
     /// # Arguments
     ///
     /// * `column` - The column.
-    fn value(&self, column: RepoColumn) -> String {
+    pub fn value(&self, column: RepoColumn) -> String {
         match column {
             RepoColumn::RepoId => self.id.map(|id| id.to_string()).unwrap_or_default(),
             RepoColumn::Source => self.source.to_string(),

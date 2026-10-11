@@ -16,11 +16,14 @@
 use anyhow::Result;
 use clap::{Arg, ArgAction, Command};
 use polars::frame::DataFrame;
+use polars::prelude::Schema;
+use std::iter::FromIterator as _;
 use tracing::info;
 
 use crate::utils::fs::*;
 use crate::utils::logger::log_write_dataframe;
 use crate::utils::logger::{log_output_file, Logger};
+use crate::utils::repo::RepoColumn;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -51,7 +54,7 @@ pub fn cli() -> Command {
                 .long("column")
                 .value_name("COLUMN_NAME")
                 .help("Name of the column to check for duplicates.")
-                .default_value("id"),
+                .default_value(RepoColumn::RepoId.name()),
         )
         .arg(
             Arg::new("force")
@@ -98,7 +101,11 @@ pub fn run(
     check_path(input_path)?;
     log_output_file(output_path, no_output, force)?;
 
-    let mut ids: DataFrame = open_csv(input_path, None, None)?;
+    let mut ids: DataFrame = open_csv(
+        input_path,
+        Some(Schema::from_iter(RepoColumn::fields())),
+        None,
+    )?;
     let ids_count: usize = ids.height();
 
     info!("{} entries found in the file.", ids_count);
@@ -138,11 +145,14 @@ mod tests {
     const INPUT: &str = "tests/data/phases/duplicate_ids/duplicate_ids.csv";
     const EXPECTED: &str = "tests/data/phases/duplicate_ids/duplicate_ids.csv.unique.csv.expected";
 
+    /// Column with the repository ids.
+    const ID: &str = RepoColumn::RepoId.name();
+
     #[test]
     fn test_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_dedup.csv";
         delete_file(output, true)?;
-        run(INPUT, Some(output), "id", false, false, test_logger())?;
+        run(INPUT, Some(output), ID, false, false, test_logger())?;
 
         let expected_df = open_csv(EXPECTED, None, None)?;
         let output_df = open_csv(output, None, None)?;
@@ -154,14 +164,14 @@ mod tests {
 
     #[test]
     fn missing_input_duplicate_ids() {
-        assert!(run("nonexistent.csv", None, "id", false, false, test_logger()).is_err());
+        assert!(run("nonexistent.csv", None, ID, false, false, test_logger()).is_err());
     }
 
     #[test]
     fn output_exists_no_force_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_no_force.csv";
         write_file(output, b"")?;
-        let result = run(INPUT, Some(output), "id", false, false, test_logger());
+        let result = run(INPUT, Some(output), ID, false, false, test_logger());
         delete_file(output, false)?;
         assert!(result.is_err());
         Ok(())
@@ -171,7 +181,7 @@ mod tests {
     fn force_overwrites_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_force.csv";
         write_file(output, b"")?;
-        run(INPUT, Some(output), "id", true, false, test_logger())?;
+        run(INPUT, Some(output), ID, true, false, test_logger())?;
         let expected_df = open_csv(EXPECTED, None, None)?;
         let output_df = open_csv(output, None, None)?;
         assert_eq!(expected_df, output_df);
@@ -181,7 +191,7 @@ mod tests {
     #[test]
     fn no_output_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_no_output.csv";
-        run(INPUT, Some(output), "id", false, true, test_logger())?;
+        run(INPUT, Some(output), ID, false, true, test_logger())?;
         assert!(!std::path::Path::new(output).exists());
         Ok(())
     }
