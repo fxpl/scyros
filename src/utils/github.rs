@@ -125,11 +125,11 @@ pub trait FromGitHub: ToCSV {
         Self: Sized;
 }
 
-/// Returns the link to a Github page, percent-encoding each segment of its path.
+/// Returns the GitHub link to a page. Each segment of its path is percent-encoded.
 ///
 /// # Arguments
 ///
-/// * `segments` - The segments of the path of the page.
+/// * `segments` - Segments of the path of the page.
 pub fn github_url<'a>(segments: impl IntoIterator<Item = &'a str>) -> String {
     // Safe unwraps: the URL is valid and can be a base.
     let mut url: Url = Url::parse("https://github.com").unwrap();
@@ -137,12 +137,13 @@ pub fn github_url<'a>(segments: impl IntoIterator<Item = &'a str>) -> String {
     url.into()
 }
 
-/// Returns the commit in the name of the folder in which the zip archives of GitHub put the files of a repository,
-/// `<owner>-<repository>-<commit>` with the first 7 characters of the commit, or `None` if the name is not of this form.
+/// Returns the commit in the name of the root folder of a GitHub zip archive.
+/// The name is `<owner>-<repository>-<commit>`, with the first 7 characters of the commit.
+/// Returns `None` for other names.
 ///
 /// # Arguments
 ///
-/// * `folder` - The name of the folder.
+/// * `folder` - Name of the folder.
 pub fn zipball_root_commit(folder: &str) -> Option<&str> {
     let (_, commit) = folder.rsplit_once('-')?;
     (commit.len() >= 7 && commit.chars().all(|c| c.is_ascii_hexdigit())).then_some(commit)
