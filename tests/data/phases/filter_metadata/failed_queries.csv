@@ -1,6 +1,6 @@
-id,name,language,created,pushed,updated,fork,disabled,archived,stars,forks,issues,has_issues,watchers_count,subscribers,size,license
-1,owner/pushed_before_created,Rust,1700086400,1700000000,1700086400,1,0,0,0,0,0,1,0,0,10,unknown
-2,http/1.1 404,,0,0,0,0,0,0,0,0,0,0,0,0,0,
-3,error: [28] Timeout was reached,,0,0,0,0,0,0,0,0,0,0,0,0,0,
-4,http/2 451,,0,0,0,0,0,0,0,0,0,0,0,0,0,
-5,owner/ten_days_old,C,1700000000,1700864000,1700864000,0,0,0,0,0,0,1,0,0,10,MIT License
+repo_id,source,repo_name,repo_license,latest_commit,url,language,created,pushed,updated,fork,disabled,archived,stars,forks,issues,has_issues,watchers_count,subscribers,size
+1,github,owner/pushed_before_created,unknown,,https://github.com/owner/pushed_before_created,Rust,1700086400,1700000000,1700086400,1,0,0,0,0,0,1,0,0,10
+2,github,http/1.1 404,,,,,0,0,0,0,0,0,0,0,0,0,0,0,0
+3,github,error: [28] Timeout was reached,,,,,0,0,0,0,0,0,0,0,0,0,0,0,0
+4,github,http/2 451,,,,,0,0,0,0,0,0,0,0,0,0,0,0,0
+5,github,owner/ten_days_old,MIT License,,https://github.com/owner/ten_days_old,C,1700000000,1700864000,1700864000,0,0,0,0,0,0,1,0,0,10

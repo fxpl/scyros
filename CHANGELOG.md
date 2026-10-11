@@ -10,10 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Columns `repo_id`, `source` (`github` or `local`) and `repo_name`, followed by a `url` linking to the repository on GitHub, at the start of the output of `ids`.
+- Repository columns (`repo_id`, `source`, `repo_name`, `repo_license`, `latest_commit`) and a `url` at the start of the output of `metadata`, copied from its input and completed with the license.
+- A `--infer-source` flag for `metadata` to read inputs without a `source` column.
 
 ### Changed
 
 - The `id` and `name` columns of `ids` are renamed `repo_id` and `repo_name`, and `duplicate_ids` uses `repo_id` by default.
+- `metadata` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its `license` column is renamed `repo_license`, and values are quoted instead of having their commas replaced. `filter_metadata` reads the new column names.
 
 ### Fixed
 

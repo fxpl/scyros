@@ -25,6 +25,7 @@ use crate::utils::dataframes;
 use crate::utils::fs::*;
 use crate::utils::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
+use crate::utils::repo::RepoColumn;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -143,29 +144,41 @@ pub fn run(
 
     let mut projects: DataFrame = open_csv(
         input_path,
-        Some(Schema::from_iter(vec![
-            Field::new("id".into(), DataType::UInt32),
-            Field::new("name".into(), DataType::String),
-            Field::new("language".into(), DataType::String),
-            Field::new("created".into(), DataType::UInt64),
-            Field::new("pushed".into(), DataType::UInt64),
-            // Field::new("updated".into(), DataType::UInt64),
-            // Field::new("fork".into(), DataType::UInt32),
-            Field::new("disabled".into(), DataType::UInt32),
-            // Field::new("archived".into(), DataType::UInt32),
-            // Field::new("stars".into(), DataType::UInt32),
-            // Field::new("forks".into(), DataType::UInt32),
-            // Field::new("issues".into(), DataType::UInt32),
-            // Field::new("has_issues".into(), DataType::UInt32),
-            // Field::new("watchers_count".into(), DataType::UInt32),
-            // Field::new("subscribers".into(), DataType::UInt32),
-            Field::new("size".into(), DataType::UInt64),
-            // Field::new("license".into(), DataType::String),
-        ])),
+        Some(Schema::from_iter(RepoColumn::fields().into_iter().chain(
+            vec![
+                Field::new("language".into(), DataType::String),
+                Field::new("created".into(), DataType::UInt64),
+                Field::new("pushed".into(), DataType::UInt64),
+                // Field::new("updated".into(), DataType::UInt64),
+                // Field::new("fork".into(), DataType::UInt32),
+                Field::new("disabled".into(), DataType::UInt32),
+                // Field::new("archived".into(), DataType::UInt32),
+                // Field::new("stars".into(), DataType::UInt32),
+                // Field::new("forks".into(), DataType::UInt32),
+                // Field::new("issues".into(), DataType::UInt32),
+                // Field::new("has_issues".into(), DataType::UInt32),
+                // Field::new("watchers_count".into(), DataType::UInt32),
+                // Field::new("subscribers".into(), DataType::UInt32),
+                Field::new("size".into(), DataType::UInt64),
+            ],
+        ))),
         None,
     )?;
 
-    ensure!(dataframes::has_columns(&projects, ["id", "name", "language", "created", "pushed", "disabled", "size"]), "Input file must contain the following columns: id, name, language, created, pushed, disabled, size");
+    let required: [&str; 7] = [
+        RepoColumn::RepoId.name(),
+        RepoColumn::RepoName.name(),
+        "language",
+        "created",
+        "pushed",
+        "disabled",
+        "size",
+    ];
+    ensure!(
+        dataframes::has_columns(&projects, required),
+        "Input file must contain the following columns: {}",
+        required.join(", ")
+    );
 
     let projects_count = projects.height();
 
@@ -174,10 +187,12 @@ pub fn run(
     projects = projects
         .lazy()
         .filter(
-            col("name")
+            col(RepoColumn::RepoName.name())
                 .str()
                 .starts_with(lit(HTTP_ERROR_PREFIX))
-                .or(col("name").str().starts_with(lit(OTHER_ERROR_PREFIX)))
+                .or(col(RepoColumn::RepoName.name())
+                    .str()
+                    .starts_with(lit(OTHER_ERROR_PREFIX)))
                 .not(),
         )
         .with_column(
@@ -396,7 +411,7 @@ mod tests {
         let output_df = open_csv(output, None, None)?;
 
         ensure!(
-            expected_df.equals(&output_df),
+            expected_df.equals_missing(&output_df),
             "Filtered DataFrame does not match expected result."
         );
 
@@ -423,14 +438,17 @@ mod tests {
         let output_df = open_csv(
             output,
             Some(Schema::from_iter(vec![
-                Field::new("id".into(), DataType::UInt32),
+                Field::new(RepoColumn::RepoId.name().into(), DataType::UInt32),
                 Field::new("age".into(), DataType::UInt32),
             ])),
-            Some(vec!["id", "age"]),
+            Some(vec![RepoColumn::RepoId.name(), "age"]),
         )?;
         delete_file(output, false)?;
 
-        assert_eq!(dataframes::u32(&output_df, "id")?, vec![1, 5]);
+        assert_eq!(
+            dataframes::u32(&output_df, RepoColumn::RepoId.name())?,
+            vec![1, 5]
+        );
         assert_eq!(dataframes::u32(&output_df, "age")?, vec![0, 10]);
         Ok(())
     }
@@ -489,7 +507,7 @@ mod tests {
         let expected_df = open_csv(EXPECTED, None, None)?;
         let output_df = open_csv(output, None, None)?;
         ensure!(
-            expected_df.equals(&output_df),
+            expected_df.equals_missing(&output_df),
             "Overwritten output does not match expected."
         );
         delete_file(output, false)
