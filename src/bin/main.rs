@@ -141,10 +141,10 @@ fn main() {
                                     cli_subargs.get_one::<String>("cache"),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     cli_subargs.get_flag("force"),
-                                    cli_subargs.get_one::<String>("ids").unwrap(),
-                                    cli_subargs.get_one::<String>("names").unwrap(),
+                                    cli_subargs.get_flag("infer-source"),
                                     cli_subargs.get_one::<usize>("sub").copied(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
+                                    &renames(cli_subargs),
                                     &logger,
                                 )
                             } else if subcommand == filter_languages::cli().get_name() {
@@ -154,6 +154,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("languages").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
+                                    &renames(cli_subargs),
                                     &logger,
                                 )
                             } else if subcommand == download::cli().get_name() {

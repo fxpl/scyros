@@ -22,10 +22,14 @@ use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IdxCa, IntoLazy, Schema};
 use tracing::info;
 
+use crate::utils::dataframes::require_columns;
 use crate::utils::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 use crate::utils::regex::KeywordFiles;
+use crate::utils::repo::RepoColumn;
 use crate::utils::{dataframes, fs::*};
+
+use super::rename_arg;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -76,6 +80,7 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(vec!["output", "force"]),
         )
+        .arg(rename_arg())
 }
 
 /// Entrypoint of the program
@@ -87,6 +92,7 @@ pub fn cli() -> Command {
 /// * `languages_path` - The path to the JSON file storing the languages to keep.
 /// * `force` - Whether to override the output file if it already exists.
 /// * `no_output` - Whether to write the output file.
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - The logger displaying the progress.
 ///
 /// # Returns
@@ -98,6 +104,7 @@ pub fn run(
     languages_path: &str,
     force: bool,
     no_output: bool,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     let default_output_path = format!("{input_path}.filtered_lang.csv");
@@ -117,14 +124,18 @@ pub fn run(
 
     let mut projects: DataFrame = open_csv(
         input_path,
-        Some(Schema::from_iter(vec![
-            Field::new("id".into(), DataType::UInt32),
-            Field::new("name".into(), DataType::String),
-            Field::new("languages".into(), DataType::String),
-            Field::new("latest_commit".into(), DataType::String),
-        ])),
+        Some(Schema::from_iter(
+            RepoColumn::fields()
+                .into_iter()
+                .chain([Field::new("languages".into(), DataType::String)]),
+        )),
         None,
-        &[],
+        renames,
+    )?;
+    require_columns(
+        &projects,
+        input_path,
+        &[RepoColumn::RepoName.name(), "languages"],
     )?;
     let projects_count = projects.height();
 
@@ -132,10 +143,12 @@ pub fn run(
     projects = projects
         .lazy()
         .filter(
-            col("name")
+            col(RepoColumn::RepoName.name())
                 .str()
                 .starts_with(lit(HTTP_ERROR_PREFIX))
-                .or(col("name").str().starts_with(lit(OTHER_ERROR_PREFIX)))
+                .or(col(RepoColumn::RepoName.name())
+                    .str()
+                    .starts_with(lit(OTHER_ERROR_PREFIX)))
                 .not(),
         )
         .with_column(col("languages").fill_null(lit("")))
@@ -214,7 +227,7 @@ mod tests {
     fn test_filter_languages() -> Result<()> {
         let output = "tests/data/phases/filter_languages/out_filter.csv";
         delete_file(output, true)?;
-        run(INPUT, Some(output), LANGS, false, false, test_logger())?;
+        run(INPUT, Some(output), LANGS, false, false, &[], test_logger())?;
 
         let expected_df = open_csv(EXPECTED, None, None, &[])?;
         let output_df = open_csv(output, None, None, &[])?;
@@ -229,14 +242,23 @@ mod tests {
 
     #[test]
     fn missing_input_filter_languages() {
-        assert!(run("nonexistent.csv", None, LANGS, false, false, test_logger()).is_err());
+        assert!(run(
+            "nonexistent.csv",
+            None,
+            LANGS,
+            false,
+            false,
+            &[],
+            test_logger()
+        )
+        .is_err());
     }
 
     #[test]
     fn output_exists_no_force_filter_languages() -> Result<()> {
         let output = "tests/data/phases/filter_languages/out_no_force.csv";
         write_file(output, b"")?;
-        let result = run(INPUT, Some(output), LANGS, false, false, test_logger());
+        let result = run(INPUT, Some(output), LANGS, false, false, &[], test_logger());
         delete_file(output, false)?;
         assert!(result.is_err());
         Ok(())
@@ -246,7 +268,7 @@ mod tests {
     fn force_overwrites_filter_languages() -> Result<()> {
         let output = "tests/data/phases/filter_languages/out_force.csv";
         write_file(output, b"")?;
-        run(INPUT, Some(output), LANGS, true, false, test_logger())?;
+        run(INPUT, Some(output), LANGS, true, false, &[], test_logger())?;
         let expected_df = open_csv(EXPECTED, None, None, &[])?;
         let output_df = open_csv(output, None, None, &[])?;
         ensure!(
@@ -259,7 +281,7 @@ mod tests {
     #[test]
     fn no_output_filter_languages() -> Result<()> {
         let output = "tests/data/phases/filter_languages/out_no_output.csv";
-        run(INPUT, Some(output), LANGS, false, true, test_logger())?;
+        run(INPUT, Some(output), LANGS, false, true, &[], test_logger())?;
         assert!(!std::path::Path::new(output).exists());
         Ok(())
     }
