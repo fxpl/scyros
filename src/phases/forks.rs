@@ -14,14 +14,14 @@
 
 #![doc = include_str!("../docs/forks.md")]
 
-use std::iter::FromIterator;
-
 use anyhow::{ensure, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IntoLazy, Schema};
 use tracing::info;
 
+use super::rename_arg;
+use crate::utils::dataframes::require_columns;
 use crate::utils::fs::*;
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 use crate::utils::repo::RepoColumn;
@@ -72,6 +72,7 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(vec!["output", "force"]),
         )
+        .arg(rename_arg())
 }
 
 /// Discards forks from a CSV file.
@@ -82,6 +83,7 @@ pub fn cli() -> Command {
 /// * `output_path` - The optional path to the output CSV file. Defaults to the input path with ".non-forks.csv" appended.
 /// * `force` - Whether to override the output file if it already exists.
 /// * `no_output` - Whether to skip writing the output file.
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - The logger displaying the progress.
 ///
 /// # Returns
@@ -93,6 +95,7 @@ pub fn run(
     forks: &str,
     force: bool,
     no_output: bool,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     let default_output_path = format!("{input_path}.non-forks.csv");
@@ -113,7 +116,9 @@ pub fn run(
                 .chain([Field::new(forks.into(), DataType::UInt32)]),
         )),
         None,
+        renames,
     )?;
+    require_columns(&projects, input_path, &[forks])?;
     let projects_count = projects.height();
 
     info!("{} entries found in the file.", projects_count);
@@ -168,7 +173,15 @@ mod tests {
         let input = "tests/data/phases/forks/missing_fork_values.csv";
         let output = "tests/data/phases/forks/out_missing_fork_values.csv";
         write_file(input, b"id,name,fork\n1,a/b,0\n2,c/d,\n")?;
-        let result = run(input, Some(output), "fork", false, false, test_logger());
+        let result = run(
+            input,
+            Some(output),
+            "fork",
+            false,
+            false,
+            &[],
+            test_logger(),
+        );
         delete_file(input, false)?;
         delete_file(output, true)?;
         ensure!(result.is_err_and(|e| e.to_string().contains("no value")));
@@ -179,10 +192,18 @@ mod tests {
     fn remove_forks() -> Result<()> {
         let output = "tests/data/phases/forks/out_remove_forks.csv";
         delete_file(output, true)?;
-        run(INPUT, Some(output), "fork", false, false, test_logger())?;
+        run(
+            INPUT,
+            Some(output),
+            "fork",
+            false,
+            false,
+            &[],
+            test_logger(),
+        )?;
 
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
 
         ensure!(
             expected_df.equals(&output_df),
@@ -194,14 +215,31 @@ mod tests {
 
     #[test]
     fn missing_input_forks() {
-        assert!(run("nonexistent.csv", None, "fork", false, false, test_logger()).is_err());
+        assert!(run(
+            "nonexistent.csv",
+            None,
+            "fork",
+            false,
+            false,
+            &[],
+            test_logger()
+        )
+        .is_err());
     }
 
     #[test]
     fn output_exists_no_force_forks() -> Result<()> {
         let output = "tests/data/phases/forks/out_no_force.csv";
         write_file(output, b"")?;
-        let result = run(INPUT, Some(output), "fork", false, false, test_logger());
+        let result = run(
+            INPUT,
+            Some(output),
+            "fork",
+            false,
+            false,
+            &[],
+            test_logger(),
+        );
         delete_file(output, false)?;
         assert!(result.is_err());
         Ok(())
@@ -211,9 +249,9 @@ mod tests {
     fn force_overwrites_forks() -> Result<()> {
         let output = "tests/data/phases/forks/out_force.csv";
         write_file(output, b"")?;
-        run(INPUT, Some(output), "fork", true, false, test_logger())?;
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        run(INPUT, Some(output), "fork", true, false, &[], test_logger())?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
         ensure!(
             expected_df.equals(&output_df),
             "Overwritten output does not match expected."
@@ -224,7 +262,7 @@ mod tests {
     #[test]
     fn no_output_forks() -> Result<()> {
         let output = "tests/data/phases/forks/out_no_output.csv";
-        run(INPUT, Some(output), "fork", false, true, test_logger())?;
+        run(INPUT, Some(output), "fork", false, true, &[], test_logger())?;
         assert!(!std::path::Path::new(output).exists());
         Ok(())
     }
@@ -238,6 +276,7 @@ mod tests {
             "nonexistent_col",
             false,
             false,
+            &[],
             test_logger(),
         );
         delete_file(output, true)?;

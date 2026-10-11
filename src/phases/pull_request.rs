@@ -167,6 +167,7 @@ pub fn run(
                 Field::new(names.into(), DataType::String),
             ])),
             Some(vec![ids, names]),
+            &[],
         )
     })?;
 
@@ -672,14 +673,14 @@ mod tests {
         )?;
 
         for pr_path in pr_paths {
-            let pr_discussion = open_csv(pr_path, None, None)?;
-            let pr_discussion_expected = open_csv(&format!("{pr_path}.expected"), None, None)?;
+            let pr_discussion = open_csv(pr_path, None, None, &[])?;
+            let pr_discussion_expected = open_csv(&format!("{pr_path}.expected"), None, None, &[])?;
             assert_eq!(pr_discussion, pr_discussion_expected);
             delete_file(pr_path, false)?;
         }
 
-        let output_df = open_csv(output_file, None, None)?;
-        let expected_df = open_csv(&format!("{output_file}.expected"), None, None)?;
+        let output_df = open_csv(output_file, None, None, &[])?;
+        let expected_df = open_csv(&format!("{output_file}.expected"), None, None, &[])?;
         assert_eq!(expected_df, output_df);
         delete_file(output_file, false)
     }

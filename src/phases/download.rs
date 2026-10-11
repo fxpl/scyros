@@ -247,6 +247,7 @@ pub fn run(
             } else {
                 vec!["id", "name", "latest_commit"]
             }),
+            &[],
         )
     })?;
 

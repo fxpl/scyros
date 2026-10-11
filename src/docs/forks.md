@@ -3,5 +3,7 @@ The file must contain a column (by default 'fork', see --column) whose value is 
 Prints statistics about the number of forks found in the file and writes the non-forked projects to a new CSV file.
 By default, the output file name is the same as the input file name with ".non-forks.csv" appended.
 
+Columns of the input can be read under other names with --rename OLD=NEW, for example --rename id=repo_id.
+
 Output CSV file format:
   * Same columns as the input file

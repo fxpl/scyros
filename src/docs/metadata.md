@@ -12,6 +12,8 @@ If a repository cannot be queried, for example because it was deleted or turned 
 
 If the program is interrupted, it can be restarted and will resume from where it left off. Optionally, the output of a previous run with the same columns can be used as a cache to avoid repeating requests.
 
+Columns of the input can be read under other names with --rename OLD=NEW, for example --rename id=repo_id.
+
 Output CSV file format:
   * repo_id: repository ID;
   * source: where the repository comes from;

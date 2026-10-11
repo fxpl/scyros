@@ -8,6 +8,8 @@ Repositories can be filtered using the following criteria:
   *  Non-code: repositories that do not contain source code can be excluded (for example, repositories containing only documentation, data, or binary files).
 The filtered metadata are written to a new CSV file. By default, the output file name is the input file name with the suffix '.filtered.csv'.
 
+Columns of the input can be read under other names with --rename OLD=NEW, for example --rename id=repo_id.
+
 Output CSV file format:
   * all columns from the input file except 'created' and 'pushed', which are replaced by:
   * age: repository age in days, computed as the difference between the last push and the repository creation date, or 0 if the last push is earlier than the creation date;

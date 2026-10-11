@@ -161,6 +161,7 @@ pub fn run(
                     Field::new(REQUEST_NUMBER.into(), DataType::UInt32),
                 ]))),
                 Some(vec![RepoColumn::RepoId.name(), REQUEST_NUMBER]),
+                &[],
             )
         })?;
         let last_id: Option<u32> = dataframes::u32(&input_df, RepoColumn::RepoId.name())?

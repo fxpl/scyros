@@ -17,7 +17,7 @@
 use anyhow::{bail, Context, Error, Result};
 use pathdiff::diff_paths;
 use polars::io::SerWriter;
-use polars::prelude::{CsvReadOptions, CsvWriter, Schema};
+use polars::prelude::{CsvReadOptions, CsvWriter, Field, Schema};
 use polars::{frame::DataFrame, io::SerReader};
 use walkdir::WalkDir;
 
@@ -217,25 +217,58 @@ pub fn write_file(path: impl AsRef<Path>, content: impl AsRef<[u8]>) -> Result<(
 ///   The columns of the CSV file that are not in the schema will be read with an inferred data type.
 /// * `columns` - A list of column names to read from the CSV file. If None, reads all columns.
 ///   The columns of the DataFrame are in the order of this list, whatever their order in the file.
+/// * `renames` - The (old name, new name) pairs of the columns to rename. `schema` and `columns` use the new names.
 ///
 /// # Returns
-/// A DataFrame containing the data from the CSV file or an error if the file could not be read or if the data could not be parsed according to the schema.
+/// A DataFrame containing the data from the CSV file or an error if the file could not be read, if the data could not be parsed according to the schema,
+/// or if the file has no column to rename.
 pub fn open_csv(
     path: &str,
     schema: Option<Schema>,
     columns: Option<Vec<&str>>,
+    renames: &[(String, String)],
 ) -> Result<DataFrame, Error> {
-    let df: DataFrame = CsvReadOptions::default()
-        .with_columns(
-            columns
-                .as_ref()
-                .map(|cols| Arc::from(cols.iter().map(|&s| s.into()).collect::<Vec<_>>())),
+    // The file has the old names of the renamed columns.
+    let name_in_file = |name: &str| -> String {
+        renames
+            .iter()
+            .find(|(_, new)| new == name)
+            .map_or(name, |(old, _)| old.as_str())
+            .to_string()
+    };
+    let schema: Option<Schema> = schema.map(|schema| {
+        Schema::from_iter(
+            schema
+                .iter()
+                .map(|(name, dtype)| Field::new(name_in_file(name).into(), dtype.clone())),
         )
+    });
+    let mut df: DataFrame = CsvReadOptions::default()
+        .with_columns(columns.as_ref().map(|cols| {
+            Arc::from(
+                cols.iter()
+                    .map(|col| name_in_file(col).into())
+                    .collect::<Vec<_>>(),
+            )
+        }))
         .with_schema_overwrite(schema.map(Arc::new))
         .with_has_header(true)
         .into_reader_with_file_handle(BufReader::new(open_file(path, FileMode::Read)?))
         .finish()
         .with_context(|| format!("Could not read {path}"))?;
+    let file_columns: String = df
+        .get_column_names()
+        .iter()
+        .map(|name| name.as_str())
+        .collect::<Vec<&str>>()
+        .join(", ");
+    // Only the selected columns were read.
+    let read = |name: &str| columns.as_ref().is_none_or(|cols| cols.contains(&name));
+    for (old, new) in renames.iter().filter(|(_, new)| read(new)) {
+        df.rename(old, new.as_str().into()).with_context(|| {
+            format!("Could not read the column '{old}' of {path} as '{new}'. The file has the columns {file_columns}.")
+        })?;
+    }
     match columns {
         Some(cols) => df
             .select(cols)
@@ -421,6 +454,50 @@ mod io_tests {
     use super::*;
 
     #[test]
+    fn renamed_columns_keep_their_types() -> Result<()> {
+        let path = "tests/data/open_csv_renamed_columns.csv";
+        write_file(path, "id,commit\n1,0123456\n")?;
+        let renames = [
+            ("id".to_string(), "repo_id".to_string()),
+            ("commit".to_string(), "latest_commit".to_string()),
+        ];
+        let fields = vec![
+            Field::new("repo_id".into(), polars::prelude::DataType::UInt32),
+            Field::new("latest_commit".into(), polars::prelude::DataType::String),
+        ];
+        let df = open_csv(
+            path,
+            Some(Schema::from_iter(fields.clone())),
+            None,
+            &renames,
+        );
+        let selected = open_csv(
+            path,
+            Some(Schema::from_iter(fields.clone())),
+            Some(vec!["latest_commit"]),
+            &renames,
+        );
+        let unknown = open_csv(
+            path,
+            Some(Schema::from_iter(fields)),
+            None,
+            &[("ident".to_string(), "x".to_string())],
+        );
+        delete_file(path, false)?;
+        let df = df?;
+        assert_eq!(crate::utils::dataframes::u32(&df, "repo_id")?, vec![1]);
+        // A commit made of digits stays a string, with its leading zero.
+        assert_eq!(
+            crate::utils::dataframes::str(&df, "latest_commit")?,
+            vec!["0123456"]
+        );
+        // Columns are selected by their new names.
+        assert_eq!(selected?.get_column_names(), ["latest_commit"]);
+        ensure!(unknown.is_err_and(|e| e.to_string().contains("has the columns id, commit")));
+        Ok(())
+    }
+
+    #[test]
     fn read_file_test() -> Result<()> {
         let file = open_file("tests/data/non_existent_file.txt", FileMode::Read);
         ensure!(file.is_err());
@@ -444,7 +521,12 @@ mod io_tests {
 
     #[test]
     fn open_csv_keeps_requested_column_order() -> Result<()> {
-        let df = open_csv("tests/data/small_file.csv", None, Some(vec!["name", "id"]))?;
+        let df = open_csv(
+            "tests/data/small_file.csv",
+            None,
+            Some(vec!["name", "id"]),
+            &[],
+        )?;
         assert_eq!(df.get_column_names(), ["name", "id"]);
         Ok(())
     }

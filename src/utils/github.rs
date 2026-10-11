@@ -43,6 +43,7 @@ pub fn read_tokens(file_path: &str) -> Result<Vec<String>> {
             DataType::String,
         )])),
         Some(vec!["token"]),
+        &[],
     )
     .with_context(|| format!("Invalid token file {file_path}"))?;
 

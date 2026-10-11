@@ -251,6 +251,7 @@ pub fn run(
             Field::new("name".into(), DataType::String),
         ])),
         Some(vec!["id", "name"]),
+        &[],
     )?;
 
     let n_files_before = input_file.height();
@@ -1596,7 +1597,7 @@ mod tests {
         write_out: bool,
         should_pass: bool,
     ) -> Result<()> {
-        let input_df = open_csv(input_file_path, None, None)?;
+        let input_df = open_csv(input_file_path, None, None, &[])?;
         ensure!(
             has_column(&input_df, "name"),
             "Input dataframe must have a 'name' column"
@@ -1633,7 +1634,7 @@ mod tests {
                 test_logger(),
             )?;
 
-            let logs_df = open_csv(&logs_file_path, None, None)?;
+            let logs_df = open_csv(&logs_file_path, None, None, &[])?;
             ensure!(
                 has_column(&logs_df, "name"),
                 "Logs dataframe must have a 'name' column"
@@ -1646,6 +1647,7 @@ mod tests {
                 &format!("{input_file_path}.function_logs.csv.expected"),
                 None,
                 None,
+                &[],
             )?;
             ensure!(
                 has_column(&expected_logs_df, "name"),
@@ -1656,7 +1658,7 @@ mod tests {
                 .unwrap();
             assert_eq!(sorted_expected_logs_df, sorted_logs_df);
 
-            let output_df = open_csv(&output_file_path, None, None)?;
+            let output_df = open_csv(&output_file_path, None, None, &[])?;
             ensure!(
                 has_column(&output_df, "path"),
                 "Output dataframe must have a 'path' column"
@@ -1664,7 +1666,8 @@ mod tests {
 
             if write_out {
                 let sorted_output_df = output_df.sort(vec!["path"], SortMultipleOptions::new())?;
-                let expected_df = open_csv(&format!("{output_file_path}.expected"), None, None)?;
+                let expected_df =
+                    open_csv(&format!("{output_file_path}.expected"), None, None, &[])?;
                 ensure!(
                     has_column(&expected_df, "path"),
                     "Expected dataframe must have a 'path' column"
@@ -1696,8 +1699,12 @@ mod tests {
             } else {
                 let sorted_output_df =
                     output_df.sort(vec!["path", "name"], SortMultipleOptions::new())?;
-                let expected_df =
-                    open_csv(&format!("{output_file_path}.count.expected"), None, None)?;
+                let expected_df = open_csv(
+                    &format!("{output_file_path}.count.expected"),
+                    None,
+                    None,
+                    &[],
+                )?;
                 ensure!(
                     has_column(&expected_df, "path"),
                     "Expected dataframe must have a 'path' column"

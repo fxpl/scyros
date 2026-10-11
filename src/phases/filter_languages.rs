@@ -124,6 +124,7 @@ pub fn run(
             Field::new("latest_commit".into(), DataType::String),
         ])),
         None,
+        &[],
     )?;
     let projects_count = projects.height();
 
@@ -215,8 +216,8 @@ mod tests {
         delete_file(output, true)?;
         run(INPUT, Some(output), LANGS, false, false, test_logger())?;
 
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
 
         ensure!(
             expected_df.equals(&output_df),
@@ -246,8 +247,8 @@ mod tests {
         let output = "tests/data/phases/filter_languages/out_force.csv";
         write_file(output, b"")?;
         run(INPUT, Some(output), LANGS, true, false, test_logger())?;
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
         ensure!(
             expected_df.equals(&output_df),
             "Overwritten output does not match expected."

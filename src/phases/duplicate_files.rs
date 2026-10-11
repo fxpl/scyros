@@ -192,6 +192,7 @@ pub fn run(
             Field::new("words".into(), DataType::UInt32),
         ])),
         None,
+        &[],
     )?;
 
     ensure!(
@@ -2807,9 +2808,9 @@ mod tests {
             test_logger(),
         )?;
 
-        let expected_df = open_csv(&format!("{default_output_path}.expected"), None, None)?;
+        let expected_df = open_csv(&format!("{default_output_path}.expected"), None, None, &[])?;
 
-        let output_df = open_csv(&default_output_path, None, None)?;
+        let output_df = open_csv(&default_output_path, None, None, &[])?;
 
         let sorted_expected_df = expected_df.sort(vec!["name"], SortMultipleOptions::new())?;
         let sorted_output_df = output_df.sort(vec!["name"], SortMultipleOptions::new())?;
@@ -2817,9 +2818,9 @@ mod tests {
 
         delete_file(&default_output_path, false)?;
 
-        let expected_map = open_csv(&format!("{default_map_path}.expected"), None, None)?;
+        let expected_map = open_csv(&format!("{default_map_path}.expected"), None, None, &[])?;
 
-        let map_df = open_csv(&default_map_path, None, None)?;
+        let map_df = open_csv(&default_map_path, None, None, &[])?;
 
         let sorted_expected_map = expected_map.sort(vec!["name"], SortMultipleOptions::new())?;
         let sorted_map_df = map_df.sort(vec!["name"], SortMultipleOptions::new())?;
@@ -2871,8 +2872,9 @@ mod tests {
                     DataType::UInt32,
                 )])),
                 None,
+                &[],
             )?,
-            open_csv(&map_path, None, None)?,
+            open_csv(&map_path, None, None, &[])?,
         ))
     }
 
@@ -2965,8 +2967,8 @@ mod tests {
             test_logger(),
         )?;
 
-        let map_df = open_csv(&map, None, None)?;
-        let unique_df = open_csv(&output, None, None)?;
+        let map_df = open_csv(&map, None, None, &[])?;
+        let unique_df = open_csv(&output, None, None, &[])?;
 
         // Every input file is still accounted for in the map.
         assert_eq!(map_df.height(), 6);
@@ -3062,8 +3064,8 @@ mod tests {
             "name",
             test_logger(),
         )?;
-        let expected_df = open_csv(&format!("{input}.unique.csv.expected"), None, None)?;
-        let output_df = open_csv(&output, None, None)?;
+        let expected_df = open_csv(&format!("{input}.unique.csv.expected"), None, None, &[])?;
+        let output_df = open_csv(&output, None, None, &[])?;
         let sorted_expected = expected_df.sort(vec!["name"], SortMultipleOptions::new())?;
         let sorted_output = output_df.sort(vec!["name"], SortMultipleOptions::new())?;
         assert_eq!(sorted_expected, sorted_output);

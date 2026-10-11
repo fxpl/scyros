@@ -14,6 +14,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
+use scyros::phases::renames;
 use scyros::phases::{
     download, duplicate_files, duplicate_ids, filter_languages, filter_metadata, forks, ids,
     languages, metadata, parse, pull_request,
@@ -92,6 +93,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("column").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
+                                    &renames(cli_subargs),
                                     &logger
                                 )
                             } else if subcommand == forks::cli().get_name() {
@@ -101,6 +103,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("column").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
+                                    &renames(cli_subargs),
                                     &logger
                                 )
                             } else if subcommand == metadata::cli().get_name() {
@@ -114,6 +117,7 @@ fn main() {
                                     cli_subargs.get_flag("infer-source"),
                                     cli_subargs.get_one::<usize>("sub").copied(),
                                     *cli_subargs.get_one::<usize>("threads").unwrap(),
+                                    &renames(cli_subargs),
                                     &logger,
                                 )
                             } else if subcommand == filter_metadata::cli().get_name() {
@@ -126,6 +130,7 @@ fn main() {
                                     cli_subargs.get_flag("non-code"),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("no-output"),
+                                    &renames(cli_subargs),
                                     &logger,
                                 )
                             } else if subcommand == languages::cli().get_name() {

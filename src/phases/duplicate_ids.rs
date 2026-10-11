@@ -17,9 +17,10 @@ use anyhow::Result;
 use clap::{Arg, ArgAction, Command};
 use polars::frame::DataFrame;
 use polars::prelude::Schema;
-use std::iter::FromIterator as _;
 use tracing::info;
 
+use super::rename_arg;
+use crate::utils::dataframes::require_columns;
 use crate::utils::fs::*;
 use crate::utils::logger::log_write_dataframe;
 use crate::utils::logger::{log_output_file, Logger};
@@ -71,6 +72,7 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(vec!["output", "force"]),
         )
+        .arg(rename_arg())
 }
 
 /// Discards duplicate entries from a CSV file.
@@ -82,6 +84,7 @@ pub fn cli() -> Command {
 /// * `column` - The name of the column to check for duplicates.
 /// * `force` - Whether to override the output file if it already exists.
 /// * `no_output` - Whether to skip writing the output file.
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - The logger displaying the progress.
 ///
 /// # Returns
@@ -93,6 +96,7 @@ pub fn run(
     column: &str,
     force: bool,
     no_output: bool,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     let default_output_path = format!("{input_path}.unique.csv");
@@ -105,7 +109,9 @@ pub fn run(
         input_path,
         Some(Schema::from_iter(RepoColumn::fields())),
         None,
+        renames,
     )?;
+    require_columns(&ids, input_path, &[column])?;
     let ids_count: usize = ids.height();
 
     info!("{} entries found in the file.", ids_count);
@@ -152,10 +158,10 @@ mod tests {
     fn test_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_dedup.csv";
         delete_file(output, true)?;
-        run(INPUT, Some(output), ID, false, false, test_logger())?;
+        run(INPUT, Some(output), ID, false, false, &[], test_logger())?;
 
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
 
         assert_eq!(expected_df, output_df);
 
@@ -164,14 +170,23 @@ mod tests {
 
     #[test]
     fn missing_input_duplicate_ids() {
-        assert!(run("nonexistent.csv", None, ID, false, false, test_logger()).is_err());
+        assert!(run(
+            "nonexistent.csv",
+            None,
+            ID,
+            false,
+            false,
+            &[],
+            test_logger()
+        )
+        .is_err());
     }
 
     #[test]
     fn output_exists_no_force_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_no_force.csv";
         write_file(output, b"")?;
-        let result = run(INPUT, Some(output), ID, false, false, test_logger());
+        let result = run(INPUT, Some(output), ID, false, false, &[], test_logger());
         delete_file(output, false)?;
         assert!(result.is_err());
         Ok(())
@@ -181,9 +196,9 @@ mod tests {
     fn force_overwrites_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_force.csv";
         write_file(output, b"")?;
-        run(INPUT, Some(output), ID, true, false, test_logger())?;
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        run(INPUT, Some(output), ID, true, false, &[], test_logger())?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
         assert_eq!(expected_df, output_df);
         delete_file(output, false)
     }
@@ -191,7 +206,7 @@ mod tests {
     #[test]
     fn no_output_duplicate_ids() -> Result<()> {
         let output = "tests/data/phases/duplicate_ids/out_no_output.csv";
-        run(INPUT, Some(output), ID, false, true, test_logger())?;
+        run(INPUT, Some(output), ID, false, true, &[], test_logger())?;
         assert!(!std::path::Path::new(output).exists());
         Ok(())
     }
@@ -205,6 +220,7 @@ mod tests {
             "nonexistent_col",
             false,
             false,
+            &[],
             test_logger(),
         );
         delete_file(output, true)?;

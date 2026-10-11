@@ -14,7 +14,7 @@
 
 //! Utility functions for working with DataFrames.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use polars::frame::DataFrame;
 use polars::prelude::Column;
 
@@ -97,6 +97,49 @@ pub fn has_column(df: &DataFrame, column: &str) -> bool {
     has_columns(df, [column])
 }
 
+/// Returns an error if a DataFrame read from a file does not have some columns.
+/// The error lists the missing columns and the columns of the file, and explains how to rename them.
+///
+/// # Arguments
+/// * `df` - The DataFrame.
+/// * `path` - The path to the file, for the error message.
+/// * `required` - The columns the DataFrame must have.
+pub fn require_columns(df: &DataFrame, path: &str, required: &[&str]) -> Result<()> {
+    let missing: Vec<&str> = required
+        .iter()
+        .copied()
+        .filter(|column| !has_column(df, column))
+        .collect();
+    let Some(first) = missing.first() else {
+        return Ok(());
+    };
+    let columns: Vec<&str> = df.get_column_names().iter().map(|s| s.as_str()).collect();
+    bail!(
+        "{path} has no {} {}.\n\
+         The command reads the {} {}, and the file has the columns {}.\n\
+         Rename the columns of the file, or read them under other names with --rename OLD=NEW, \
+         for example --rename <column of the file>={first}.",
+        plural("column", missing.len()),
+        missing.join(", "),
+        plural("column", required.len()),
+        required.join(", "),
+        columns.join(", ")
+    )
+}
+
+/// Returns a word followed by an `s` if there are several things.
+///
+/// # Arguments
+/// * `word` - The word.
+/// * `count` - The number of things.
+fn plural(word: &str, count: usize) -> String {
+    if count == 1 {
+        word.to_string()
+    } else {
+        format!("{word}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +157,23 @@ mod tests {
         let df = df!("id" => [1u32, 2], "name" => ["a", "b"])?;
         assert_eq!(u32(&df, "id")?, vec![1, 2]);
         assert_eq!(str(&df, "name")?, vec!["a", "b"]);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_columns_are_explained() -> Result<()> {
+        let df = df!("id" => [1u32], "name" => ["a"])?;
+        require_columns(&df, "in.csv", &["id"])?;
+        let one = require_columns(&df, "in.csv", &["repo_id"])
+            .unwrap_err()
+            .to_string();
+        ensure!(one.contains("in.csv has no column repo_id."));
+        ensure!(one.contains("reads the column repo_id, and the file has the columns id, name"));
+        ensure!(one.contains("--rename <column of the file>=repo_id"));
+        let two = require_columns(&df, "in.csv", &["repo_id", "source"])
+            .unwrap_err()
+            .to_string();
+        ensure!(two.contains("has no columns repo_id, source."));
         Ok(())
     }
 }

@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::iter::FromIterator;
 use std::vec;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result};
 use clap::{value_parser, Arg, ArgAction, Command};
 use polars::frame::DataFrame;
 use polars::prelude::{col, cols, lit, when, DataType, Field, IntoLazy, Schema};
 use tracing::info;
 
-use crate::utils::dataframes;
+use super::rename_arg;
+use crate::utils::dataframes::require_columns;
 use crate::utils::fs::*;
 use crate::utils::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
@@ -104,6 +104,7 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(vec!["output", "force"]),
         )
+        .arg(rename_arg())
 }
 
 /// Filters out projects that are below provided thresholds for some characteristics.
@@ -118,6 +119,7 @@ pub fn cli() -> Command {
 /// * `force` - Whether to override the output file if it already exists.
 /// * `non_code` - Whether to discard projects that do not contain code (e.g., documentation only).
 /// * `no_output` - Whether to write the output file.
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - The logger displaying the progress.
 ///
 /// # Returns
@@ -132,6 +134,7 @@ pub fn run(
     non_code: bool,
     force: bool,
     no_output: bool,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     let default_output_path = format!("{input_path}.filtered.csv");
@@ -142,29 +145,6 @@ pub fn run(
     // Checks if the output file already exists
     log_output_file(output_path, no_output, force)?;
 
-    let mut projects: DataFrame = open_csv(
-        input_path,
-        Some(Schema::from_iter(RepoColumn::fields().into_iter().chain(
-            vec![
-                Field::new("language".into(), DataType::String),
-                Field::new("created".into(), DataType::UInt64),
-                Field::new("pushed".into(), DataType::UInt64),
-                // Field::new("updated".into(), DataType::UInt64),
-                // Field::new("fork".into(), DataType::UInt32),
-                Field::new("disabled".into(), DataType::UInt32),
-                // Field::new("archived".into(), DataType::UInt32),
-                // Field::new("stars".into(), DataType::UInt32),
-                // Field::new("forks".into(), DataType::UInt32),
-                // Field::new("issues".into(), DataType::UInt32),
-                // Field::new("has_issues".into(), DataType::UInt32),
-                // Field::new("watchers_count".into(), DataType::UInt32),
-                // Field::new("subscribers".into(), DataType::UInt32),
-                Field::new("size".into(), DataType::UInt64),
-            ],
-        ))),
-        None,
-    )?;
-
     let required: [&str; 7] = [
         RepoColumn::RepoId.name(),
         RepoColumn::RepoName.name(),
@@ -174,11 +154,19 @@ pub fn run(
         "disabled",
         "size",
     ];
-    ensure!(
-        dataframes::has_columns(&projects, required),
-        "Input file must contain the following columns: {}",
-        required.join(", ")
-    );
+    let mut projects: DataFrame = open_csv(
+        input_path,
+        Some(Schema::from_iter(RepoColumn::fields().into_iter().chain([
+            Field::new("language".into(), DataType::String),
+            Field::new("created".into(), DataType::UInt64),
+            Field::new("pushed".into(), DataType::UInt64),
+            Field::new("disabled".into(), DataType::UInt32),
+            Field::new("size".into(), DataType::UInt64),
+        ]))),
+        None,
+        renames,
+    )?;
+    require_columns(&projects, input_path, &required)?;
 
     let projects_count = projects.height();
 
@@ -382,6 +370,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
 
+    use crate::utils::dataframes;
     use crate::utils::logger::test_logger;
 
     use super::*;
@@ -404,11 +393,12 @@ mod tests {
             true,
             false,
             false,
+            &[],
             test_logger(),
         )?;
 
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
 
         ensure!(
             expected_df.equals_missing(&output_df),
@@ -432,6 +422,7 @@ mod tests {
             false,
             true,
             false,
+            &[],
             test_logger(),
         )?;
 
@@ -442,6 +433,7 @@ mod tests {
                 Field::new("age".into(), DataType::UInt32),
             ])),
             Some(vec![RepoColumn::RepoId.name(), "age"]),
+            &[],
         )?;
         delete_file(output, false)?;
 
@@ -464,6 +456,7 @@ mod tests {
             false,
             false,
             false,
+            &[],
             test_logger()
         )
         .is_err());
@@ -482,6 +475,7 @@ mod tests {
             false,
             false,
             false,
+            &[],
             test_logger(),
         );
         delete_file(output, false)?;
@@ -502,10 +496,11 @@ mod tests {
             true,
             true,
             false,
+            &[],
             test_logger(),
         )?;
-        let expected_df = open_csv(EXPECTED, None, None)?;
-        let output_df = open_csv(output, None, None)?;
+        let expected_df = open_csv(EXPECTED, None, None, &[])?;
+        let output_df = open_csv(output, None, None, &[])?;
         ensure!(
             expected_df.equals_missing(&output_df),
             "Overwritten output does not match expected."
@@ -525,6 +520,7 @@ mod tests {
             false,
             false,
             true,
+            &[],
             test_logger(),
         )?;
         assert!(!std::path::Path::new(output).exists());

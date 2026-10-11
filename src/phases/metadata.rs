@@ -18,11 +18,11 @@ use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Write;
-use std::iter::FromIterator as _;
 use std::path::Path;
 
+use super::rename_arg;
 use crate::utils::csv::*;
-use crate::utils::dataframes;
+use crate::utils::dataframes::{has_column, require_columns};
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::Github;
@@ -35,7 +35,7 @@ use clap::{Arg, Command};
 use indicatif::ProgressBar;
 use json::JsonValue;
 use polars::frame::DataFrame;
-use polars::prelude::*;
+use polars::prelude::Schema;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
@@ -122,6 +122,7 @@ pub fn cli() -> Command {
                 .default_value("1")
                 .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..)),
         )
+        .arg(rename_arg())
 }
 
 /// Collects metadata about GitHub projects.
@@ -145,6 +146,7 @@ pub fn cli() -> Command {
 /// * `infer_source` - Whether to infer the source of the projects without one (see [`Repo::from_csv_row`]).
 /// * `sub` - Number of projects to query. All the remaining projects if `None`.
 /// * `threads` - Number of requests sent to the GitHub API at the same time.
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - Logger showing the progress.
 pub fn run(
     input_path: &str,
@@ -156,6 +158,7 @@ pub fn run(
     infer_source: bool,
     sub: Option<usize>,
     threads: usize,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     // Column index of the id in the output and cache files.
@@ -170,12 +173,17 @@ pub fn run(
             input_path,
             Some(Schema::from_iter(RepoColumn::fields())),
             None,
+            renames,
         )?;
-        let required: [&str; 2] = [RepoColumn::RepoId.name(), RepoColumn::RepoName.name()];
+        require_columns(
+            &df,
+            input_path,
+            &[RepoColumn::RepoId.name(), RepoColumn::RepoName.name()],
+        )?;
         ensure!(
-            dataframes::has_columns(&df, required),
-            "{input_path} must have the columns {}",
-            required.join(" and ")
+            infer_source || has_column(&df, RepoColumn::Source.name()),
+            "{input_path} has no column source. Add it, read another column as source with \
+             --rename OLD=source, or infer the sources with --infer-source."
         );
         Ok(df)
     })?;
@@ -514,6 +522,7 @@ mod tests {
 
     use super::*;
     use crate::utils::{dataframes::has_column, logger::test_logger};
+    use polars::prelude::SortMultipleOptions;
 
     const TEST_DATA: &str = "tests/data/phases/metadata";
 
@@ -540,10 +549,11 @@ mod tests {
             false,
             None,
             1,
+            &[],
             test_logger(),
         )?;
 
-        let output_df = open_csv(&output_file, None, None)?;
+        let output_df = open_csv(&output_file, None, None, &[])?;
         ensure!(
             has_column(&output_df, RepoColumn::RepoName.name()),
             "Output does not have 'repo_name' column"
@@ -553,7 +563,7 @@ mod tests {
             SortMultipleOptions::new(),
         )?;
 
-        let expected_df = open_csv(&format!("{output_file}.expected"), None, None)?;
+        let expected_df = open_csv(&format!("{output_file}.expected"), None, None, &[])?;
         ensure!(
             has_column(&expected_df, RepoColumn::RepoName.name()),
             "Expected output does not have 'repo_name' column"
@@ -631,6 +641,7 @@ mod tests {
             false,
             None,
             1,
+            &[],
             test_logger(),
         );
         assert!(result.is_err());

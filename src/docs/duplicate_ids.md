@@ -6,5 +6,7 @@ Prints statistics about the number of duplicates found and writes the deduplicat
 
 By default, the output file name is the input file name with '.unique.csv' appended. 
 
+Columns of the input can be read under other names with --rename OLD=NEW, for example --rename id=repo_id.
+
 Output CSV file format:
   * Same columns as the input file

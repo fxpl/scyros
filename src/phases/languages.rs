@@ -183,6 +183,7 @@ pub fn run(
                 Field::new(names.into(), DataType::String),
             ])),
             Some(vec![ids, names]),
+            &[],
         )
     })?;
 
