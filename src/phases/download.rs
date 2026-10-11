@@ -42,6 +42,7 @@ use zip::ZipArchive;
 use crate::utils::csv::*;
 use crate::utils::dataframes::{self, has_column, require_columns};
 use crate::utils::fs::*;
+use crate::utils::github::zipball_root_commit;
 use crate::utils::regex::*;
 use crate::utils::repo::{Repo, RepoColumn, RepoFile, Source, Unit, LOCAL_PATH};
 
@@ -59,9 +60,10 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. It must be a valid CSV file with the columns 'repo_id' and 'latest_commit', \
+                .help("Path to the input csv file to use. It must be a valid CSV file with a column 'repo_id', \
                        or with --skip a column 'local_path' storing the directories of the projects. The other repository columns \
-                       (source, repo_name, repo_license) are copied to the output files. Other columns are ignored.")
+                       (source, repo_name, repo_license, latest_commit) are copied to the output files. \
+                       Projects without a commit are downloaded from their default branch. Other columns are ignored.")
                 .required(true)
         )
         .arg(
@@ -217,7 +219,7 @@ struct Project {
 ///
 /// # Arguments
 ///
-/// * `input_file_path` - Path to the input csv file to use. It has the columns `repo_id` and `latest_commit`, or `local_path` with `--skip`.
+/// * `input_file_path` - Path to the input csv file to use. It has a column `repo_id`, or `local_path` with `--skip`.
 /// * `projects_output_path` - Path to the output csv file storing the project statistics. If not specified, the input file name will be used with ".project_log.csv" appended.
 /// * `files_output_path` - Path to the output csv file storing the file statistics. If not specified, the input file name will be used with ".file_log.csv" appended.
 /// * `target` - Path to the directory where projects will be downloaded.
@@ -276,11 +278,7 @@ pub fn run(
         if skip {
             require_columns(&df, input_file_path, &[LOCAL_PATH])?;
         } else {
-            require_columns(
-                &df,
-                input_file_path,
-                &[RepoColumn::RepoId.name(), RepoColumn::LatestCommit.name()],
-            )?;
+            require_columns(&df, input_file_path, &[RepoColumn::RepoId.name()])?;
         }
         ensure!(
             infer_source || has_column(&df, RepoColumn::Source.name()),
@@ -320,15 +318,15 @@ pub fn run(
                     repo,
                 })
             } else {
-                match (repo.id, &repo.commit) {
-                    (Some(id), Some(_)) => Ok(Project {
-                        row: idx,
-                        key: id.to_string(),
-                        local_path: None,
-                        repo,
-                    }),
-                    _ => bail!("Row {idx} of the input file has no id or no commit"),
-                }
+                let id: u32 = repo
+                    .id
+                    .with_context(|| format!("Row {idx} of the input file has no id"))?;
+                Ok(Project {
+                    row: idx,
+                    key: id.to_string(),
+                    local_path: None,
+                    repo,
+                })
             }
         })
         .take(match sub {
@@ -521,15 +519,15 @@ pub fn run(
                                     // Check if the project has already been downloaded.
                                     // If not, download it and send the information back to the main thread.
 
+                                    // Projects downloaded without a commit are stored under their id alone.
                                     let project_path: String = match project.local_path {
                                         Some(local_path) => local_path,
                                         None => Path::new(target)
                                             .join((project.row / MAX_SUBDIRS).to_string())
-                                            .join(format!(
-                                                "{}-{}",
-                                                project.key,
-                                                project.repo.commit.as_deref().unwrap_or_default()
-                                            ))
+                                            .join(match &project.repo.commit {
+                                                Some(commit) => format!("{}-{commit}", project.key),
+                                                None => project.key.clone(),
+                                            })
                                             .to_string_lossy()
                                             .into_owned(),
                                     };
@@ -617,8 +615,8 @@ pub fn run(
 
 /// Downloads a GitHub repository and filters the files according to the provided extensions and keywords.
 /// Specifically, the following steps are executed:
-/// * Download the repository as a zip archive, at its commit. (If the skip flag is set, this step is skipped).
-/// * Unzip the archive. (If the skip flag is set, this step is skipped).
+/// * Download the repository as a zip archive, at its commit if it is known and from its default branch otherwise. (If the skip flag is set, this step is skipped).
+/// * Unzip the archive, and find the commit in the name of its root folder if it was not known. (If the skip flag is set, this step is skipped).
 /// * Remove the zip archive. (If the skip flag is set, this step is skipped).
 /// * Remove all files that do not end with one of the provided extensions. (If delete is false, this step is skipped).
 /// * Remove all symbolic links. (If delete is false, this step is skipped).
@@ -667,7 +665,7 @@ pub fn run(
 ///
 fn download_repo(
     token: &str,
-    repo: Repo,
+    mut repo: Repo,
     project_path: &str,
     keywords_files: &KeywordFiles,
     word_counter: &Matcher,
@@ -699,12 +697,11 @@ fn download_repo(
 
         headers.insert(USER_AGENT, HeaderValue::from_static("Scyros"));
 
-        let url_str: String = format!(
-            "https://api.github.com/repositories/{id}/zipball/{}",
-            repo.commit
-                .as_deref()
-                .with_context(|| format!("Last commit not found for project {id}"))?
-        );
+        // Without a commit, GitHub sends the default branch of the repository.
+        let url_str: String = match &repo.commit {
+            Some(commit) => format!("https://api.github.com/repositories/{id}/zipball/{commit}"),
+            None => format!("https://api.github.com/repositories/{id}/zipball"),
+        };
 
         let url: Url =
             reqwest::Url::parse(&url_str).with_context(|| format!("Bad URL {url_str}"))?;
@@ -727,6 +724,9 @@ fn download_repo(
             warn!("Could not extract repository {id}: {e}");
             delete_dir(project_path, true)?;
             return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
+        }
+        if repo.commit.is_none() {
+            repo.commit = zipball_commit(project_path);
         }
     }
 
@@ -851,6 +851,20 @@ fn download_repo(
     project_row.extend(dir_matches.iter().map(|m| m.to_string()));
 
     Ok((project_row, file_rows))
+}
+
+/// Returns the commit of a repository extracted from a GitHub zip archive, read in the name of the root folder of the archive.
+///
+/// # Arguments
+///
+/// * `project_path` - The directory where the archive was extracted.
+fn zipball_commit(project_path: &str) -> Option<String> {
+    let mut entries = std::fs::read_dir(project_path).ok()?;
+    let root = entries.next()?.ok()?;
+    if entries.next().is_some() {
+        return None;
+    }
+    zipball_root_commit(root.file_name().to_str()?).map(str::to_string)
 }
 
 /// Downloads the zip archive of a repository to a file.
@@ -1092,6 +1106,17 @@ mod tests {
             true,
             true,
         )
+    }
+
+    #[test]
+    fn commit_from_zipball_root_folder() -> Result<()> {
+        let dir = "target/tests/zipball_commit";
+        delete_dir(dir, true)?;
+        create_dir(format!("{dir}/owner-repo-38d21aa/src"))?;
+        assert_eq!(zipball_commit(dir).as_deref(), Some("38d21aa"));
+        create_dir(format!("{dir}/other"))?;
+        assert_eq!(zipball_commit(dir), None);
+        delete_dir(dir, false)
     }
 
     #[test]
