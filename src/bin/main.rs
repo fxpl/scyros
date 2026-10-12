@@ -162,7 +162,7 @@ fn main() {
                                     cli_subargs.get_one::<String>("input").unwrap(),
                                     cli_subargs.get_one::<String>("projects").map(|x| x.as_str()),
                                     cli_subargs.get_one::<String>("files").map(|x| x.as_str()),
-                                    cli_subargs.get_one::<String>("dest").unwrap(),
+                                    cli_subargs.get_one::<String>("dest").map(|x| x.as_str()),
                                     cli_subargs.get_one::<String>("tokens").map(|x| x.as_str()),
                                     &cli_subargs
                                         .get_many::<String>("keywords")
@@ -171,8 +171,7 @@ fn main() {
                                         .collect::<Vec<&str>>(),
                                         cli_subargs.get_flag("regex"),
                                         cli_subargs.get_flag("case-sensitive"),
-                                    cli_subargs.get_flag("skip"),
-                                    cli_subargs.get_flag("count"),
+                                    cli_subargs.get_one::<String>("prune").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_one::<usize>("sub").copied(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),

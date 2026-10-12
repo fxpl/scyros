@@ -40,7 +40,7 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 use crate::utils::csv::*;
-use crate::utils::dataframes::{self, has_column, require_columns};
+use crate::utils::dataframes::has_column;
 use crate::utils::fs::*;
 use crate::utils::github::zipball_root_commit;
 use crate::utils::regex::*;
@@ -60,8 +60,8 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. It must be a valid CSV file with a column 'repo_id', \
-                       or with --skip a column 'local_path' storing the directories of the projects. The other repository columns \
+                .help("Path to the input csv file to use. Projects with a 'local_path' are analyzed in this directory, \
+                       and the other projects are downloaded from GitHub with their 'repo_id'. The other repository columns \
                        (source, repo_name, repo_license, latest_commit) are copied to the output files. \
                        Projects without a commit are downloaded from their default branch. Other columns are ignored.")
                 .required(true)
@@ -88,9 +88,7 @@ pub fn cli() -> Command {
                 .long("tokens")
                 .value_name("TOKENS_FILE.csv")
                 .help("Path to the file containing the GitHub tokens to use. It must be a valid CSV file with one column named 'token' and where every line is a \
-                       valid GitHub token (e.g ghp_Ab0C1D2eFg3hIjk4LM56oPqRsTuvWX7yZa8B).")
-                .conflicts_with("skip")
-                .required_unless_present("skip"),
+                       valid GitHub token (e.g ghp_Ab0C1D2eFg3hIjk4LM56oPqRsTuvWX7yZa8B). Required when some projects are downloaded."),
         )
         .arg(
             Arg::new("dest")
@@ -98,8 +96,8 @@ pub fn cli() -> Command {
                 .long("dest")
                 .aliases(["target", "destination"])
                 .value_name("DESTINATION")
-                .help("Path to the directory where projects will be downloaded. The directory will be created if it does not exist.")
-                .required(true)
+                .help("Path to the directory where projects will be downloaded. The directory will be created if it does not exist. \
+                       Required when some projects are downloaded.")
         )
         .arg(
             Arg::new("keywords")
@@ -137,16 +135,13 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("skip")
-                .long("skip")
-                .help("Skip the downloading of the repositories.")
-                .action(ArgAction::SetTrue)
-        )
-        .arg(
-            Arg::new("count")
-                .long("count")
-                .help("Compute statistics on the downloaded projects without deleting any file.")
-                .action(ArgAction::SetTrue)
+            Arg::new("prune")
+                .long("prune")
+                .value_name("WHERE")
+                .help("Where to delete the files that match no extension or no keyword: in the downloaded projects only (downloads), \
+                       also in the directories given by the input (all), or nowhere (none).")
+                .value_parser(["downloads", "all", "none"])
+                .default_value("downloads")
         )
         .arg(
             Arg::new("order")
@@ -175,8 +170,7 @@ pub fn cli() -> Command {
                 .short('n')
                 .long("threads")
                 .value_name("THREADS")
-                .help("Number of threads to use when not downloading and computing statistic locally instead (with --skip).")
-                // `requires("skip")` is always satisfied because flags have a default value, but `--tokens` is required unless `--skip` is used.
+                .help("Number of threads to use when no project is downloaded. When projects are downloaded, one thread per token is used.")
                 .conflicts_with("tokens")
                 .default_value("1")
                 .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..)),
@@ -207,9 +201,9 @@ type ProjectRow = Vec<String>;
 struct Project {
     /// Index of the row of the project in the input file.
     row: usize,
-    /// Key under which the project is logged: its local path with --skip, and its id otherwise.
+    /// Key under which the project is logged: its id if it has one, and its local path otherwise.
     key: String,
-    /// Local path of the project, given by the input file with --skip.
+    /// Local path of the project, if the input file gives it. Projects without one are downloaded.
     local_path: Option<String>,
     /// Repository of the project.
     repo: Repo,
@@ -219,35 +213,33 @@ struct Project {
 ///
 /// # Arguments
 ///
-/// * `input_file_path` - Path to the input csv file to use. It has a column `repo_id`, or `local_path` with `--skip`.
+/// * `input_file_path` - Path to the input csv file to use. Its projects have a `local_path`, or a `repo_id` to be downloaded.
 /// * `projects_output_path` - Path to the output csv file storing the project statistics. If not specified, the input file name will be used with ".project_log.csv" appended.
 /// * `files_output_path` - Path to the output csv file storing the file statistics. If not specified, the input file name will be used with ".file_log.csv" appended.
-/// * `target` - Path to the directory where projects will be downloaded.
-/// * `tokens_file` - Path to the file containing the GitHub tokens to use.
+/// * `target` - Path to the directory where projects will be downloaded. Required when some projects are downloaded.
+/// * `tokens_file` - Path to the file containing the GitHub tokens to use. Required when some projects are downloaded.
 /// * `keywords_file_paths` - Path to the files containing the list of extensions and keywords to use.
 /// * `regex_syntax` - Whether to interpret the keywords as regular expressions. If false, the keywords are interpreted as whole words to match.
 /// * `case_sensitive` - Whether keywords are matched case-sensitively.
-/// * `skip` - If true, skip the downloading of the repositories.
-/// * `count` - If true, compute statistics on the downloaded projects without deleting any file.
+/// * `prune` - Where to delete the files that match no extension or no keyword: `downloads`, `all` or `none`.
 /// * `overwrite` - If true, overwrite the log files if they exist.
 /// * `sub` - Number of projects to sample from the input file. If not specified, all remaining projects in the input file are used.
 /// * `seed` - The seed used to shuffle the projects.
 /// * `infer_source` - Whether to infer the source of the projects without one (see [`Repo::from_csv_row`]).
 /// * `renames` - Columns of the input read under other names.
 /// * `logger` - The logger to use to display information about the progress of the program.
-/// * `thread` - The number of threads to use when not downloading and computing statistic locally instead.
+/// * `thread` - The number of threads to use when no project is downloaded.
 /// * `order` - The order in which the projects are processed.
 pub fn run(
     input_file_path: &str,
     projects_output_path: Option<&str>,
     files_output_path: Option<&str>,
-    target: &str,
+    target: Option<&str>,
     tokens_file: Option<&str>,
     keywords_file_paths: &[&str],
     regex_syntax: bool,
     case_sensitive: bool,
-    skip: bool,
-    count: bool,
+    prune: &str,
     overwrite: bool,
     sub: Option<usize>,
     seed: u64,
@@ -257,13 +249,6 @@ pub fn run(
     thread: usize,
     order: &str,
 ) -> Result<()> {
-    // Check if the token file is valid and load the tokens.
-    let tokens: Vec<String> = if skip {
-        (0..thread).map(|n| n.to_string()).collect()
-    } else {
-        logger.log_tokens(tokens_file.unwrap())? // safe unwrap
-    };
-
     let input_file: DataFrame = logger.run_task("Loading input file", || {
         let df: DataFrame = open_csv(
             input_file_path,
@@ -275,11 +260,13 @@ pub fn run(
             None,
             renames,
         )?;
-        if skip {
-            require_columns(&df, input_file_path, &[LOCAL_PATH])?;
-        } else {
-            require_columns(&df, input_file_path, &[RepoColumn::RepoId.name()])?;
-        }
+        ensure!(
+            has_column(&df, LOCAL_PATH) || has_column(&df, RepoColumn::RepoId.name()),
+            "{input_file_path} has no column {LOCAL_PATH} nor {}. The projects need a {LOCAL_PATH} to be analyzed in place, \
+             or a {} to be downloaded. Columns can be read under other names with --rename OLD=NEW.",
+            RepoColumn::RepoId,
+            RepoColumn::RepoId
+        );
         ensure!(
             infer_source || has_column(&df, RepoColumn::Source.name()),
             "{input_file_path} has no column source. Add it, read another column as source with \
@@ -287,6 +274,27 @@ pub fn run(
         );
         Ok(df)
     })?;
+
+    // Projects without a local path are downloaded, which requires tokens and a destination.
+    let downloads: bool = input_file
+        .column(LOCAL_PATH)
+        .map_or(true, |column| column.null_count() > 0);
+
+    // Check if the token file is valid and load the tokens.
+    let tokens: Vec<String> = if downloads {
+        logger.log_tokens(tokens_file.with_context(|| {
+            format!("Some projects of {input_file_path} have no {LOCAL_PATH} and are downloaded: --tokens is required")
+        })?)?
+    } else {
+        (0..thread).map(|n| n.to_string()).collect()
+    };
+    let target: &str = if downloads {
+        target.with_context(|| {
+            format!("Some projects of {input_file_path} have no {LOCAL_PATH} and are downloaded: --dest is required")
+        })?
+    } else {
+        ""
+    };
 
     let mut shuffled_idx: Vec<usize> = (0..input_file.height()).collect::<Vec<usize>>();
 
@@ -299,35 +307,31 @@ pub fn run(
         })?;
     }
 
-    // Each project comes with the key under which it is logged: its local path with --skip, and its id otherwise.
+    // Each project comes with the key under which it is logged: its id if it has one, and its local path otherwise.
     let shuffled_rows = shuffled_idx
         .into_iter()
         .map(|idx| -> Result<Project> {
             let repo: Repo = Repo::from_csv_row(&input_file, idx, infer_source)?;
-            if skip {
-                let local_path: String = input_file
-                    .column(LOCAL_PATH)?
-                    .str()?
-                    .get(idx)
-                    .with_context(|| format!("Row {idx} of the input file has no {LOCAL_PATH}"))?
-                    .to_string();
-                Ok(Project {
-                    row: idx,
-                    key: local_path.clone(),
-                    local_path: Some(local_path),
-                    repo,
-                })
-            } else {
-                let id: u32 = repo
-                    .id
-                    .with_context(|| format!("Row {idx} of the input file has no id"))?;
-                Ok(Project {
-                    row: idx,
-                    key: id.to_string(),
-                    local_path: None,
-                    repo,
-                })
-            }
+            let local_path: Option<String> = match input_file.column(LOCAL_PATH) {
+                Ok(column) => column.str()?.get(idx).map(str::to_string),
+                Err(_) => None,
+            };
+            let key: String = match (repo.id, &local_path) {
+                (Some(id), _) => id.to_string(),
+                (None, Some(local_path)) => local_path.clone(),
+                (None, None) => {
+                    bail!(
+                        "Row {idx} of the input file has no {LOCAL_PATH} nor {}",
+                        RepoColumn::RepoId
+                    )
+                }
+            };
+            Ok(Project {
+                row: idx,
+                key,
+                local_path,
+                repo,
+            })
         })
         .take(match sub {
             Some(n) => n,
@@ -339,7 +343,7 @@ pub fn run(
 
     const MAX_SUBDIRS: usize = 30000;
 
-    if !skip {
+    if downloads {
         // Create the target directory if it does not exist.
         create_dir(target)?;
 
@@ -445,23 +449,23 @@ pub fn run(
             if overwrite || std::fs::metadata(project_log_path)?.len() == 0 {
                 HashSet::new()
             } else {
-                let key: &str = if skip {
-                    LOCAL_PATH
-                } else {
-                    RepoColumn::RepoId.name()
-                };
+                let id: &str = RepoColumn::RepoId.name();
                 let logged: DataFrame = open_csv(
                     project_log_path,
-                    Some(Schema::from_iter([Field::new(
-                        key.into(),
-                        DataType::String,
-                    )])),
-                    Some(vec![key]),
+                    Some(Schema::from_iter([
+                        Field::new(id.into(), DataType::String),
+                        Field::new(LOCAL_PATH.into(), DataType::String),
+                    ])),
+                    Some(vec![id, LOCAL_PATH]),
                     &[],
                 )?;
-                dataframes::str(&logged, key)?
-                    .into_iter()
-                    .map(str::to_string)
+                // The key of a project is its id if it has one, and its local path otherwise.
+                logged
+                    .column(id)?
+                    .str()?
+                    .iter()
+                    .zip(logged.column(LOCAL_PATH)?.str()?.iter())
+                    .filter_map(|(id, local_path)| id.or(local_path).map(str::to_string))
                     .collect()
             },
         )
@@ -519,6 +523,8 @@ pub fn run(
                                     // Check if the project has already been downloaded.
                                     // If not, download it and send the information back to the main thread.
 
+                                    // Only the projects without a local path are downloaded.
+                                    let download: bool = project.local_path.is_none();
                                     // Projects downloaded without a commit are stored under their id alone.
                                     let project_path: String = match project.local_path {
                                         Some(local_path) => local_path,
@@ -532,17 +538,21 @@ pub fn run(
                                             .into_owned(),
                                     };
 
-                                    if (!skip || Path::new(&project_path).exists())
-                                        && !previous_results.contains(&project.key)
-                                    {
+                                    if !download && !Path::new(&project_path).exists() {
+                                        warn!("Project {project_path} is skipped: the directory does not exist");
+                                    } else if !previous_results.contains(&project.key) {
                                         match download_repo(
                                             t.as_str(),
                                             project.repo,
                                             &project_path,
                                             keyword_files,
                                             word_counter,
-                                            skip,
-                                            !count,
+                                            download,
+                                            match prune {
+                                                "all" => true,
+                                                "downloads" => download,
+                                                _ => false,
+                                            },
                                         ) {
                                             Ok(r) => {
                                                 let _ = my_tx.send(Some(Ok(r)));
@@ -615,9 +625,9 @@ pub fn run(
 
 /// Downloads a GitHub repository and filters the files according to the provided extensions and keywords.
 /// Specifically, the following steps are executed:
-/// * Download the repository as a zip archive, at its commit if it is known and from its default branch otherwise. (If the skip flag is set, this step is skipped).
-/// * Unzip the archive, and find the commit in the name of its root folder if it was not known. (If the skip flag is set, this step is skipped).
-/// * Remove the zip archive. (If the skip flag is set, this step is skipped).
+/// * Download the repository as a zip archive, at its commit if it is known and from its default branch otherwise. (Only if `download` is set).
+/// * Unzip the archive, and find the commit in the name of its root folder if it was not known. (Only if `download` is set).
+/// * Remove the zip archive. (Only if `download` is set).
 /// * Remove all files that do not end with one of the provided extensions. (If delete is false, this step is skipped).
 /// * Remove all symbolic links. (If delete is false, this step is skipped).
 /// * Counts the number of files, lines of code and words in the directory.
@@ -634,7 +644,7 @@ pub fn run(
 /// * `project_path` - The path to the directory where the repository is/will be downloaded.
 /// * `keywords_files` - The keyword files, mapping file extensions to languages and keywords.
 /// * `word_counter` - A matcher for counting words in a file.
-/// * `skip` - If true, skip the downloading of the repository and only compute statistics on the directory.
+/// * `download` - Whether to download the repository. Otherwise, the statistics are computed on the existing directory.
 /// * `delete` - If true, delete the files that do not match the extensions or the keywords.
 ///
 /// # Returns
@@ -669,20 +679,20 @@ fn download_repo(
     project_path: &str,
     keywords_files: &KeywordFiles,
     word_counter: &Matcher,
-    skip: bool,
+    download: bool,
     delete: bool,
 ) -> Result<(ProjectRow, Vec<FileRow>)> {
-    if !skip {
-        let id = repo.id.with_context(|| {
-            format!("Project {project_path} does not have an id, cannot be downloaded")
-        })?;
+    if download {
         if repo.source != Source::GitHub {
             warn!(
-                "Project {id} is not downloaded: its source is {}",
+                "Project {project_path} is not downloaded: it has no local path and its source is {}",
                 repo.source
             );
             return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
         }
+        let id = repo.id.with_context(|| {
+            format!("Project {project_path} does not have an id, cannot be downloaded")
+        })?;
         let http_client = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(None)
@@ -987,8 +997,7 @@ mod tests {
         input: &str,
         target: Option<&str>,
         keywords_files: &[&str],
-        count: bool,
-        skip: bool,
+        prune: &str,
     ) -> Result<()> {
         let input_file: String = format!("{TEST_DATA}/{input}");
         let output_file_project: String = format!("{input_file}.project_log.csv");
@@ -1025,13 +1034,12 @@ mod tests {
             &input_file,
             None,
             None,
-            &target_def,
+            target.map(|_| target_def.as_str()),
             Some(&tokens_file),
             keywords_files,
             false,
             false,
-            skip,
-            count,
+            prune,
             false,
             None,
             0,
@@ -1043,10 +1051,10 @@ mod tests {
         )?;
 
         // Rows are written in the order in which the projects are processed, so they are compared by their key.
-        let key: &str = if skip {
-            LOCAL_PATH
-        } else {
+        let key: &str = if target.is_some() {
             RepoColumn::RepoId.name()
+        } else {
+            LOCAL_PATH
         };
         let indexed_lines = |path: &str| -> Result<std::collections::HashMap<String, String>> {
             let file = CSVFile::new(path, FileMode::Read)?;
@@ -1076,8 +1084,7 @@ mod tests {
                 "tests/data/keywords/java_float.json",
                 "tests/data/keywords/scala_float.json",
             ],
-            false,
-            false,
+            "downloads",
         )
     }
 
@@ -1092,8 +1099,7 @@ mod tests {
                 "tests/data/keywords/fp_others.json",
                 "tests/data/keywords/std_math.json",
             ],
-            true,
-            true,
+            "none",
         )
     }
 
@@ -1103,8 +1109,7 @@ mod tests {
             "to_download_local_c.csv",
             None,
             &["tests/data/keywords/c.json"],
-            true,
-            true,
+            "none",
         )
     }
 
@@ -1119,6 +1124,95 @@ mod tests {
         delete_dir(dir, false)
     }
 
+    /// Runs download on a copy of the local test repository, and returns the files left in the copy.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Directory of the copy.
+    /// * `prune` - Where to delete the files that match no extension or no keyword.
+    fn files_left(dir: &str, prune: &str) -> Result<Vec<String>> {
+        delete_dir(dir, true)?;
+        create_dir(dir)?;
+        let repo = format!("{dir}/repo");
+        create_dir(&repo)?;
+        for entry in std::fs::read_dir(format!("{TEST_DATA}/local_repo"))? {
+            let entry = entry?;
+            std::fs::copy(entry.path(), Path::new(&repo).join(entry.file_name()))?;
+        }
+        let input = format!("{dir}/input.csv");
+        write_file(&input, format!("source,local_path\nlocal,{repo}\n"))?;
+        run(
+            &input,
+            None,
+            None,
+            None,
+            None,
+            &["tests/data/keywords/c.json"],
+            false,
+            false,
+            prune,
+            true,
+            None,
+            0,
+            false,
+            &[],
+            test_logger(),
+            1,
+            "sequential",
+        )?;
+        let mut files: Vec<String> = std::fs::read_dir(&repo)?
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<_>>()?;
+        files.sort();
+        delete_dir(dir, false)?;
+        Ok(files)
+    }
+
+    #[test]
+    fn local_directories_are_only_pruned_with_all() -> Result<()> {
+        // The keywords only match C files: the C++ files do not match.
+        assert_eq!(
+            files_left("target/tests/prune_downloads", "downloads")?,
+            ["test.cc", "timer.c", "tuto.c", "tuto.c++"]
+        );
+        assert_eq!(
+            files_left("target/tests/prune_all", "all")?,
+            ["timer.c", "tuto.c"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn downloads_require_tokens() -> Result<()> {
+        let dir = "target/tests/downloads_require_tokens";
+        delete_dir(dir, true)?;
+        create_dir(dir)?;
+        let input = format!("{dir}/input.csv");
+        write_file(&input, "repo_id,source\n42,github\n")?;
+        let result = run(
+            &input,
+            None,
+            None,
+            Some(dir),
+            None,
+            &["tests/data/keywords/c.json"],
+            false,
+            false,
+            "downloads",
+            true,
+            None,
+            0,
+            false,
+            &[],
+            test_logger(),
+            1,
+            "sequential",
+        );
+        delete_dir(dir, false)?;
+        ensure!(result.is_err_and(|e| e.to_string().contains("--tokens is required")));
+        Ok(())
+    }
+
     #[test]
     fn download_local_inherits_repository() -> Result<()> {
         let input_file = format!("{TEST_DATA}/to_download_local_github.csv");
@@ -1129,13 +1223,12 @@ mod tests {
             &input_file,
             None,
             None,
-            "",
+            None,
             None,
             &["tests/data/keywords/c.json"],
             false,
             false,
-            true,
-            true,
+            "none",
             true,
             None,
             0,
@@ -1183,8 +1276,7 @@ mod tests {
             "to_download_fragile.csv",
             Some("github_repos"),
             &["tests/data/keywords/rust.json"],
-            true,
-            false,
+            "none",
         )
     }
 
@@ -1209,13 +1301,12 @@ mod tests {
             &input_file,
             Some(&output_file_project),
             Some(&output_file_file),
-            target,
+            Some(target),
             Some(tokens_file),
             keywords_files,
             false,
             false,
-            false,
-            false,
+            "downloads",
             true,
             None,
             0,
@@ -1235,13 +1326,12 @@ mod tests {
             &input_file,
             Some(&output_file_project),
             Some(&output_file_file),
-            target,
+            Some(target),
             Some(tokens_file),
             keywords_files,
             false,
             false,
-            false,
-            false,
+            "downloads",
             false,
             None,
             0,
@@ -1280,13 +1370,12 @@ mod tests {
             &input_file,
             Some(&output_file_project),
             Some(&output_file_file),
-            "",
+            None,
             None,
             keywords_files,
             false,
             false,
-            true,
-            true,
+            "none",
             true,
             None,
             0,
@@ -1306,13 +1395,12 @@ mod tests {
             &input_file,
             Some(&output_file_project),
             Some(&output_file_file),
-            "",
+            None,
             None,
             keywords_files,
             false,
             false,
-            true,
-            true,
+            "none",
             false,
             None,
             0,

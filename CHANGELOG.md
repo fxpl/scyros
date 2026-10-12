@@ -24,8 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `metadata` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its `license` column is renamed `repo_license`, and values are quoted instead of having their commas replaced. `filter_metadata` reads the new column names.
 - `languages` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its latest commit moves to the repository columns, before the languages, and values are quoted instead of having their commas replaced. `filter_languages` reads the new column names.
 - `duplicate_files` reads file paths from the `local_path` column by default, instead of `name`.
-- `download` only requires the column `repo_id` (or `local_path` with `--skip`, instead of `path`), and its logs write local paths in `local_path` instead of `path` and `name`.
+- `download` reads the directories of local repositories from `local_path` instead of `path`, and its logs write local paths in `local_path` instead of `path` and `name`.
 - `pr` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Values are quoted instead of being written as they are.
+
+### Removed
+
+- The `--skip` and `--count` flags of `download`. Repositories with a `local_path` are analyzed in place and the others are downloaded, so inputs can mix both; `--tokens` and `--dest` are only required for downloads. `--prune downloads|all|none` replaces `--count`, and by default only deletes files in the downloaded repositories, never in directories given by the input.
 
 ### Fixed
 
