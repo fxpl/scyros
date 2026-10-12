@@ -164,6 +164,8 @@ fn forks_force_overwrites_existing_output() {
 // a clean parse when the flag was used.
 #[test]
 fn download_sub_flag_does_not_panic() {
+    // The logs are written outside the repository, and overwritten by every run instead of resumed.
+    let logs = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     bin()
         .args([
             "download",
@@ -175,7 +177,12 @@ fn download_sub_flag_does_not_panic() {
             "none",
             "--sub",
             "1",
+            "--force",
         ])
+        .arg("--projects")
+        .arg(logs.join("download_sub_flag.project_log.csv"))
+        .arg("--files")
+        .arg(logs.join("download_sub_flag.file_log.csv"))
         .assert()
         .success();
 }
