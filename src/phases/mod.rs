@@ -22,6 +22,7 @@ pub mod filter_metadata;
 pub mod forks;
 pub mod ids;
 pub mod languages;
+pub mod latest_commit;
 pub mod metadata;
 pub mod parse;
 pub mod pull_request;

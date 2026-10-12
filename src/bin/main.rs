@@ -17,7 +17,7 @@ use clap::{Arg, ArgAction, Command};
 use scyros::phases::renames;
 use scyros::phases::{
     download, duplicate_files, duplicate_ids, filter_languages, filter_metadata, forks, ids,
-    languages, metadata, parse, pull_request,
+    languages, latest_commit, metadata, parse, pull_request,
 };
 use scyros::utils::logger::Logger;
 use tracing::{error, info};
@@ -34,6 +34,7 @@ fn cli() -> Command {
         .subcommand(filter_metadata::cli())
         .subcommand(languages::cli())
         .subcommand(filter_languages::cli())
+        .subcommand(latest_commit::cli())
         .subcommand(download::cli())
         .subcommand(duplicate_files::cli())
         .subcommand(parse::cli())
@@ -139,6 +140,19 @@ fn main() {
                                     cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
                                     cli_subargs.get_one::<String>("tokens").unwrap(),
                                     cli_subargs.get_one::<String>("cache"),
+                                    *cli_subargs.get_one::<u64>("seed").unwrap(),
+                                    cli_subargs.get_flag("force"),
+                                    cli_subargs.get_flag("infer-source"),
+                                    cli_subargs.get_one::<usize>("sub").copied(),
+                                    *cli_subargs.get_one::<usize>("threads").unwrap(),
+                                    &renames(cli_subargs),
+                                    &logger,
+                                )
+                            } else if subcommand == latest_commit::cli().get_name() {
+                                latest_commit::run(
+                                    cli_subargs.get_one::<String>("input").unwrap(),
+                                    cli_subargs.get_one::<String>("output").map(|x| x.as_str()),
+                                    cli_subargs.get_one::<String>("tokens").unwrap(),
                                     *cli_subargs.get_one::<u64>("seed").unwrap(),
                                     cli_subargs.get_flag("force"),
                                     cli_subargs.get_flag("infer-source"),

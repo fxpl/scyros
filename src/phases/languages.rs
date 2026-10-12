@@ -24,7 +24,6 @@ use crate::utils::csv::*;
 use crate::utils::dataframes::{has_column, require_columns};
 use crate::utils::fs::*;
 use crate::utils::github_api::Github;
-use crate::utils::json::*;
 use crate::utils::logger::*;
 use crate::utils::parallel::parallel_pipeline;
 use crate::utils::repo::{Repo, RepoColumn, Source, Unit};
@@ -45,7 +44,7 @@ use tracing::info;
 /// Command line arguments parsing.
 pub fn cli() -> Command {
     Command::new("languages")
-        .about("Collect all the languages of GitHub projects along with the hash of their latest commit.")
+        .about("Collect all the languages of GitHub projects.")
         .long_about(include_str!("../docs/languages.md"))
         .author("Andrea Gilot <andrea.gilot@it.uu.se>")
         .disable_version_flag(true)
@@ -63,8 +62,8 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. The file must contain at least two columns: one with the id of the projects and another one with their full name. \
-                       By default, the column containing the ids is named 'id' and the column containing the full names is named 'name'.")
+                .help("Path to the input csv file to use. It must have a column 'repo_id' with the ids of the projects and a column 'repo_name' with their full names. \
+                       Its repository columns are copied to the output, and its other columns are ignored.")
                 .required(true)
         )
         .arg(
@@ -127,15 +126,14 @@ pub fn cli() -> Command {
         .arg(rename_arg())
 }
 
-/// Collects the languages of GitHub projects, with the number of bytes written in each of them, and the SHA of their latest commit.
+/// Collects the languages of GitHub projects, with the number of bytes written in each of them.
 ///
 /// The input must be a valid CSV file with the ids, the full names and the sources of the projects.
 /// Its repository columns are copied to the output, and its other columns are ignored.
 /// Projects are queried in a random order.
 /// The cache must be the output of a previous run with the same columns, possibly with another input file or seed.
 ///
-/// The output has the repository columns, with the latest commit of the projects in `latest_commit`,
-/// the link to the projects, and the languages (see [`ProjectInfo::COLUMNS`]).
+/// The output has the repository columns, the link to the projects, and the languages (see [`ProjectInfo::COLUMNS`]).
 ///
 /// # Arguments
 ///
@@ -321,18 +319,12 @@ pub fn run(
             if let Some(row) = cache.get(id) {
                 return Ok((row.clone(), true));
             }
-            let response: Result<(JsonValue, JsonValue), String> = if repo.source == Source::GitHub
-            {
+            let response: Result<JsonValue, String> = if repo.source == Source::GitHub {
                 let full_name: &str = repo.name.as_deref().unwrap_or_default();
-                let languages = gh.request(&format!(
+                gh.request(&format!(
                     "https://api.github.com/repos/{full_name}/languages"
-                ));
-                let commits =
-                    gh.request(&format!("https://api.github.com/repos/{full_name}/commits"));
-                match (languages, commits) {
-                    (Ok(languages), Ok(commits)) => Ok((languages, commits)),
-                    (Err(e), _) | (_, Err(e)) => Err(e.to_string()),
-                }
+                ))
+                .map_err(|e| e.to_string())
             } else {
                 Err(repo.unsupported_source())
             };
@@ -357,27 +349,17 @@ pub fn run(
 /// # Arguments
 ///
 /// * `repo` - The project.
-/// * `response` - The responses of the GitHub API about the languages and the commits of the project, or the error message.
+/// * `response` - The response of the GitHub API about the languages of the project, or the error message.
 ///   On an error, the name of the project is replaced by the error message, and the link is empty.
-fn project_row(
-    mut repo: Repo,
-    response: Result<(JsonValue, JsonValue), String>,
-) -> Result<Vec<String>> {
-    Ok(match response {
-        Ok((languages, commits)) => {
-            let info = ProjectInfo::from_json(&languages, &commits)?;
-            repo.commit = Some(info.latest_commit.clone());
-            repo.row().into_iter().chain(info.values()).collect()
-        }
+fn project_row(mut repo: Repo, response: Result<JsonValue, String>) -> Result<Vec<String>> {
+    let info: ProjectInfo = match response {
+        Ok(languages) => ProjectInfo::from_json(&languages)?,
         Err(error) => {
             repo.name = Some(error);
-            repo.values()
-                .into_iter()
-                .chain([String::new()])
-                .chain(ProjectInfo::default().values())
-                .collect()
+            ProjectInfo::default()
         }
-    })
+    };
+    Ok(repo.row().into_iter().chain(info.values()).collect())
 }
 
 /// Represents the information retrieved from a GitHub project.
@@ -385,12 +367,10 @@ fn project_row(
 /// # Fields
 ///
 /// * languages: A map from the name of each language to the total size of the files written in that language.
-/// * last_commit: The SHA of the last commit of the project, written in `latest_commit`.
 ///
 #[derive(Default)]
 struct ProjectInfo {
     languages: HashMap<String, i64>,
-    latest_commit: String,
 }
 
 impl ProjectInfo {
@@ -415,7 +395,7 @@ impl ProjectInfo {
     /// # Panics
     ///
     /// * If the JSON object could not be parsed.
-    fn from_json(json_lang: &json::JsonValue, json_commit: &json::JsonValue) -> Result<Self> {
+    fn from_json(json_lang: &json::JsonValue) -> Result<Self> {
         let mut languages: HashMap<String, i64> = HashMap::new();
         for (lan, size) in json_lang.entries() {
             languages.insert(
@@ -425,12 +405,7 @@ impl ProjectInfo {
             );
         }
 
-        let sha = get_field::<String>(&json_commit[0], "sha")?;
-
-        Ok(Self {
-            languages,
-            latest_commit: sha,
-        })
+        Ok(Self { languages })
     }
 
     /// Returns a string representation of the language map. Each entry is separated by a semicolon to avoid conflicts with the CSV format.
@@ -476,23 +451,22 @@ mod tests {
         );
     }
 
-    /// Returns a repository on GitHub, with a license but no commit.
+    /// Returns a repository on GitHub, with a license and a commit.
     fn repo() -> Repo {
         Repo {
             id: Some(42),
             source: Source::GitHub,
             name: Some("owner/repo".to_string()),
             license: Some("MIT License".to_string()),
-            commit: None,
+            commit: Some("abc123".to_string()),
         }
     }
 
     #[test]
     fn rows_of_queried_projects() -> Result<()> {
         let languages = json::parse(r#"{"Rust": 100, "C": 300}"#)?;
-        let commits = json::parse(r#"[{"sha": "abc123"}]"#)?;
         assert_eq!(
-            project_row(repo(), Ok((languages, commits)))?,
+            project_row(repo(), Ok(languages.clone()))?,
             [
                 "42",
                 "github",
@@ -503,6 +477,15 @@ mod tests {
                 "C:300;Rust:100"
             ]
         );
+        // Without a commit, the link is the page of the repository.
+        let unpinned = Repo {
+            commit: None,
+            ..repo()
+        };
+        assert_eq!(
+            project_row(unpinned, Ok(languages))?[4..6],
+            ["", "https://github.com/owner/repo"]
+        );
         Ok(())
     }
 
@@ -511,7 +494,15 @@ mod tests {
         // The name is replaced by the error, and the link is empty.
         assert_eq!(
             project_row(repo(), Err("http/2 404".to_string()))?,
-            ["42", "github", "http/2 404", "MIT License", "", "", ""]
+            [
+                "42",
+                "github",
+                "http/2 404",
+                "MIT License",
+                "abc123",
+                "",
+                ""
+            ]
         );
         Ok(())
     }
