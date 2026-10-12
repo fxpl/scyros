@@ -9,40 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Columns `repo_id`, `source` (`github` or `local`) and `repo_name`, followed by a `url` linking to the repository on GitHub, at the start of the output of `ids`.
-- Repository columns (`repo_id`, `source`, `repo_name`, `repo_license`, `latest_commit`) and a `url` at the start of the output of `metadata`, copied from its input and completed with the license.
-- Repository columns and a `url` at the start of the output of `languages`, copied from its input.
-- Repository columns, copied from the input, then `pr_number` and a `url` linking to the pull request on GitHub, at the start of each row of `pr`.
-- Repository columns and a `url` in both logs of `download`, copied from its input: every file keeps the repository it comes from, with its path inside the repository (`file`) and a link to it on GitHub.
-- `download` accepts repositories without a commit: it downloads their default branch, and reads the full SHA of their commit in the archive.
-- A `latest_commit` subcommand that pins repositories to the latest commit of their default branch, for `download` and the links of the following steps. It is optional, since `download` takes the default branch of repositories without a commit.
-- Repository columns in both outputs of `parse`, copied from its input, and a `url` linking to each file and to the first line of each function on GitHub.
-- Error codes, such as `E404` for a repository GitHub does not find, with an `explain` subcommand: `scyros explain E404` explains a code, and `scyros explain --help` lists them.
-- A `--infer-source` flag for `metadata`, `languages`, `latest_commit`, `pr`, `download` and `parse` to read inputs without a `source` column.
-- A `--rename OLD=NEW` flag for `duplicate_ids`, `forks`, `metadata`, `filter_metadata`, `languages`, `filter_languages`, `latest_commit`, `pr`, `duplicate_files`, `download` and `parse` to read a column of the input under another name. A missing input column is reported with the columns the command reads and how to rename them.
+- Repository columns in every output: `repo_id`, `source` (`github` or `local`), `repo_name`, `repo_license` and `latest_commit`, copied from step to step, and a `url` linking to the repository, file, function or pull request on GitHub. `ids` only writes `repo_id`, `source` and `repo_name`.
+- The path of each file inside its repository (`file`) in `download` and `parse`, and the line and column of each function in `parse`.
+- A `latest_commit` subcommand that pins repositories to the latest commit of their default branch. Without a commit, `download` takes the default branch and reads the commit in the archive.
+- Error codes in a new `error` column, such as `E404` for a deleted repository, explained by a new `explain` subcommand (`scyros explain E404`). Rows with an error keep their other values, are copied by the next steps without being processed, and are discarded by the filters. Each step prints a summary of the codes, and every error with `--debug`.
+- `--infer-source` to read inputs without a `source` column, and `--rename OLD=NEW` to read a column of the input under another name.
 
 ### Changed
 
-- The `id` and `name` columns of `ids` are renamed `repo_id` and `repo_name`, and `duplicate_ids` uses `repo_id` by default.
-- `metadata` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its `license` column is renamed `repo_license`, and values are quoted instead of having their commas replaced. `filter_metadata` reads the new column names.
-- `languages` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. It no longer queries the latest commit, which moves to the new `latest_commit` subcommand, and values are quoted instead of having their commas replaced. `filter_languages` reads the new column names.
-- `duplicate_files` reads file paths from the `local_path` column by default, instead of `name`.
-- `download` reads the directories of local repositories from `local_path` instead of `path`, and its logs write local paths in `local_path` instead of `path` and `name`.
-- `pr` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its `file_path` column is renamed `local_discussion_path`, and values are quoted instead of being written as they are.
-- `download` writes an error code in a new `error` column of its project log, after `url`, instead of `error` in `local_path`, and leaves the statistics of these rows empty instead of 0. Network failures and server errors give an error row after a few retries instead of stopping the command. Rows of the input with an error code from an earlier step, such as `metadata`, are copied with their code, without being downloaded or analyzed. A summary of the errors is printed at the end, and every error with `--debug`.
-- `metadata`, `languages`, `latest_commit` and `pr` write an error code in a new `error` column, after `url`, for the rows they cannot process, instead of an error message in `repo_name`. These rows keep the name, the link and the values of the input, and the cells that could not be fetched are empty instead of having default values. Rows of the input with an error are copied without being queried again. Answers that cannot be read give an error row instead of stopping the command. A summary of the errors is printed at the end, and every error with `--debug`.
-- `filter_metadata` and `filter_languages` discard the rows with an error code, instead of the rows whose `repo_name` starts with `http/` or `error:`.
-- `pr` writes an error row for repositories whose pull requests cannot be fetched, instead of querying them again in the next run, and for pull requests that cannot be read, instead of a row of default values. A pull request whose discussion cannot be fetched gets an error code. Discussion files have an `error` column instead of the `error` comment type.
-- `parse` reads files from the `local_path` and `file` columns instead of `id` and `name`, such as the file log of `download`. In its outputs, `name` becomes `function_name` and `path` becomes `local_path`; the extracted function file moves to `local_function_path`, only written without `--count`. `position` is split into `line` and `column`, and `parse_error` into `parse_error_line` and `parse_error_column`, empty without error instead of `none`.
-- `parse` writes an error code in a new `error` column of both outputs, after `url`: E030 for the files and functions skipped because of a parse error (`--failures skip-file` or `skip-function`), and E031 for the files too large to be parsed. Their statistics are empty instead of -1. A summary of the errors is printed at the end, and every error with `--debug`.
+- Renamed columns: `id` and `name` become `repo_id` and `repo_name`, `license` becomes `repo_license`, and local paths are in `local_path`. In `parse`, `name` becomes `function_name`, the extracted function is in `local_function_path`, and `position` and `parse_error` are split into a line and a column. In `pr`, `file_path` becomes `local_discussion_path`. Existing intermediate files must be renamed, or read with `--rename`.
+- `metadata`, `languages` and `pr` read the `repo_id` and `repo_name` columns: their `--ids` and `--names` flags are removed. `duplicate_ids` uses `repo_id` and `duplicate_files` uses `local_path` by default.
+- `languages` no longer queries the latest commit (see `latest_commit`).
+- Errors are codes in the `error` column, instead of a message in `repo_name` (`metadata`, `languages`, `pr`), `error` in `local_path` (`download`) or -1 statistics (`parse`). The cells that could not be computed are empty. Network failures, server errors and unreadable answers give an error row instead of stopping the command, and `pr` writes error rows instead of skipping what it cannot fetch.
+- `metadata`, `languages` and `pr` quote values instead of removing their commas.
 
 ### Removed
 
-- The `--skip` and `--count` flags of `download`. Repositories with a `local_path` are analyzed in place and the others are downloaded, so inputs can mix both; `--tokens` and `--dest` are only required for downloads. `--prune downloads|all|none` replaces `--count`, and by default only deletes files in the downloaded repositories, never in directories given by the input.
+- The `--skip` and `--count` flags of `download`. Rows with a `local_path` are analyzed in place and the others are downloaded, and `--tokens` and `--dest` are only required for downloads. `--prune downloads|all|none` replaces `--count`, and by default only deletes files in downloaded repositories.
 
 ### Fixed
 
-- Resuming on an output file with other columns than the ones expected by the called subcommand raises an error instead of appending mismatched rows.
+- Resuming on an output file with other columns than expected raises an error instead of appending mismatched rows.
 
 ## [0.4.1] - 2026-10-06
 
