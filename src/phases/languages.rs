@@ -258,7 +258,7 @@ pub fn run(
         .chain(ProjectInfo::COLUMNS)
         .collect();
     output_file.write_header(&header)?;
-    let mut errors = ErrorSummary::new(&header)?;
+    let mut errors = ErrorSummary::<Repo>::new(&header)?;
 
     // Load the cache, whose rows are written as they are.
     let cache: HashMap<u32, Vec<String>> = logger.run_task("Loading cache", || {

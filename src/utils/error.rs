@@ -18,8 +18,11 @@ use anyhow::{bail, Context, Result};
 use polars::prelude::{DataFrame, DataType, Field};
 use std::collections::HashMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::str::FromStr;
 use tracing::warn;
+
+use super::repo::Unit;
 
 /// Documentation of the codes, with their explanations.
 pub const ERRORS_DOC: &str = include_str!("../docs/errors.md");
@@ -206,15 +209,17 @@ impl fmt::Display for RowError {
 
 impl std::error::Error for RowError {}
 
-/// Counts the errors of the rows written to an output file, to print a summary at the end of a step.
-pub struct ErrorSummary {
+/// Counts the errors of the rows written to an output file, whose rows are units `U`, to print a summary at the end of a step.
+pub struct ErrorSummary<U: Unit> {
     /// The index of the error column in the rows.
     column: usize,
     /// The number of rows with each code.
     counts: HashMap<ErrorCode, usize>,
+    /// The units of the rows.
+    unit: PhantomData<fn() -> U>,
 }
 
-impl ErrorSummary {
+impl<U: Unit> ErrorSummary<U> {
     /// Returns an empty summary of the rows of an output file.
     ///
     /// # Arguments
@@ -228,6 +233,7 @@ impl ErrorSummary {
         Ok(Self {
             column,
             counts: HashMap::new(),
+            unit: PhantomData,
         })
     }
 
@@ -253,8 +259,9 @@ impl ErrorSummary {
         });
         if !counts.is_empty() {
             warn!(
-                "{} rows with an error: {}. Run scyros explain <CODE> for details, and use --debug to print every error.",
+                "{} {} with an error: {}. Run scyros explain <CODE> for details, and use --debug to print every error.",
                 counts.iter().map(|(_, count)| **count).sum::<usize>(),
+                U::PLURAL,
                 counts
                     .iter()
                     .map(|(code, count)| format!("{code} {} x{count}", code.description()))
@@ -297,6 +304,7 @@ impl FromStr for ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::repo::Repo;
     use anyhow::ensure;
 
     #[test]
@@ -352,7 +360,7 @@ mod tests {
 
     #[test]
     fn summaries_count_the_codes() -> Result<()> {
-        let mut summary = ErrorSummary::new(&["repo_id", ERROR])?;
+        let mut summary = ErrorSummary::<Repo>::new(&["repo_id", ERROR])?;
         for cell in ["E404", "", "E404", "E001"] {
             summary.add(&["1".to_string(), cell.to_string()])?;
         }
@@ -360,7 +368,7 @@ mod tests {
             summary.counts,
             HashMap::from([(ErrorCode::Http(404), 2), (ErrorCode::Network, 1)])
         );
-        ensure!(ErrorSummary::new(&["repo_id"]).is_err());
+        ensure!(ErrorSummary::<Repo>::new(&["repo_id"]).is_err());
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 Error codes say why a step could not process a row: a repository, a file or a function. `scyros explain <CODE>` explains a code.
 
-metadata, languages, latest_commit, pr and download write the rows they cannot process with a code in their 'error' column, after 'url'. The cells they could not fetch are empty, and the values of the input are kept. Rows of the input that already have an error are copied without being processed again, and filter_metadata and filter_languages discard them. At the end of a command, the terminal shows how many rows have each code. With --debug, it also shows every error with its details.
+metadata, languages, latest_commit, pr, download and parse write the rows they cannot process with a code in their 'error' column, after 'url'. The cells they could not fetch are empty, and the values of the input are kept. Rows of the input that already have an error are copied without being processed again, and filter_metadata and filter_languages discard them. At the end of a command, the terminal shows how many rows have each code. With --debug, it also shows every error with its details.
 
 Errors returned by GitHub have the code of their HTTP status, such as E404. The other codes start with E0.
 

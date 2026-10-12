@@ -400,7 +400,7 @@ pub fn run(
 
     let project_log_header: Vec<String> = project_log_header(&keyword_files);
     project_log_file.write_header(&project_log_header)?;
-    let mut errors = ErrorSummary::new(&project_log_header)?;
+    let mut errors = ErrorSummary::<Repo>::new(&project_log_header)?;
 
     // Open the log file for the files or create it if it does not exist.
     // If the overwrite flag is set, the file is generated anew.

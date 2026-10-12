@@ -128,8 +128,11 @@ impl fmt::Display for RepoColumn {
     }
 }
 
-/// A unit of analysis: a repository, a file or a function.
+/// A unit of analysis: a repository, a file, a function or a pull request.
 pub trait Unit {
+    /// Name of several units in messages, such as `repositories`.
+    const PLURAL: &'static str;
+
     /// Returns the names of the unit's columns, without its link.
     fn columns() -> Vec<&'static str>;
 
@@ -246,6 +249,8 @@ impl Repo {
 }
 
 impl Unit for Repo {
+    const PLURAL: &'static str = "repositories";
+
     /// All the repository columns.
     fn columns() -> Vec<&'static str> {
         RepoColumn::ALL.map(RepoColumn::name).to_vec()
@@ -336,6 +341,8 @@ impl RepoFile {
 }
 
 impl Unit for RepoFile {
+    const PLURAL: &'static str = "files";
+
     /// Repository columns, then `local_path` and `file`.
     fn columns() -> Vec<&'static str> {
         let mut columns: Vec<&'static str> = Repo::columns();
@@ -374,6 +381,8 @@ pub struct Function<'a> {
 }
 
 impl Unit for Function<'_> {
+    const PLURAL: &'static str = "functions";
+
     /// File columns, then `function_name`, `line` and `column`.
     fn columns() -> Vec<&'static str> {
         let mut columns: Vec<&'static str> = RepoFile::columns();
@@ -407,6 +416,8 @@ pub struct PullRequest<'a> {
 }
 
 impl Unit for PullRequest<'_> {
+    const PLURAL: &'static str = "pull requests";
+
     /// Repository columns, then `pr_number`.
     fn columns() -> Vec<&'static str> {
         let mut columns: Vec<&'static str> = Repo::columns();

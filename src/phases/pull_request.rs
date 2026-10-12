@@ -243,7 +243,7 @@ pub fn run(
 
     let header: Vec<&str> = header();
     output_file.write_header(&header)?;
-    let mut errors = ErrorSummary::new(&header)?;
+    let mut errors = ErrorSummary::<PullRequest>::new(&header)?;
 
     let gh = Github::new(tokens);
 

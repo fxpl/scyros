@@ -26,10 +26,11 @@ use std::iter::FromIterator as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::vec;
 use std::{collections::HashSet, path::Path, sync::Mutex};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tree_sitter::{Language, Node, Parser, Tree};
 
 use crate::utils::dataframes::{has_column, require_columns};
+use crate::utils::error::{error_cell, ErrorCode, ErrorSummary, RowError, ERROR};
 use crate::utils::fs::*;
 use crate::utils::regex::*;
 use crate::utils::repo::{Function, RepoColumn, RepoFile, Unit, FILE, LOCAL_PATH};
@@ -339,6 +340,7 @@ pub fn run(
     // Write the header.
     let output_prefix = Function::header()
         .into_iter()
+        .chain([ERROR])
         .chain(write_out.then_some(LOCAL_FUNCTION_PATH))
         .chain(["language", "loc", "words"]);
     let output_suffix = [
@@ -354,11 +356,13 @@ pub fn run(
         PARSE_ERROR_LINE,
         PARSE_ERROR_COLUMN,
     ];
-    let output_header = output_prefix
+    let output_header: Vec<String> = output_prefix
         .map(|s| s.to_string())
         .chain(keyword_files.paths.iter().cloned())
-        .chain(output_suffix.iter().map(|s| s.to_string()));
-    output_file.write_header(output_header)?;
+        .chain(output_suffix.iter().map(|s| s.to_string()))
+        .collect();
+    output_file.write_header(&output_header)?;
+    let mut function_errors = ErrorSummary::<Function>::new(&output_header)?;
 
     let mut logs_file = CSVFile::new(logs_path, FileMode::Overwrite)?;
 
@@ -366,12 +370,14 @@ pub fn run(
     let logs_prefix =
         RepoFile::header()
             .into_iter()
-            .chain(["language", "functions", "functions_with_kw"]);
-    let logs_header = logs_prefix
+            .chain([ERROR, "language", "functions", "functions_with_kw"]);
+    let logs_header: Vec<String> = logs_prefix
         .map(|s| s.to_string())
         .chain(keyword_files.paths.iter().cloned())
-        .chain([PARSE_ERROR_LINE, PARSE_ERROR_COLUMN].map(|s| s.to_string()));
-    logs_file.write_header(logs_header)?;
+        .chain([PARSE_ERROR_LINE, PARSE_ERROR_COLUMN].map(|s| s.to_string()))
+        .collect();
+    logs_file.write_header(&logs_header)?;
+    let mut file_errors = ErrorSummary::<RepoFile>::new(&logs_header)?;
 
     let iter = Mutex::new(shuffled_rows.into_iter());
 
@@ -447,9 +453,11 @@ pub fn run(
                 Some(msg_content) => {
                     let (output_rows, opt_log_row) = msg_content?;
                     for row in output_rows {
+                        function_errors.add(&row)?;
                         output_file.write_record(row)?;
                     }
                     if let Some(log_row) = opt_log_row {
+                        file_errors.add(&log_row)?;
                         logs_file.write_record(log_row)?;
                     }
                     progress.inc(1);
@@ -465,9 +473,12 @@ pub fn run(
             }
         }
         progress.finish();
-        Ok(())
+        anyhow::Ok(())
     })
-    .map_err(|e| anyhow!("Error in thread pool: {e:?}"))?
+    .map_err(|e| anyhow!("Error in thread pool: {e:?}"))??;
+    file_errors.log();
+    function_errors.log();
+    Ok(())
 }
 
 /// Analyze a file and extract the functions whose body contains one of the provided keywords.
@@ -528,13 +539,19 @@ fn analyze_file(
             let file_has_parse_error: bool = tree.root_node().has_error();
 
             if file_has_parse_error && fail_policy == "skip-file" {
+                let position: Option<(usize, usize)> = find_first_error_position(&tree.root_node());
+                debug!(
+                    "File {path}: {}",
+                    RowError::new(ErrorCode::ParseError, position_detail(position))
+                );
                 Ok((
                     Vec::new(),
                     Some(file_error_row(
                         file,
+                        ErrorCode::ParseError,
                         &language,
                         keywords_files,
-                        find_first_error_position(&tree.root_node()),
+                        position,
                     )),
                 ))
             } else if file_has_parse_error && fail_policy == "abort" {
@@ -567,12 +584,13 @@ fn analyze_file(
                     .row()
                     .into_iter()
                     .chain([
+                        error_cell(None),
                         language.to_string(),
                         total_functions.to_string(),
                         functions_with_kw.to_string(),
                     ])
                     .chain(functions_with_specific_kw.iter().map(|x| x.to_string()))
-                    .chain(error_cells(error_position))
+                    .chain(position_cells(error_position))
                     .collect();
 
                 Ok((output, Some(log_row)))
@@ -580,36 +598,53 @@ fn analyze_file(
         }
 
         // If the file is too large, return an error row
-        Err(_) => Ok((
-            Vec::new(),
-            Some(file_error_row(file, &language, keywords_files, None)),
-        )),
+        Err(size) => {
+            debug!(
+                "File {path}: {}",
+                RowError::new(ErrorCode::TooLarge, format!("{size} bytes"))
+            );
+            Ok((
+                Vec::new(),
+                Some(file_error_row(
+                    file,
+                    ErrorCode::TooLarge,
+                    &language,
+                    keywords_files,
+                    None,
+                )),
+            ))
+        }
     }
 }
 
-/// Returns the log row of a file skipped because of a parse error or of its size, with -1 for every statistic.
+/// Returns the log row of a file skipped because of a parse error or of its size: the file, its error, its language,
+/// empty statistics, and the position of the parse error.
 ///
 /// # Arguments
 ///
 /// * `file` - The file.
+/// * `error` - Why the file was skipped.
 /// * `language` - The language of the file.
 /// * `keyword_files` - The keyword files.
 /// * `parse_error` - The position of the first parse error in the file, if any.
 fn file_error_row(
     file: &RepoFile,
+    error: ErrorCode,
     language: &str,
     keyword_files: &KeywordFiles,
     parse_error: Option<(usize, usize)>,
 ) -> LogRow {
     file.row()
         .into_iter()
-        .chain([language.to_string(), "-1".to_string(), "-1".to_string()])
-        .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
-        .chain(error_cells(parse_error))
+        .chain([error.to_string(), language.to_string()])
+        // functions, functions_with_kw, and one statistic per keyword file
+        .chain(std::iter::repeat_n(String::new(), 2 + keyword_files.len()))
+        .chain(position_cells(parse_error))
         .collect()
 }
 
-/// Returns the statistics row of a function skipped because of a parse error, with -1 for every statistic.
+/// Returns the row of a function skipped because of a parse error: the function, its error, its language,
+/// empty statistics, and the position of the parse error.
 /// The function is not extracted, so its `local_function_path` is empty.
 ///
 /// # Arguments
@@ -630,14 +665,15 @@ fn function_error_row(
     function
         .row()
         .into_iter()
+        .chain([ErrorCode::ParseError.to_string()])
         .chain(write_out.then(String::new))
-        .chain([language.to_string(), "-1".to_string(), "-1".to_string()])
-        .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
+        .chain([language.to_string()])
+        // loc, words, one statistic per keyword file, and the statistics after the keywords
         .chain(std::iter::repeat_n(
-            "-1".to_string(),
-            STATISTICS_AFTER_KEYWORDS,
+            String::new(),
+            2 + keyword_files.len() + STATISTICS_AFTER_KEYWORDS,
         ))
-        .chain(error_cells(parse_error))
+        .chain(position_cells(parse_error))
         .collect()
 }
 
@@ -646,10 +682,22 @@ fn function_error_row(
 /// # Arguments
 ///
 /// * `position` - The line and the column of the parse error, if any.
-fn error_cells(position: Option<(usize, usize)>) -> [String; 2] {
+fn position_cells(position: Option<(usize, usize)>) -> [String; 2] {
     match position {
         Some((line, column)) => [line.to_string(), column.to_string()],
         None => [String::new(), String::new()],
+    }
+}
+
+/// Returns the position of a parse error, as details of its error.
+///
+/// # Arguments
+///
+/// * `position` - The line and the column of the parse error, if any.
+fn position_detail(position: Option<(usize, usize)>) -> String {
+    match position {
+        Some((line, column)) => format!("line {line}, column {column}"),
+        None => String::new(),
     }
 }
 
@@ -767,12 +815,20 @@ fn extract_functions(
                     line: function_position.0,
                     column: function_position.1,
                 };
+                let position: Option<(usize, usize)> =
+                    relative_error_position(&node, function_position);
+                debug!(
+                    "Function {} of {}: {}",
+                    function.name,
+                    file.local_path,
+                    RowError::new(ErrorCode::ParseError, position_detail(position))
+                );
                 rows.push(function_error_row(
                     &function,
                     write_out,
                     language,
                     keyword_files,
-                    relative_error_position(&node, function_position),
+                    position,
                 ));
                 functions += 1;
             } else {
@@ -875,6 +931,7 @@ fn extract_functions(
                     let row: OutputRow = function
                         .row()
                         .into_iter()
+                        .chain([error_cell(None)])
                         .chain(function_path)
                         .chain([
                             language.to_string(),
@@ -895,7 +952,7 @@ fn extract_functions(
                             param_match.to_string(),
                             return_type_match.to_string(),
                         ])
-                        .chain(error_cells(error_position))
+                        .chain(position_cells(error_position))
                         .collect();
                     rows.push(row);
                     functions_with_kw += 1;
@@ -1844,7 +1901,7 @@ mod tests {
         assert_eq!(functions.lines().count(), 1);
         assert_eq!(
             logs.lines().nth(1),
-            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,,c,-1,-1,-1,1,25")
+            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,,E030,c,,,,1,25")
         );
         Ok(())
     }
@@ -1858,11 +1915,11 @@ mod tests {
         )?;
         assert_eq!(
             functions.lines().nth(1),
-            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,main,1,5,,c,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,21")
+            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,main,1,5,,E030,c,,,,,,,,,,,,,1,21")
         );
         assert_eq!(
             logs.lines().nth(1),
-            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,,c,1,0,0,1,25")
+            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,,,c,1,0,0,1,25")
         );
         Ok(())
     }

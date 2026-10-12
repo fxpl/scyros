@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `filter_metadata` and `filter_languages` discard the rows with an error code, instead of the rows whose `repo_name` starts with `http/` or `error:`.
 - `pr` writes an error row for repositories whose pull requests cannot be fetched, instead of querying them again in the next run, and for pull requests that cannot be read, instead of a row of default values. A pull request whose discussion cannot be fetched gets an error code. Discussion files have an `error` column instead of the `error` comment type.
 - `parse` reads files from the `local_path` and `file` columns instead of `id` and `name`, such as the file log of `download`. In its outputs, `name` becomes `function_name` and `path` becomes `local_path`; the extracted function file moves to `local_function_path`, only written without `--count`. `position` is split into `line` and `column`, and `parse_error` into `parse_error_line` and `parse_error_column`, empty without error instead of `none`.
+- `parse` writes an error code in a new `error` column of both outputs, after `url`: E030 for the files and functions skipped because of a parse error (`--failures skip-file` or `skip-function`), and E031 for the files too large to be parsed. Their statistics are empty instead of -1. A summary of the errors is printed at the end, and every error with `--debug`.
 
 ### Removed
 

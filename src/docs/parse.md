@@ -25,9 +25,11 @@ Both files have a 'url' column with links to the files and to the first line of 
 
 Parse errors are handled according to the policy selected with --failures:
   * ignore: the errors are ignored and the statistics are computed as if there was no error;
-  * skip-file: no function is extracted from the file, and its row in the function logs has -1 for every statistic;
-  * skip-function: the function is not extracted, and its row in the functions file has -1 for every statistic;
+  * skip-file: no function is extracted from the file, and its row in the function logs has the error code E030 and empty statistics;
+  * skip-function: the function is not extracted, and its row in the functions file has the error code E030 and empty statistics;
   * abort: the run stops at the first file with a parse error.
+
+Files too large to be parsed get the error code E031 and empty statistics in the function logs. At the end, the command prints how many files and functions have each code; --debug also prints every error with its details. The codes are explained by scyros explain.
 
 Output functions CSV format:
   * repo_id, source, repo_name, repo_license, latest_commit: repository columns, copied from the input, empty when unknown
@@ -36,6 +38,7 @@ Output functions CSV format:
   * function_name: function or method name
   * line, column: starting line and column of the function in the source file
   * url: link to the first line of the function on GitHub
+  * error: error code if the function was skipped, empty otherwise
   * local_function_path: path to the extracted function file (not written with --count)
   * language: programming language
   * loc: number of lines in the function
@@ -57,6 +60,7 @@ Output function logs CSV format:
   * local_path: local path to the source file
   * file: path of the source file inside its repository
   * url: link to the file on GitHub
+  * error: error code if the file was skipped, empty otherwise
   * language: programming language
   * functions: number of functions found in the file
   * functions_with_kw: number of retained functions
