@@ -683,6 +683,10 @@ fn download_repo(
     delete: bool,
 ) -> Result<(ProjectRow, Vec<FileRow>)> {
     if download {
+        if let Some(error) = repo.error() {
+            warn!("Project {project_path} is not downloaded: an earlier step failed with {error}");
+            return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
+        }
         if repo.source != Source::GitHub {
             warn!(
                 "Project {project_path} is not downloaded: it has no local path and its source is {}",
@@ -1111,6 +1115,38 @@ mod tests {
             &["tests/data/keywords/c.json"],
             "none",
         )
+    }
+
+    #[test]
+    fn repositories_with_an_error_are_not_downloaded() -> Result<()> {
+        let project_path = "target/tests/repositories_with_an_error/1";
+        // Without an id, an attempt to download the repository would fail.
+        let repo = Repo {
+            id: None,
+            source: Source::GitHub,
+            name: Some("http/2 404".to_string()),
+            license: None,
+            commit: None,
+        };
+        let keyword_files =
+            KeywordFiles::new(false).add_files(&["tests/data/keywords/c.json"], true)?;
+        let (row, files) = download_repo(
+            "no token",
+            repo,
+            project_path,
+            &keyword_files,
+            &Matcher::words_matcher(),
+            true,
+            true,
+        )?;
+        let header: Vec<&str> = Repo::header();
+        assert_eq!(
+            row[..header.len() + 1],
+            ["", "github", "http/2 404", "", "", "", "error"]
+        );
+        ensure!(files.is_empty());
+        ensure!(!Path::new(project_path).exists());
+        Ok(())
     }
 
     #[test]
