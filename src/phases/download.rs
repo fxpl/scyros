@@ -41,7 +41,7 @@ use zip::ZipArchive;
 
 use crate::utils::csv::*;
 use crate::utils::dataframes::has_column;
-use crate::utils::error::{error_field, ErrorCode};
+use crate::utils::error::{error_cell, error_field, ErrorCode, ErrorSummary, RowError, ERROR};
 use crate::utils::fs::*;
 use crate::utils::github::zipball_commit;
 use crate::utils::regex::*;
@@ -398,33 +398,9 @@ pub fn run(
         },
     )?;
 
-    let project_log_headers = Repo::header()
-        .into_iter()
-        .chain([LOCAL_PATH, "files", "loc", "words", "files_with_kw"])
-        .map(|s| s.to_string())
-        .chain(
-            keyword_files
-                .paths
-                .iter()
-                .map(|p| format!("files_with_{p}")),
-        )
-        .chain(std::iter::once("loc_with_kw".to_string()))
-        .chain(
-            keyword_files
-                .paths
-                .iter()
-                .map(|p| format!("loc_of_files_with_{p}")),
-        )
-        .chain(std::iter::once("words_with_kw".to_string()))
-        .chain(
-            keyword_files
-                .paths
-                .iter()
-                .map(|p| format!("words_of_files_with_{p}")),
-        )
-        .chain(keyword_files.paths.iter().cloned());
-
-    project_log_file.write_header(project_log_headers)?;
+    let project_log_header: Vec<String> = project_log_header(&keyword_files);
+    project_log_file.write_header(&project_log_header)?;
+    let mut errors = ErrorSummary::new(&project_log_header)?;
 
     // Open the log file for the files or create it if it does not exist.
     // If the overwrite flag is set, the file is generated anew.
@@ -606,6 +582,7 @@ pub fn run(
                 Some(msg_content) => {
                     let (project_row, file_rows) = msg_content?;
 
+                    errors.add(&project_row)?;
                     project_log_file.write_record(project_row)?;
                     for row in file_rows {
                         file_log.write_record(row)?;
@@ -623,9 +600,45 @@ pub fn run(
             }
         }
         progress.finish();
-        Ok(())
+        anyhow::Ok(())
     })
-    .map_err(|e| anyhow!("Thread panicked: {e:?}"))?
+    .map_err(|e| anyhow!("Thread panicked: {e:?}"))??;
+    errors.log();
+    Ok(())
+}
+
+/// Returns the header of the project log: the repository, its link, its error, its local path and its statistics.
+///
+/// # Arguments
+///
+/// * `keyword_files` - The keyword files, with a column of statistics each.
+fn project_log_header(keyword_files: &KeywordFiles) -> Vec<String> {
+    Repo::header()
+        .into_iter()
+        .chain([ERROR, LOCAL_PATH, "files", "loc", "words", "files_with_kw"])
+        .map(|s| s.to_string())
+        .chain(
+            keyword_files
+                .paths
+                .iter()
+                .map(|p| format!("files_with_{p}")),
+        )
+        .chain(std::iter::once("loc_with_kw".to_string()))
+        .chain(
+            keyword_files
+                .paths
+                .iter()
+                .map(|p| format!("loc_of_files_with_{p}")),
+        )
+        .chain(std::iter::once("words_with_kw".to_string()))
+        .chain(
+            keyword_files
+                .paths
+                .iter()
+                .map(|p| format!("words_of_files_with_{p}")),
+        )
+        .chain(keyword_files.paths.iter().cloned())
+        .collect()
 }
 
 /// Downloads a GitHub repository and filters the files according to the provided extensions and keywords.
@@ -689,20 +702,33 @@ fn download_repo(
     download: bool,
     delete: bool,
 ) -> Result<(ProjectRow, Vec<FileRow>)> {
+    // The local path of an error row: the one of the input, if any.
+    let error_path: &str = if download { "" } else { project_path };
+    // A project with an error in the input is copied with this error, without being downloaded or analyzed.
+    if let Some(code) = input_error {
+        return Ok((
+            error_row(&repo, code, error_path, keywords_files),
+            Vec::new(),
+        ));
+    }
     if download {
-        if let Some(code) = input_error {
-            warn!(
-                "Project {project_path} is not downloaded: an earlier step failed with {code} {}",
-                code.description()
-            );
-            return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
-        }
         if repo.source != Source::GitHub {
-            warn!(
-                "Project {project_path} is not downloaded: it has no local path and its source is {}",
-                repo.source
+            debug!(
+                "Project {project_path}: {}",
+                RowError::new(
+                    ErrorCode::UnsupportedSource,
+                    format!("no local path and source {}", repo.source)
+                )
             );
-            return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
+            return Ok((
+                error_row(
+                    &repo,
+                    ErrorCode::UnsupportedSource,
+                    error_path,
+                    keywords_files,
+                ),
+                Vec::new(),
+            ));
         }
         let id = repo.id.with_context(|| {
             format!("Project {project_path} does not have an id, cannot be downloaded")
@@ -731,10 +757,12 @@ fn download_repo(
             reqwest::Url::parse(&url_str).with_context(|| format!("Bad URL {url_str}"))?;
 
         let zip_path: String = format!("{project_path}.zip");
-        let downloaded: bool = fetch_zipball(&http_client, &url, &headers, &zip_path)
-            .with_context(|| format!("Could not download repository {id}"))?;
-        if !downloaded {
-            return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
+        if let Some(e) = fetch_zipball(&http_client, &url, &headers, &zip_path)? {
+            debug!("Repository {id}: {e}");
+            return Ok((
+                error_row(&repo, e.code, error_path, keywords_files),
+                Vec::new(),
+            ));
         }
 
         // Extract into an empty directory: the extraction refuses to write through symbolic links left by an earlier run.
@@ -750,9 +778,20 @@ fn download_repo(
         let commit: Option<String> = match extracted {
             Ok(commit) => commit,
             Err(e) => {
-                warn!("Could not extract repository {id}: {e}");
+                debug!(
+                    "Repository {id}: {}",
+                    RowError::new(ErrorCode::ExtractionFailed, e)
+                );
                 delete_dir(project_path, true)?;
-                return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
+                return Ok((
+                    error_row(
+                        &repo,
+                        ErrorCode::ExtractionFailed,
+                        error_path,
+                        keywords_files,
+                    ),
+                    Vec::new(),
+                ));
             }
         };
         if repo.commit.is_none() {
@@ -868,6 +907,7 @@ fn download_repo(
     }
 
     let mut project_row: Vec<String> = repo.row();
+    project_row.push(error_cell(None));
     project_row.push(project_path.to_string());
     project_row.push(dir_files_before_filter.to_string());
     project_row.push(dir_loc_before_filter.to_string());
@@ -884,7 +924,7 @@ fn download_repo(
 }
 
 /// Downloads the zip archive of a repository to a file.
-/// Rate limits are waited out, and server errors and interrupted transfers are retried a few times.
+/// Rate limits are waited out, and server errors and network failures are retried a few times.
 ///
 /// # Arguments
 ///
@@ -895,44 +935,49 @@ fn download_repo(
 ///
 /// # Returns
 ///
-/// Whether the archive was downloaded. It is not when GitHub answers with an error that retrying does not solve, such as 404.
-/// An error is returned when all attempts failed.
-fn fetch_zipball(client: &Client, url: &Url, headers: &HeaderMap, zip_path: &str) -> Result<bool> {
+/// Why the archive could not be downloaded, or `None` if it was. Fails if the archive cannot be written.
+fn fetch_zipball(
+    client: &Client,
+    url: &Url,
+    headers: &HeaderMap,
+    zip_path: &str,
+) -> Result<Option<RowError>> {
     const MAX_ATTEMPTS: u32 = 5;
     let mut failures: u32 = 0;
     loop {
-        let attempt = || -> Result<Option<bool>> {
-            let mut response: Response = client.get(url.clone()).headers(headers.clone()).send()?;
-            let status = response.status();
-            if let Some(wait) = rate_limit_wait(&response) {
-                warn!("Rate limit reached: waiting {} s", wait.as_secs());
-                sleep(wait);
-                Ok(None)
-            } else if status.is_server_error() {
-                bail!("Server error: {status}")
-            } else if !status.is_success() {
-                Ok(Some(false))
-            } else {
-                copy(
-                    &mut response,
-                    &mut open_file(zip_path, FileMode::Overwrite)?,
-                )?;
-                Ok(Some(true))
+        // Failures that retrying may solve.
+        let failure: RowError = match client.get(url.clone()).headers(headers.clone()).send() {
+            Err(e) => RowError::new(ErrorCode::Network, e),
+            Ok(mut response) => {
+                let status = response.status();
+                if let Some(wait) = rate_limit_wait(&response) {
+                    warn!("Rate limit reached: waiting {} s", wait.as_secs());
+                    sleep(wait);
+                    continue;
+                } else if status.is_server_error() {
+                    RowError::new(ErrorCode::Http(status.as_u16()), status)
+                } else if !status.is_success() {
+                    return Ok(Some(RowError::new(
+                        ErrorCode::Http(status.as_u16()),
+                        status,
+                    )));
+                } else {
+                    let mut file = open_file(zip_path, FileMode::Overwrite)?;
+                    match copy(&mut response, &mut file) {
+                        Ok(_) => return Ok(None),
+                        // Interrupted transfers.
+                        Err(e) => RowError::new(ErrorCode::Network, e),
+                    }
+                }
             }
         };
-        match attempt() {
-            Ok(Some(downloaded)) => return Ok(downloaded),
-            Ok(None) => (),
-            Err(e) => {
-                delete_file(zip_path, true)?;
-                failures += 1;
-                if failures >= MAX_ATTEMPTS {
-                    return Err(e.context(format!("{MAX_ATTEMPTS} attempts failed")));
-                }
-                warn!("Download of {url} failed ({e}), retrying");
-                sleep(Duration::from_secs(2u64.pow(failures)));
-            }
+        delete_file(zip_path, true)?;
+        failures += 1;
+        if failures >= MAX_ATTEMPTS {
+            return Ok(Some(failure));
         }
+        warn!("Download of {url} failed ({failure}), retrying");
+        sleep(Duration::from_secs(2u64.pow(failures)));
     }
 }
 
@@ -969,23 +1014,25 @@ fn rate_limit_wait(response: &Response) -> Option<Duration> {
     Some(Duration::from_secs(wait).min(MAX_WAIT))
 }
 
-/// Returns the row of the project log of a repository that could not be downloaded, whose local path is `error` and whose statistics are 0.
+/// Returns the row of the project log of a repository that could not be downloaded or analyzed:
+/// the repository, its link, its error, its local path, and empty statistics.
 ///
 /// # Arguments
 ///
 /// * `repo` - The repository.
-/// * `n_kw_files` - The number of keyword files.
-fn error_row(repo: &Repo, n_kw_files: usize) -> Vec<String> {
+/// * `error` - Why it could not be downloaded or analyzed.
+/// * `local_path` - Its local path in the input, or empty if it has none.
+/// * `keyword_files` - The keyword files, with a column of statistics each.
+fn error_row(
+    repo: &Repo,
+    error: ErrorCode,
+    local_path: &str,
+    keyword_files: &KeywordFiles,
+) -> ProjectRow {
     let mut row: Vec<String> = repo.row();
-    row.push("error".to_string());
-    row.extend(["0", "0", "0"].map(str::to_string)); // files, loc, words
-                                                     // Four blocks: (files_with_kw, [0; n]), (loc_with_kw, [0; n]),
-                                                     // (words_with_kw, [0; n]), and a trailing [0; n] for per-keyword matches.
-    for _ in 0..3 {
-        row.push("0".to_string()); // *_with_kw aggregate
-        row.extend((0..n_kw_files).map(|_| "0".to_string()));
-    }
-    row.extend((0..n_kw_files).map(|_| "0".to_string()));
+    row.push(error.to_string());
+    row.push(local_path.to_string());
+    row.resize(project_log_header(keyword_files).len(), String::new());
     row
 }
 
@@ -1119,32 +1166,58 @@ mod tests {
         )
     }
 
-    #[test]
-    fn repositories_with_an_error_are_not_downloaded() -> Result<()> {
+    /// Runs download_repo on a repository that is not downloaded nor analyzed, and returns its row.
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The repository.
+    /// * `input_error` - The error of the repository in the input, if any.
+    /// * `local_path` - The local path of the repository in the input, if any.
+    fn error_row_of(
+        repo: Repo,
+        input_error: Option<ErrorCode>,
+        local_path: Option<&str>,
+    ) -> Result<ProjectRow> {
         let project_path = "target/tests/repositories_with_an_error/1";
-        // Without an id, an attempt to download the repository would fail.
-        let repo = Repo {
-            id: None,
-            source: Source::GitHub,
-            name: Some("owner/repo".to_string()),
-            license: None,
-            commit: None,
-        };
         let keyword_files =
             KeywordFiles::new(false).add_files(&["tests/data/keywords/c.json"], true)?;
         let (row, files) = download_repo(
             "no token",
             repo,
-            Some(ErrorCode::Http(404)),
-            project_path,
+            input_error,
+            local_path.unwrap_or(project_path),
             &keyword_files,
             &Matcher::words_matcher(),
-            true,
+            local_path.is_none(),
             true,
         )?;
-        let header: Vec<&str> = Repo::header();
+        ensure!(files.is_empty());
+        ensure!(!Path::new(project_path).exists());
+        assert_eq!(row.len(), project_log_header(&keyword_files).len());
+        Ok(row)
+    }
+
+    /// Returns a repository on GitHub, without id: an attempt to download it would fail.
+    fn repo_without_id(source: Source) -> Repo {
+        Repo {
+            id: None,
+            source,
+            name: Some("owner/repo".to_string()),
+            license: None,
+            commit: None,
+        }
+    }
+
+    #[test]
+    fn repositories_with_an_error_are_not_downloaded() -> Result<()> {
+        let row = error_row_of(
+            repo_without_id(Source::GitHub),
+            Some(ErrorCode::Http(404)),
+            None,
+        )?;
+        // The repository and its link are kept, the error is copied, and the local path and statistics are empty.
         assert_eq!(
-            row[..header.len() + 1],
+            row[..8],
             [
                 "",
                 "github",
@@ -1152,11 +1225,27 @@ mod tests {
                 "",
                 "",
                 "https://github.com/owner/repo",
-                "error"
+                "E404",
+                ""
             ]
         );
-        ensure!(files.is_empty());
-        ensure!(!Path::new(project_path).exists());
+        ensure!(row[8..].iter().all(String::is_empty));
+
+        // A local repository with an error is not analyzed, and keeps its local path.
+        let row = error_row_of(
+            repo_without_id(Source::Local),
+            Some(ErrorCode::UnsupportedSource),
+            Some("tests/data/phases/download/local_repo"),
+        )?;
+        assert_eq!(row[6..8], ["E010", "tests/data/phases/download/local_repo"]);
+        ensure!(row[8..].iter().all(String::is_empty));
+        Ok(())
+    }
+
+    #[test]
+    fn repositories_not_on_github_are_not_downloaded() -> Result<()> {
+        let row = error_row_of(repo_without_id(Source::Local), None, None)?;
+        assert_eq!(row[6..8], ["E010", ""]);
         Ok(())
     }
 
@@ -1286,11 +1375,11 @@ mod tests {
 
         let projects: Vec<&str> = projects.lines().collect();
         assert!(projects[0].starts_with(
-            "repo_id,source,repo_name,repo_license,latest_commit,url,local_path,files,"
+            "repo_id,source,repo_name,repo_license,latest_commit,url,error,local_path,files,"
         ));
         assert!(projects[1].starts_with(
             "42,github,owner/local-repo,MIT License,0123456789abcdef,\
-             https://github.com/owner/local-repo/tree/0123456789abcdef,tests/data/phases/download/local_repo,2,"
+             https://github.com/owner/local-repo/tree/0123456789abcdef,,tests/data/phases/download/local_repo,2,"
         ));
 
         let files: Vec<&str> = files.lines().collect();

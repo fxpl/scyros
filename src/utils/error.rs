@@ -220,10 +220,10 @@ impl ErrorSummary {
     /// # Arguments
     ///
     /// * `header` - The header of the output file, with an error column.
-    pub fn new(header: &[&str]) -> Result<Self> {
+    pub fn new(header: &[impl AsRef<str>]) -> Result<Self> {
         let column: usize = header
             .iter()
-            .position(|c| *c == ERROR)
+            .position(|c| c.as_ref() == ERROR)
             .with_context(|| format!("The output has no {ERROR} column"))?;
         Ok(Self {
             column,
