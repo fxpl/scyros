@@ -133,7 +133,7 @@ pub fn cli() -> Command {
 /// Projects are queried in a random order.
 /// The cache must be the output of a previous run with the same columns, possibly with another input file or seed.
 ///
-/// The output has the repository columns, the link to the projects, and the languages (see [`ProjectInfo::COLUMNS`]).
+/// The output has the repository columns, the link to the projects, and their languages in `languages`.
 ///
 /// # Arguments
 ///

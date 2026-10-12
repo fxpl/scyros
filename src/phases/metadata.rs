@@ -62,7 +62,8 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. One of the columns must contain the full names of the projects. ")
+                .help("Path to the input csv file to use. It must have a column 'repo_id' with the ids of the projects and a column 'repo_name' with their full names. \
+                       Its repository columns are copied to the output, and its other columns are ignored.")
                 .required(true)
         )
         .arg(
@@ -133,7 +134,7 @@ pub fn cli() -> Command {
 /// The cache must be the output of a previous run with the same columns, possibly with another input file or seed.
 ///
 /// The output has the repository columns, with the license of the projects in `repo_license`,
-/// the link to the projects, and the columns of [`ProjectMetadata::COLUMNS`].
+/// the link to the projects, and their metadata (main language, dates, stars, forks, issues, size, ...).
 ///
 /// # Arguments
 ///

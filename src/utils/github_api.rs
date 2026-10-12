@@ -1,6 +1,6 @@
 //! Copyright (c) Nov 16, 2021 Petr Maj
 //! Originally from CodeDJ Parasite
-//! Source: https://github.com/PRL-PRG/codedj-parasite/blob/old_sentinels_new_stuff/src/github.rs
+//! Source: <https://github.com/PRL-PRG/codedj-parasite/blob/old_sentinels_new_stuff/src/github.rs>
 
 #![allow(clippy::all)]
 

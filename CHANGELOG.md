@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `languages` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. It no longer queries the latest commit, which moves to the new `latest_commit` subcommand, and values are quoted instead of having their commas replaced. `filter_languages` reads the new column names.
 - `duplicate_files` reads file paths from the `local_path` column by default, instead of `name`.
 - `download` reads the directories of local repositories from `local_path` instead of `path`, and its logs write local paths in `local_path` instead of `path` and `name`.
-- `pr` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Values are quoted instead of being written as they are.
+- `pr` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its `file_path` column is renamed `local_discussion_path`, and values are quoted instead of being written as they are.
 - `download` does not download repositories whose `repo_name` is an error from an earlier step, such as `metadata`, and logs them as error rows.
 - `parse` reads files from the `local_path` and `file` columns instead of `id` and `name`, such as the file log of `download`. In its outputs, `name` becomes `function_name` and `path` becomes `local_path`; the extracted function file moves to `local_function_path`, only written without `--count`. `position` is split into `line` and `column`, and `parse_error` into `parse_error_line` and `parse_error_column`, empty without error instead of `none`.
 

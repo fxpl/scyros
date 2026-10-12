@@ -18,7 +18,7 @@ Output pull-requests CSV format:
   * repo_license, latest_commit: copied from the input
   * pr_number: pull request number
   * url: link to the pull request on GitHub
-  * file_path: path to the CSV file containing the pull request discussion
+  * local_discussion_path: local path to the CSV file containing the pull request discussion
   * user: login of the pull request author
   * user_id: GitHub user ID of the pull request author
   * created_at: creation timestamp

@@ -63,7 +63,8 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. One of the columns must contain the full names of the projects. ")
+                .help("Path to the input csv file to use. It must have a column 'repo_id' with the ids of the projects and a column 'repo_name' with their full names. \
+                       Its repository columns are copied to the output, and its other columns are ignored.")
                 .required(true)
         )
         .arg(
@@ -285,7 +286,7 @@ pub fn run(
                     let mut pr_metadata: PRMetadata =
                         PRMetadata::parse_json(&json, (id, target.to_string()))?;
                     scrape_pr_comments(&gh, id, &pr_metadata).unwrap_or_else(|_| {
-                        pr_metadata.file_path = String::new();
+                        pr_metadata.local_discussion_path = String::new();
                     });
                     Ok(pr_metadata)
                 },
@@ -350,8 +351,8 @@ fn error_row(mut repo: Repo, error: String) -> Vec<String> {
 struct PRMetadata {
     /// The number of the pull request.
     pr_number: u32,
-    /// The path of the file storing the contents of the pull request.
-    file_path: String,
+    /// The local path of the file storing the discussion of the pull request.
+    local_discussion_path: String,
     /// The user who created the pull request.
     user: String,
     /// The id of the user who created the pull request.
@@ -375,7 +376,7 @@ struct PRMetadata {
 impl PRMetadata {
     /// Columns of the metadata of a pull request, after the columns of the pull request and its link.
     const COLUMNS: [&'static str; 9] = [
-        "file_path",
+        "local_discussion_path",
         "user",
         "user_id",
         "created_at",
@@ -389,7 +390,7 @@ impl PRMetadata {
     /// Returns the values of the pull request, in the order of [`Self::COLUMNS`].
     fn values(&self) -> Vec<String> {
         vec![
-            self.file_path.clone(),
+            self.local_discussion_path.clone(),
             self.user.clone(),
             self.user_id.to_string(),
             self.created_at.to_string(),
@@ -444,7 +445,7 @@ impl FromGitHub for PRMetadata {
             clean_string_to_csv(&get_field::<String>(json, "body")?)
         };
         Ok(Self {
-            file_path: path,
+            local_discussion_path: path,
             pr_number,
             created_at: created_at as u64,
             updated_at: updated_at as u64,
@@ -620,7 +621,7 @@ impl FromGitHub for PRComment {
 /// Unit if the comments were successfully scraped and saved, or an error message if an error occurred.
 fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<()> {
     let mut file_content: String = String::new();
-    let mut output_file: CSVFile = CSVFile::new(&pr.file_path, FileMode::Overwrite)?;
+    let mut output_file: CSVFile = CSVFile::new(&pr.local_discussion_path, FileMode::Overwrite)?;
     writeln!(&mut file_content, "{}", PRComment::header().join(","))?;
 
     // Body of the PR as the first comment.
