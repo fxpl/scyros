@@ -21,7 +21,6 @@ use std::path::Path;
 use std::str::FromStr;
 
 use super::github::{github_url, is_zipball_root};
-use super::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 
 /// Column with the local path of a repository or a file.
 pub const LOCAL_PATH: &str = "local_path";
@@ -216,20 +215,8 @@ impl Repo {
         })
     }
 
-    /// Returns the error that phases using the GitHub API write in `repo_name` for a repository not on GitHub.
-    pub fn unsupported_source(&self) -> String {
-        format!("{OTHER_ERROR_PREFIX} unsupported source {}", self.source)
-    }
-
-    /// Returns the error that an earlier step wrote in `repo_name` instead of the name, if any.
-    pub fn error(&self) -> Option<&str> {
-        self.name.as_deref().filter(|name| {
-            name.starts_with(HTTP_ERROR_PREFIX) || name.starts_with(OTHER_ERROR_PREFIX)
-        })
-    }
-
     /// Returns the GitHub link to a page of the repository: its name, then `path`.
-    /// There is no link if the repository is not on GitHub, or if its name is unknown or an error.
+    /// There is no link if the repository is not on GitHub, or if its name is unknown.
     ///
     /// # Arguments
     ///
@@ -238,7 +225,7 @@ impl Repo {
         let name: &str = self
             .name
             .as_deref()
-            .filter(|_| self.source == Source::GitHub && self.error().is_none())?;
+            .filter(|_| self.source == Source::GitHub)?;
         Some(github_url(name.split('/').chain(path)))
     }
 
@@ -511,25 +498,6 @@ mod tests {
             .url(),
             None
         );
-    }
-
-    #[test]
-    fn errors_have_no_link() {
-        for error in ["http/2 404", "error: unsupported source local"] {
-            let failed = repo(Source::GitHub, Some(error), Some("abc"));
-            assert_eq!(failed.error(), Some(error));
-            assert_eq!(failed.url(), None);
-            assert_eq!(
-                PullRequest {
-                    repo: &failed,
-                    number: 3
-                }
-                .url(),
-                None
-            );
-            assert_eq!(file(failed, "main.c").url(), None);
-        }
-        assert_eq!(repo(Source::GitHub, Some("owner/repo"), None).error(), None);
     }
 
     #[test]

@@ -21,9 +21,9 @@ use polars::prelude::{col, cols, lit, when, DataType, Field, IntoLazy, Schema};
 use tracing::info;
 
 use super::rename_arg;
-use crate::utils::dataframes::require_columns;
+use crate::utils::dataframes::{has_column, require_columns};
+use crate::utils::error::{error_field, ERROR};
 use crate::utils::fs::*;
-use crate::utils::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 use crate::utils::repo::RepoColumn;
 
@@ -157,6 +157,7 @@ pub fn run(
     let mut projects: DataFrame = open_csv(
         input_path,
         Some(Schema::from_iter(RepoColumn::fields().into_iter().chain([
+            error_field(),
             Field::new("language".into(), DataType::String),
             Field::new("created".into(), DataType::UInt64),
             Field::new("pushed".into(), DataType::UInt64),
@@ -172,17 +173,15 @@ pub fn run(
 
     info!("{} ids found in the file", projects_count);
 
+    // Projects with an error could not be queried, for example because they were deleted.
+    let without_error = if has_column(&projects, ERROR) {
+        col(ERROR).is_null()
+    } else {
+        lit(true)
+    };
     projects = projects
         .lazy()
-        .filter(
-            col(RepoColumn::RepoName.name())
-                .str()
-                .starts_with(lit(HTTP_ERROR_PREFIX))
-                .or(col(RepoColumn::RepoName.name())
-                    .str()
-                    .starts_with(lit(OTHER_ERROR_PREFIX)))
-                .not(),
-        )
+        .filter(without_error)
         .with_column(
             (col("pushed").cast(DataType::Int64) - col("created").cast(DataType::Int64))
                 .alias("age"),
@@ -202,14 +201,12 @@ pub fn run(
         .collect()
         .with_context(|| "Could not compute the age of the projects")?;
 
-    // Discarding projects that are unreachable (i.e., turned private or deleted)
-
     let mut reachable_projects_count = projects.height();
     let reachable_projects_percentage =
         (reachable_projects_count as f64 / projects_count as f64) * 100.0;
 
     info!(
-        "{} projects ({:.2}%) are unreachable (turned private or deleted)",
+        "{} projects ({:.2}%) have an error, for example because they were deleted or turned private",
         projects_count - reachable_projects_count,
         100.0 - reachable_projects_percentage
     );

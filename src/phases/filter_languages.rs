@@ -22,8 +22,8 @@ use polars::frame::DataFrame;
 use polars::prelude::{col, lit, DataType, Field, IdxCa, IntoLazy, Schema};
 use tracing::info;
 
-use crate::utils::dataframes::require_columns;
-use crate::utils::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
+use crate::utils::dataframes::{has_column, require_columns};
+use crate::utils::error::{error_field, ERROR};
 use crate::utils::logger::{log_output_file, log_write_dataframe, Logger};
 use crate::utils::regex::KeywordFiles;
 use crate::utils::repo::RepoColumn;
@@ -124,11 +124,10 @@ pub fn run(
 
     let mut projects: DataFrame = open_csv(
         input_path,
-        Some(Schema::from_iter(
-            RepoColumn::fields()
-                .into_iter()
-                .chain([Field::new("languages".into(), DataType::String)]),
-        )),
+        Some(Schema::from_iter(RepoColumn::fields().into_iter().chain([
+            error_field(),
+            Field::new("languages".into(), DataType::String),
+        ]))),
         None,
         renames,
     )?;
@@ -140,29 +139,26 @@ pub fn run(
     let projects_count = projects.height();
 
     info!("{} projects found in the file", projects_count);
+
+    // Projects with an error could not be queried, for example because they were deleted.
+    let without_error = if has_column(&projects, ERROR) {
+        col(ERROR).is_null()
+    } else {
+        lit(true)
+    };
     projects = projects
         .lazy()
-        .filter(
-            col(RepoColumn::RepoName.name())
-                .str()
-                .starts_with(lit(HTTP_ERROR_PREFIX))
-                .or(col(RepoColumn::RepoName.name())
-                    .str()
-                    .starts_with(lit(OTHER_ERROR_PREFIX)))
-                .not(),
-        )
+        .filter(without_error)
         .with_column(col("languages").fill_null(lit("")))
         .collect()
-        .with_context(|| "Could not filter unreachable projects")?;
-
-    // Discarding projects that are unreachable (i.e., turned private or deleted)
+        .with_context(|| "Could not filter the projects with an error")?;
 
     let reachable_projects_count = projects.height();
     let reachable_projects_percentage =
         (reachable_projects_count as f64 / projects_count as f64) * 100.0;
 
     info!(
-        "\n{} projects ({:.2}%) are unreachable (turned private or deleted)",
+        "\n{} projects ({:.2}%) have an error, for example because they were deleted or turned private",
         projects_count - reachable_projects_count,
         100.0 - reachable_projects_percentage
     );
@@ -233,7 +229,7 @@ mod tests {
         let output_df = open_csv(output, None, None, &[])?;
 
         ensure!(
-            expected_df.equals(&output_df),
+            expected_df.equals_missing(&output_df),
             "Filtered DataFrame does not match expected result."
         );
 
@@ -272,7 +268,7 @@ mod tests {
         let expected_df = open_csv(EXPECTED, None, None, &[])?;
         let output_df = open_csv(output, None, None, &[])?;
         ensure!(
-            expected_df.equals(&output_df),
+            expected_df.equals_missing(&output_df),
             "Overwritten output does not match expected."
         );
         delete_file(output, false)

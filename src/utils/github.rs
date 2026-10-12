@@ -80,17 +80,6 @@ pub fn read_tokens(file_path: &str) -> Result<Vec<String>> {
     Ok(tokens)
 }
 
-/// Objects that can be converted to CSV rows.
-// TODO: Tests
-pub trait ToCSV: Default {
-    type Key;
-    /// Converts the object to a CSV row.
-    fn to_csv(&self, key: Self::Key) -> String;
-
-    /// Returns the CSV header for the object as a vector of strings.
-    fn header() -> &'static [&'static str];
-}
-
 /// Objects that can be created from GitHub JSON responses.
 // TODO: Tests
 pub trait FromGitHub {

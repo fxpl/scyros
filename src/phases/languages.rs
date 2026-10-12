@@ -22,6 +22,7 @@ use std::path::Path;
 
 use crate::utils::csv::*;
 use crate::utils::dataframes::{has_column, require_columns};
+use crate::utils::error::{error_cell, error_field, ErrorCode, ErrorSummary, RowError, ERROR};
 use crate::utils::fs::*;
 use crate::utils::github_api::Github;
 use crate::utils::logger::*;
@@ -39,7 +40,7 @@ use polars::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -171,7 +172,9 @@ pub fn run(
     let input_file: DataFrame = logger.run_task("Loading input file", || {
         let df: DataFrame = open_csv(
             input_path,
-            Some(Schema::from_iter(RepoColumn::fields())),
+            Some(Schema::from_iter(
+                RepoColumn::fields().into_iter().chain([error_field()]),
+            )),
             None,
             renames,
         )?;
@@ -199,10 +202,12 @@ pub fn run(
         Ok(())
     })?;
 
-    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<(u32, Repo)> {
+    // Each project comes with the error of its row in the input, if any.
+    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<Project> {
         let repo: Repo = Repo::from_csv_row(&input_file, idx, infer_source)?;
+        let error: Option<ErrorCode> = ErrorCode::from_csv_row(&input_file, idx)?;
         match (repo.id, &repo.name) {
-            (Some(id), Some(_)) => Ok((id, repo)),
+            (Some(id), Some(_)) => Ok((id, repo, error)),
             _ => bail!("Row {idx} of the input file has no id or no full name"),
         }
     });
@@ -249,9 +254,11 @@ pub fn run(
 
     let header: Vec<&str> = Repo::header()
         .into_iter()
+        .chain([ERROR])
         .chain(ProjectInfo::COLUMNS)
         .collect();
     output_file.write_header(&header)?;
+    let mut errors = ErrorSummary::new(&header)?;
 
     // Load the cache, whose rows are written as they are.
     let cache: HashMap<u32, Vec<String>> = logger.run_task("Loading cache", || {
@@ -289,14 +296,14 @@ pub fn run(
 
     // Projects that have not been processed yet, in random order, up to the number of projects to sample.
     let n: usize = sub.unwrap_or(usize::MAX);
-    let mut projects: Vec<(u32, Repo)> = Vec::new();
+    let mut projects: Vec<Project> = Vec::new();
     for row in shuffled_rows {
         if projects.len() == n {
             break;
         }
-        let (id, repo): (u32, Repo) = row?;
-        if !previous_results.contains(&id) {
-            projects.push((id, repo));
+        let project: Project = row?;
+        if !previous_results.contains(&project.0) {
+            projects.push(project);
         }
     }
 
@@ -314,23 +321,20 @@ pub fn run(
     parallel_pipeline(
         &projects,
         vec![(); threads],
-        |_, (id, repo): &(u32, Repo)| {
+        |_, (id, repo, input_error): &Project| {
+            // A project with an error in the input is copied with this error, without request.
+            if let Some(code) = input_error {
+                return Ok((project_row(repo.clone(), Err((*code).into())), false));
+            }
             // We first check the cache. If the project is not in the cache, we make a request to the API.
             if let Some(row) = cache.get(id) {
                 return Ok((row.clone(), true));
             }
-            let response: Result<JsonValue, String> = if repo.source == Source::GitHub {
-                let full_name: &str = repo.name.as_deref().unwrap_or_default();
-                gh.request(&format!(
-                    "https://api.github.com/repos/{full_name}/languages"
-                ))
-                .map_err(|e| e.to_string())
-            } else {
-                Err(repo.unsupported_source())
-            };
-            Ok((project_row(repo.clone(), response)?, false))
+            let info = query(&gh, repo).inspect_err(|e| debug!("Repository {id}: {e}"));
+            Ok((project_row(repo.clone(), info), false))
         },
         |(row, from_cache): (Vec<String>, bool)| {
+            errors.add(&row)?;
             output_file.write_record(row)?;
             if from_cache {
                 request_from_cache += 1;
@@ -341,7 +345,31 @@ pub fn run(
         },
     )?;
     output_file.flush()?;
+    errors.log();
     Ok(())
+}
+
+/// A project to query: its id, the project, and the error of its row in the input, if any.
+type Project = (u32, Repo, Option<ErrorCode>);
+
+/// Queries the languages of a project on GitHub.
+///
+/// # Arguments
+///
+/// * `gh` - The GitHub client.
+/// * `repo` - The project.
+fn query(gh: &Github, repo: &Repo) -> Result<ProjectInfo, RowError> {
+    if repo.source != Source::GitHub {
+        return Err(RowError::new(
+            ErrorCode::UnsupportedSource,
+            format!("source {}", repo.source),
+        ));
+    }
+    let full_name: &str = repo.name.as_deref().unwrap_or_default();
+    let json: JsonValue = gh.request(&format!(
+        "https://api.github.com/repos/{full_name}/languages"
+    ))?;
+    ProjectInfo::from_json(&json).map_err(|e| RowError::new(ErrorCode::InvalidAnswer, e))
 }
 
 /// Returns the row of a project in the output.
@@ -349,17 +377,21 @@ pub fn run(
 /// # Arguments
 ///
 /// * `repo` - The project.
-/// * `response` - The response of the GitHub API about the languages of the project, or the error message.
-///   On an error, the name of the project is replaced by the error message, and the link is empty.
-fn project_row(mut repo: Repo, response: Result<JsonValue, String>) -> Result<Vec<String>> {
-    let info: ProjectInfo = match response {
-        Ok(languages) => ProjectInfo::from_json(&languages)?,
-        Err(error) => {
-            repo.name = Some(error);
-            ProjectInfo::default()
-        }
+/// * `info` - The languages of the project, or why they could not be queried.
+///   On an error, the languages are empty.
+fn project_row(repo: Repo, info: Result<ProjectInfo, RowError>) -> Vec<String> {
+    let (error, values): (Option<ErrorCode>, Vec<String>) = match info {
+        Ok(info) => (None, info.values()),
+        Err(e) => (
+            Some(e.code),
+            vec![String::new(); ProjectInfo::COLUMNS.len()],
+        ),
     };
-    Ok(repo.row().into_iter().chain(info.values()).collect())
+    repo.row()
+        .into_iter()
+        .chain([error_cell(error)])
+        .chain(values)
+        .collect()
 }
 
 /// Represents the information retrieved from a GitHub project.
@@ -464,9 +496,9 @@ mod tests {
 
     #[test]
     fn rows_of_queried_projects() -> Result<()> {
-        let languages = json::parse(r#"{"Rust": 100, "C": 300}"#)?;
+        let languages = ProjectInfo::from_json(&json::parse(r#"{"Rust": 100, "C": 300}"#)?)?;
         assert_eq!(
-            project_row(repo(), Ok(languages.clone()))?,
+            project_row(repo(), Ok(languages)),
             [
                 "42",
                 "github",
@@ -474,6 +506,7 @@ mod tests {
                 "MIT License",
                 "abc123",
                 "https://github.com/owner/repo/tree/abc123",
+                "",
                 "C:300;Rust:100"
             ]
         );
@@ -483,28 +516,28 @@ mod tests {
             ..repo()
         };
         assert_eq!(
-            project_row(unpinned, Ok(languages))?[4..6],
+            project_row(unpinned, Ok(ProjectInfo::default()))[4..6],
             ["", "https://github.com/owner/repo"]
         );
         Ok(())
     }
 
     #[test]
-    fn rows_of_failed_queries() -> Result<()> {
-        // The name is replaced by the error, and the link is empty.
+    fn rows_of_failed_queries() {
+        // The repository and its link are kept, the error is written, and the languages are empty.
         assert_eq!(
-            project_row(repo(), Err("http/2 404".to_string()))?,
+            project_row(repo(), Err(ErrorCode::Http(404).into())),
             [
                 "42",
                 "github",
-                "http/2 404",
+                "owner/repo",
                 "MIT License",
                 "abc123",
-                "",
+                "https://github.com/owner/repo/tree/abc123",
+                "E404",
                 ""
             ]
         );
-        Ok(())
     }
 
     #[test]

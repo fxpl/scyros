@@ -1,5 +1,5 @@
-repo_id,source,repo_name,repo_license,latest_commit,url,languages
-233516162,github,meta-abhinav-kanchhal/GET,unknown,10123a1d2e9ad9abf7d8fb43cf9b1c33a696aace,https://github.com/meta-abhinav-kanchhal/GET/tree/10123a1d2e9ad9abf7d8fb43cf9b1c33a696aace,Java:466703;CSS:6843;HTML:50753;JavaScript:28879
-525338893,github,joaoboscocordeiro/AppInstagram,unknown,122c348c81b561aea219ca03f26e01b26fd3e9db,https://github.com/joaoboscocordeiro/AppInstagram/tree/122c348c81b561aea219ca03f26e01b26fd3e9db,Scala:153020
-98996996,github,wuguokai/wgkStudy,unknown,a69ed2990fd9eef908522bc51b89356564a1e5da,https://github.com/wuguokai/wgkStudy/tree/a69ed2990fd9eef908522bc51b89356564a1e5da,Java:27545
-242617898,github,Smitasppit/vg-api-test,unknown,f093844f2b98a1ce6cce7d22195a5a05fce2bd07,https://github.com/Smitasppit/vg-api-test/tree/f093844f2b98a1ce6cce7d22195a5a05fce2bd07,HTML:22853;JavaScript:3555;Java:4136;CSS:5337
+repo_id,source,repo_name,repo_license,latest_commit,url,error,languages
+233516162,github,meta-abhinav-kanchhal/GET,unknown,10123a1d2e9ad9abf7d8fb43cf9b1c33a696aace,https://github.com/meta-abhinav-kanchhal/GET/tree/10123a1d2e9ad9abf7d8fb43cf9b1c33a696aace,,Java:466703;CSS:6843;HTML:50753;JavaScript:28879
+525338893,github,joaoboscocordeiro/AppInstagram,unknown,122c348c81b561aea219ca03f26e01b26fd3e9db,https://github.com/joaoboscocordeiro/AppInstagram/tree/122c348c81b561aea219ca03f26e01b26fd3e9db,,Scala:153020
+98996996,github,wuguokai/wgkStudy,unknown,a69ed2990fd9eef908522bc51b89356564a1e5da,https://github.com/wuguokai/wgkStudy/tree/a69ed2990fd9eef908522bc51b89356564a1e5da,,Java:27545
+242617898,github,Smitasppit/vg-api-test,unknown,f093844f2b98a1ce6cce7d22195a5a05fce2bd07,https://github.com/Smitasppit/vg-api-test/tree/f093844f2b98a1ce6cce7d22195a5a05fce2bd07,,HTML:22853;JavaScript:3555;Java:4136;CSS:5337

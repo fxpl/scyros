@@ -8,11 +8,7 @@ use curl::easy::*;
 use std::sync::*;
 use tracing::warn;
 
-/// Start of the message of an error that GitHub returned as an HTTP status, such as `http/2 404`.
-pub const HTTP_ERROR_PREFIX: &str = "http/";
-
-/// Start of the message of any other error of a request, such as a network error.
-pub const OTHER_ERROR_PREFIX: &str = "error:";
+use super::error::{ErrorCode, RowError};
 
 pub struct Github {
     tokens: Mutex<TokensManager>,
@@ -32,19 +28,9 @@ impl Github {
     /// Performs a github request of the specified url and returns the result string.
     ///
     /// Rate limits are waited out. Server errors (5xx) and transport errors are retried a few times.
-    /// The message of an error starts with [`HTTP_ERROR_PREFIX`] when GitHub answered with an error status,
-    /// followed by the status line of the final response (such as `http/2 404`), and with [`OTHER_ERROR_PREFIX`] otherwise.
-    pub fn request(&self, url: &str) -> Result<json::JsonValue, std::io::Error> {
-        self.request_with_retries(url).map_err(|e| {
-            if e.to_string().starts_with(HTTP_ERROR_PREFIX) {
-                e
-            } else {
-                std::io::Error::new(e.kind(), format!("{OTHER_ERROR_PREFIX} {e}"))
-            }
-        })
-    }
-
-    fn request_with_retries(&self, url: &str) -> Result<json::JsonValue, std::io::Error> {
+    /// The code of an error is the HTTP status when GitHub answered with an error status (with the status line
+    /// in the details), [`ErrorCode::InvalidAnswer`] when the answer is not JSON, and [`ErrorCode::Network`] otherwise.
+    pub fn request(&self, url: &str) -> Result<json::JsonValue, RowError> {
         const MAX_TRANSIENT_FAILURES: u32 = 3;
         let mut attempts = 0;
         let mut transient_failures: u32 = 0;
@@ -58,7 +44,7 @@ impl Github {
                 Err(e) => {
                     transient_failures += 1;
                     if transient_failures >= MAX_TRANSIENT_FAILURES {
-                        return Err(e.into());
+                        return Err(RowError::new(ErrorCode::Network, e));
                     }
                     warn!("Request to {url} failed ({e}), retrying");
                     wait_before_retry(transient_failures);
@@ -69,18 +55,15 @@ impl Github {
             let all_headers = String::from_utf8_lossy(&response_headers).to_lowercase();
             let rhdr = final_response_headers(&all_headers);
             let status_line = rhdr.lines().next().unwrap_or_default().trim();
-            let status_error = || std::io::Error::new(std::io::ErrorKind::Other, status_line);
+            let status_error = || RowError::new(ErrorCode::Http(status as u16), status_line);
 
             match status {
                 200 => {
                     let result = json::parse(&String::from_utf8_lossy(&response));
                     match result {
                         Ok(value) => return Ok(value),
-                        Err(_) => {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "Cannot parse json result",
-                            ));
+                        Err(e) => {
+                            return Err(RowError::new(ErrorCode::InvalidAnswer, e));
                         }
                     }
                 }

@@ -15,11 +15,31 @@
 #![doc = include_str!("../docs/errors.md")]
 
 use anyhow::{bail, Context, Result};
+use polars::prelude::{DataFrame, DataType, Field};
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+use tracing::warn;
 
 /// Documentation of the codes, with their explanations.
 pub const ERRORS_DOC: &str = include_str!("../docs/errors.md");
+
+/// Column with the error code of a row, empty when the row has no error.
+pub const ERROR: &str = "error";
+
+/// Returns the field of the error column, to read it from a CSV file.
+pub fn error_field() -> Field {
+    Field::new(ERROR.into(), DataType::String)
+}
+
+/// Returns the cell of the error column of a row: the code, or empty without error.
+///
+/// # Arguments
+///
+/// * `error` - The error of the row, if any.
+pub fn error_cell(error: Option<ErrorCode>) -> String {
+    error.map(|code| code.to_string()).unwrap_or_default()
+}
 
 /// Why a step could not process a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,6 +137,134 @@ impl ErrorCode {
     }
 }
 
+impl ErrorCode {
+    /// Reads the error of a row of a dataframe, in the `error` column.
+    /// A row has no error if the column is missing or its cell is empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `df` - The dataframe.
+    /// * `row` - The index of the row.
+    pub fn from_csv_row(df: &DataFrame, row: usize) -> Result<Option<Self>> {
+        let Ok(column) = df.column(ERROR) else {
+            return Ok(None);
+        };
+        column
+            .str()
+            .with_context(|| format!("Column {ERROR} does not contain strings"))?
+            .get(row)
+            .filter(|cell| !cell.is_empty())
+            .map(str::parse)
+            .transpose()
+            .with_context(|| format!("Could not read the {ERROR} of row {row}"))
+    }
+}
+
+/// An error of a row: its code, and details printed in the terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowError {
+    /// The code written in the error column.
+    pub code: ErrorCode,
+    /// Details on the error, such as the message of a network error. Empty if there are none.
+    pub detail: String,
+}
+
+impl RowError {
+    /// Returns an error with details.
+    ///
+    /// # Arguments
+    ///
+    /// * `code` - The code of the error.
+    /// * `detail` - Details on the error.
+    pub fn new(code: ErrorCode, detail: impl fmt::Display) -> Self {
+        Self {
+            code,
+            detail: detail.to_string(),
+        }
+    }
+}
+
+impl From<ErrorCode> for RowError {
+    fn from(code: ErrorCode) -> Self {
+        Self {
+            code,
+            detail: String::new(),
+        }
+    }
+}
+
+impl fmt::Display for RowError {
+    /// Writes the code, its description, and the details if any, such as `E001 network failure (timeout)`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.code, self.code.description())?;
+        if !self.detail.is_empty() {
+            write!(f, " ({})", self.detail)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RowError {}
+
+/// Counts the errors of the rows written to an output file, to print a summary at the end of a step.
+pub struct ErrorSummary {
+    /// The index of the error column in the rows.
+    column: usize,
+    /// The number of rows with each code.
+    counts: HashMap<ErrorCode, usize>,
+}
+
+impl ErrorSummary {
+    /// Returns an empty summary of the rows of an output file.
+    ///
+    /// # Arguments
+    ///
+    /// * `header` - The header of the output file, with an error column.
+    pub fn new(header: &[&str]) -> Result<Self> {
+        let column: usize = header
+            .iter()
+            .position(|c| *c == ERROR)
+            .with_context(|| format!("The output has no {ERROR} column"))?;
+        Ok(Self {
+            column,
+            counts: HashMap::new(),
+        })
+    }
+
+    /// Counts the error of a row written to the output file, if it has one.
+    ///
+    /// # Arguments
+    ///
+    /// * `row` - The row.
+    pub fn add(&mut self, row: &[String]) -> Result<()> {
+        if let Some(cell) = row.get(self.column).filter(|cell| !cell.is_empty()) {
+            *self.counts.entry(cell.parse()?).or_default() += 1;
+        }
+        Ok(())
+    }
+
+    /// Prints the number of rows with each code, the most frequent first, if there are errors.
+    pub fn log(&self) {
+        let mut counts: Vec<(&ErrorCode, &usize)> = self.counts.iter().collect();
+        counts.sort_by(|(code_a, count_a), (code_b, count_b)| {
+            count_b
+                .cmp(count_a)
+                .then(code_a.number().cmp(&code_b.number()))
+        });
+        if !counts.is_empty() {
+            warn!(
+                "{} rows with an error: {}. Run scyros explain <CODE> for details, and use --debug to print every error.",
+                counts.iter().map(|(_, count)| **count).sum::<usize>(),
+                counts
+                    .iter()
+                    .map(|(code, count)| format!("{code} {} x{count}", code.description()))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            );
+        }
+    }
+}
+
 impl fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "E{:03}", self.number())
@@ -149,6 +297,7 @@ impl FromStr for ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::ensure;
 
     #[test]
     fn codes_are_written_and_read() -> Result<()> {
@@ -176,6 +325,43 @@ mod tests {
             .filter(|line| line.starts_with("  * E"))
             .count();
         assert_eq!(documented_lines, ErrorCode::DOCUMENTED.len());
+    }
+
+    #[test]
+    fn errors_are_read_from_rows() -> Result<()> {
+        let df = polars::df!(ERROR => [Some("E404"), Some(""), None])?;
+        assert_eq!(ErrorCode::from_csv_row(&df, 0)?, Some(ErrorCode::Http(404)));
+        assert_eq!(ErrorCode::from_csv_row(&df, 1)?, None);
+        assert_eq!(ErrorCode::from_csv_row(&df, 2)?, None);
+        let without_column = polars::df!("other" => ["E404"])?;
+        assert_eq!(ErrorCode::from_csv_row(&without_column, 0)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn row_errors_are_written_with_their_details() {
+        assert_eq!(
+            RowError::new(ErrorCode::Network, "timeout").to_string(),
+            "E001 network failure (timeout)"
+        );
+        assert_eq!(
+            RowError::from(ErrorCode::Http(404)).to_string(),
+            "E404 not found"
+        );
+    }
+
+    #[test]
+    fn summaries_count_the_codes() -> Result<()> {
+        let mut summary = ErrorSummary::new(&["repo_id", ERROR])?;
+        for cell in ["E404", "", "E404", "E001"] {
+            summary.add(&["1".to_string(), cell.to_string()])?;
+        }
+        assert_eq!(
+            summary.counts,
+            HashMap::from([(ErrorCode::Http(404), 2), (ErrorCode::Network, 1)])
+        );
+        ensure!(ErrorSummary::new(&["repo_id"]).is_err());
+        Ok(())
     }
 
     #[test]

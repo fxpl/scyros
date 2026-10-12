@@ -8,7 +8,7 @@ With `--threads`, several requests are sent at the same time (one by default). T
 
 By default, the output file name is the input file name with the suffix '.metadata.csv'.
 
-If a repository cannot be queried, for example because it was deleted or turned private, its row contains the error message in the repo_name column and its url is empty. The message is the HTTP status, such as 'http/2 404', or starts with 'error:' for other errors, such as network errors or repositories that are not on GitHub.
+If a repository cannot be queried, for example because it was deleted or turned private, its row has an error code in the 'error' column, such as E404, and empty metadata columns. Rows of the input that already have an error are copied without being queried. At the end, the command prints how many rows have each code; --debug also prints every error with its details. The codes are explained by scyros explain.
 
 If the program is interrupted, it can be restarted and will resume from where it left off. Optionally, the output of a previous run with the same columns can be used as a cache to avoid repeating requests.
 
@@ -21,6 +21,7 @@ Output CSV file format:
   * repo_license: repository license, or 'unknown';
   * latest_commit: commit SHA, copied from the input;
   * url: link to the repository on GitHub;
+  * error: error code if the repository could not be queried, empty otherwise;
   * language: primary programming language;
   * created: repository creation date;
   * pushed: date of most recent push;

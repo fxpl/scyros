@@ -1,2 +1,2 @@
-repo_id,source,repo_name,repo_license,latest_commit,url,language,updated,fork,disabled,archived,stars,forks,issues,has_issues,watchers_count,subscribers,size,age
-141755666,github,andreitsev/Notebooks,unknown,,https://github.com/andreitsev/Notebooks,Jupyter Notebook,1568564510,0,0,0,0,0,0,1,0,1,254480,421
+repo_id,source,repo_name,repo_license,latest_commit,url,error,language,updated,fork,disabled,archived,stars,forks,issues,has_issues,watchers_count,subscribers,size,age
+141755666,github,andreitsev/Notebooks,unknown,,https://github.com/andreitsev/Notebooks,,Jupyter Notebook,1568564510,0,0,0,0,0,0,1,0,1,254480,421

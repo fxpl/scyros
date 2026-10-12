@@ -7,7 +7,7 @@ For each pull request, the command also retrieves the pull request body and all 
 
 The pull request metadata are written to a CSV file. By default, the output file name is the input file name with the suffix .pulls.csv.
 
-A repository that is not on GitHub gets a single row with the message 'error: unsupported source local' in its repo_name column, and empty url and pull request columns. If the pull requests of a repository cannot be retrieved, no row is written, and the repository is queried again by the next run.
+A repository whose pull requests cannot be retrieved, for example because it was deleted or is not on GitHub, gets a single row with an error code in the 'error' column, such as E404, and empty pull request columns. So does a pull request that cannot be read. A pull request whose discussion cannot be retrieved keeps its metadata, with an error code and an empty local_discussion_path. Rows of the input that already have an error are copied without being queried. At the end, the command prints how many rows have each code; --debug also prints every error with its details. The codes are explained by scyros explain.
 
 If the program is interrupted, it can be restarted and will resume from the repositories already present in the output file, unless --force is used. A random subset of repositories can also be processed by specifying --sub.
 
@@ -18,6 +18,7 @@ Output pull-requests CSV format:
   * repo_license, latest_commit: copied from the input
   * pr_number: pull request number
   * url: link to the pull request on GitHub
+  * error: error code if the repository, the pull request or its discussion could not be retrieved, empty otherwise
   * local_discussion_path: local path to the CSV file containing the pull request discussion
   * user: login of the pull request author
   * user_id: GitHub user ID of the pull request author
@@ -30,8 +31,9 @@ Output pull-requests CSV format:
 
 Output pull-request discussion CSV format:
   * id: comment ID
+  * error: error code if the comment could not be read, empty otherwise
   * user: login of the comment author
   * user_id: GitHub user ID of the comment author
-  * type: comment type: body, discussion, code, review, or error
+  * type: comment type: body, discussion, code, or review
   * created_at: comment timestamp
   * body: comment text

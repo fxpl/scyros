@@ -21,8 +21,9 @@ use std::path::Path;
 
 use crate::utils::csv::*;
 use crate::utils::dataframes::{has_column, require_columns};
+use crate::utils::error::{error_cell, error_field, ErrorCode, ErrorSummary, RowError, ERROR};
 use crate::utils::fs::*;
-use crate::utils::github_api::{Github, OTHER_ERROR_PREFIX};
+use crate::utils::github_api::Github;
 use crate::utils::json::*;
 use crate::utils::logger::*;
 use crate::utils::parallel::parallel_pipeline;
@@ -39,7 +40,7 @@ use polars::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -160,7 +161,9 @@ pub fn run(
     let input_file: DataFrame = logger.run_task("Loading input file", || {
         let df: DataFrame = open_csv(
             input_path,
-            Some(Schema::from_iter(RepoColumn::fields())),
+            Some(Schema::from_iter(
+                RepoColumn::fields().into_iter().chain([error_field()]),
+            )),
             None,
             renames,
         )?;
@@ -184,10 +187,12 @@ pub fn run(
         Ok(())
     })?;
 
-    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<(u32, Repo)> {
+    // Each project comes with the error of its row in the input, if any.
+    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<Project> {
         let repo: Repo = Repo::from_csv_row(&input_file, idx, infer_source)?;
+        let error: Option<ErrorCode> = ErrorCode::from_csv_row(&input_file, idx)?;
         match repo.id {
-            Some(id) => Ok((id, repo)),
+            Some(id) => Ok((id, repo, error)),
             None => bail!("Row {idx} of the input file has no id"),
         }
     });
@@ -231,20 +236,22 @@ pub fn run(
             FileMode::Append
         },
     )?;
-    output_file.write_header(Repo::header())?;
+    let header: Vec<&str> = Repo::header().into_iter().chain([ERROR]).collect();
+    output_file.write_header(&header)?;
+    let mut errors = ErrorSummary::new(&header)?;
 
     let gh = Github::new(tokens);
 
     // Projects that have not been processed yet, in random order, up to the number of projects to sample.
     let n: usize = sub.unwrap_or(usize::MAX);
-    let mut projects: Vec<(u32, Repo)> = Vec::new();
+    let mut projects: Vec<Project> = Vec::new();
     for row in shuffled_rows {
         if projects.len() == n {
             break;
         }
-        let (id, repo): (u32, Repo) = row?;
-        if !previous_results.contains(&id) {
-            projects.push((id, repo));
+        let project: Project = row?;
+        if !previous_results.contains(&project.0) {
+            projects.push(project);
         }
     }
 
@@ -261,26 +268,51 @@ pub fn run(
     parallel_pipeline(
         &projects,
         vec![(); threads],
-        |_, (id, repo): &(u32, Repo)| {
-            // Without a branch, GitHub lists the commits of the default branch, the latest first.
-            let response: Result<JsonValue, String> = if repo.source == Source::GitHub {
-                gh.request(&format!(
-                    "https://api.github.com/repositories/{id}/commits?per_page=1"
-                ))
-                .map_err(|e| e.to_string())
-            } else {
-                Err(repo.unsupported_source())
+        |_, (id, repo, input_error): &Project| {
+            // A project with an error in the input is copied with this error, without request.
+            let commit: Result<String, RowError> = match input_error {
+                Some(code) => Err((*code).into()),
+                None => query(&gh, *id, repo).inspect_err(|e| debug!("Repository {id}: {e}")),
             };
-            commit_row(repo.clone(), response)
+            Ok(commit_row(repo.clone(), commit))
         },
         |row: Vec<String>| {
+            errors.add(&row)?;
             output_file.write_record(row)?;
             progress_bar.inc(1);
             Ok(())
         },
     )?;
     output_file.flush()?;
+    errors.log();
     Ok(())
+}
+
+/// A project to query: its id, the project, and the error of its row in the input, if any.
+type Project = (u32, Repo, Option<ErrorCode>);
+
+/// Queries the latest commit of the default branch of a project on GitHub.
+///
+/// # Arguments
+///
+/// * `gh` - The GitHub client.
+/// * `id` - The id of the project.
+/// * `repo` - The project.
+fn query(gh: &Github, id: u32, repo: &Repo) -> Result<String, RowError> {
+    if repo.source != Source::GitHub {
+        return Err(RowError::new(
+            ErrorCode::UnsupportedSource,
+            format!("source {}", repo.source),
+        ));
+    }
+    // Without a branch, GitHub lists the commits of the default branch, the latest first.
+    let commits: JsonValue = gh.request(&format!(
+        "https://api.github.com/repositories/{id}/commits?per_page=1"
+    ))?;
+    if commits.is_empty() {
+        return Err(ErrorCode::NoCommit.into());
+    }
+    get_field::<String>(&commits[0], "sha").map_err(|e| RowError::new(ErrorCode::InvalidAnswer, e))
 }
 
 /// Returns the row of a project in the output.
@@ -288,17 +320,17 @@ pub fn run(
 /// # Arguments
 ///
 /// * `repo` - The project.
-/// * `response` - The response of the GitHub API with the latest commit of the project, or the error message.
-///   On an error, the name of the project is replaced by the error message, and the link is empty.
-fn commit_row(mut repo: Repo, response: Result<JsonValue, String>) -> Result<Vec<String>> {
-    match response {
-        Ok(commits) if commits.is_empty() => {
-            repo.name = Some(format!("{OTHER_ERROR_PREFIX} no commit"));
+/// * `commit` - The latest commit of the project, or why it could not be queried.
+///   On an error, the commit of the input is kept.
+fn commit_row(mut repo: Repo, commit: Result<String, RowError>) -> Vec<String> {
+    let error: Option<ErrorCode> = match commit {
+        Ok(commit) => {
+            repo.commit = Some(commit);
+            None
         }
-        Ok(commits) => repo.commit = Some(get_field::<String>(&commits[0], "sha")?),
-        Err(error) => repo.name = Some(error),
-    }
-    Ok(repo.row())
+        Err(e) => Some(e.code),
+    };
+    repo.row().into_iter().chain([error_cell(error)]).collect()
 }
 
 #[cfg(test)]
@@ -320,34 +352,36 @@ mod tests {
     }
 
     #[test]
-    fn rows_of_queried_projects() -> Result<()> {
-        let commits = json::parse(r#"[{"sha": "abc123"}]"#)?;
+    fn rows_of_queried_projects() {
         assert_eq!(
-            commit_row(repo(), Ok(commits))?,
+            commit_row(repo(), Ok("abc123".to_string())),
             [
                 "42",
                 "github",
                 "owner/repo",
                 "MIT License",
                 "abc123",
-                "https://github.com/owner/repo/tree/abc123"
+                "https://github.com/owner/repo/tree/abc123",
+                ""
             ]
         );
-        Ok(())
     }
 
     #[test]
-    fn rows_of_failed_queries() -> Result<()> {
-        // The name is replaced by the error, and the link is empty.
+    fn rows_of_failed_queries() {
+        // The repository, its commit in the input and its link are kept, and the error is written.
         assert_eq!(
-            commit_row(repo(), Err("http/2 409".to_string()))?,
-            ["42", "github", "http/2 409", "MIT License", "old", ""]
+            commit_row(repo(), Err(ErrorCode::NoCommit.into())),
+            [
+                "42",
+                "github",
+                "owner/repo",
+                "MIT License",
+                "old",
+                "https://github.com/owner/repo/tree/old",
+                "E011"
+            ]
         );
-        assert_eq!(
-            commit_row(repo(), Ok(json::parse("[]")?))?,
-            ["42", "github", "error: no commit", "MIT License", "old", ""]
-        );
-        Ok(())
     }
 
     #[test]

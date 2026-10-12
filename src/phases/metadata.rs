@@ -23,6 +23,7 @@ use std::path::Path;
 use super::rename_arg;
 use crate::utils::csv::*;
 use crate::utils::dataframes::{has_column, require_columns};
+use crate::utils::error::{error_cell, error_field, ErrorCode, ErrorSummary, RowError, ERROR};
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::Github;
@@ -39,7 +40,7 @@ use polars::prelude::Schema;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -172,7 +173,9 @@ pub fn run(
     let input_file: DataFrame = logger.run_task("Loading input file", || {
         let df: DataFrame = open_csv(
             input_path,
-            Some(Schema::from_iter(RepoColumn::fields())),
+            Some(Schema::from_iter(
+                RepoColumn::fields().into_iter().chain([error_field()]),
+            )),
             None,
             renames,
         )?;
@@ -200,10 +203,12 @@ pub fn run(
         Ok(())
     })?;
 
-    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<(u32, Repo)> {
+    // Each project comes with the error of its row in the input, if any.
+    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<Project> {
         let repo: Repo = Repo::from_csv_row(&input_file, idx, infer_source)?;
+        let error: Option<ErrorCode> = ErrorCode::from_csv_row(&input_file, idx)?;
         match (repo.id, &repo.name) {
-            (Some(id), Some(_)) => Ok((id, repo)),
+            (Some(id), Some(_)) => Ok((id, repo, error)),
             _ => bail!("Row {idx} of the input file has no id or no full name"),
         }
     });
@@ -250,9 +255,11 @@ pub fn run(
 
     let header: Vec<&str> = Repo::header()
         .into_iter()
+        .chain([ERROR])
         .chain(ProjectMetadata::COLUMNS)
         .collect();
     output_file.write_header(&header)?;
+    let mut errors = ErrorSummary::new(&header)?;
 
     // Load the cache, whose rows are written as they are.
     let cache: HashMap<u32, Vec<String>> = logger.run_task("Loading cache", || {
@@ -290,14 +297,14 @@ pub fn run(
 
     // Projects that have not been processed yet, in random order, up to the number of projects to sample.
     let n: usize = sub.unwrap_or(usize::MAX);
-    let mut projects: Vec<(u32, Repo)> = Vec::new();
+    let mut projects: Vec<Project> = Vec::new();
     for row in shuffled_rows {
         if projects.len() == n {
             break;
         }
-        let (id, repo): (u32, Repo) = row?;
-        if !previous_results.contains(&id) {
-            projects.push((id, repo));
+        let project: Project = row?;
+        if !previous_results.contains(&project.0) {
+            projects.push(project);
         }
     }
 
@@ -315,21 +322,20 @@ pub fn run(
     parallel_pipeline(
         &projects,
         vec![(); threads],
-        |_, (id, repo): &(u32, Repo)| {
+        |_, (id, repo, input_error): &Project| {
+            // A project with an error in the input is copied with this error, without request.
+            if let Some(code) = input_error {
+                return Ok((project_row(repo.clone(), Err((*code).into())), false));
+            }
             // We first check the cache. If the project is not in the cache, we make a request to the API.
             if let Some(row) = cache.get(id) {
                 return Ok((row.clone(), true));
             }
-            let response: Result<JsonValue, String> = if repo.source == Source::GitHub {
-                let full_name: &str = repo.name.as_deref().unwrap_or_default();
-                gh.request(&format!("https://api.github.com/repos/{full_name}"))
-                    .map_err(|e| e.to_string())
-            } else {
-                Err(repo.unsupported_source())
-            };
-            Ok((project_row(repo.clone(), response)?, false))
+            let metadata = query(&gh, repo).inspect_err(|e| debug!("Repository {id}: {e}"));
+            Ok((project_row(repo.clone(), metadata), false))
         },
         |(row, from_cache): (Vec<String>, bool)| {
+            errors.add(&row)?;
             output_file.write_record(row)?;
             if from_cache {
                 request_from_cache += 1;
@@ -340,7 +346,29 @@ pub fn run(
         },
     )?;
     output_file.flush()?;
+    errors.log();
     Ok(())
+}
+
+/// A project to query: its id, the project, and the error of its row in the input, if any.
+type Project = (u32, Repo, Option<ErrorCode>);
+
+/// Queries the metadata of a project on GitHub.
+///
+/// # Arguments
+///
+/// * `gh` - The GitHub client.
+/// * `repo` - The project.
+fn query(gh: &Github, repo: &Repo) -> Result<ProjectMetadata, RowError> {
+    if repo.source != Source::GitHub {
+        return Err(RowError::new(
+            ErrorCode::UnsupportedSource,
+            format!("source {}", repo.source),
+        ));
+    }
+    let full_name: &str = repo.name.as_deref().unwrap_or_default();
+    let json: JsonValue = gh.request(&format!("https://api.github.com/repos/{full_name}"))?;
+    ProjectMetadata::parse_json(&json, ()).map_err(|e| RowError::new(ErrorCode::InvalidAnswer, e))
 }
 
 /// Returns the row of a project in the output.
@@ -348,24 +376,24 @@ pub fn run(
 /// # Arguments
 ///
 /// * `repo` - The project.
-/// * `response` - The response of the GitHub API about the project, or the error message.
-///   On an error, the name of the project is replaced by the error message, and the link is empty.
-fn project_row(mut repo: Repo, response: Result<JsonValue, String>) -> Result<Vec<String>> {
-    Ok(match response {
-        Ok(json) => {
-            let metadata = ProjectMetadata::parse_json(&json, ())?;
+/// * `metadata` - The metadata of the project, or why they could not be queried.
+///   On an error, the metadata are empty.
+fn project_row(mut repo: Repo, metadata: Result<ProjectMetadata, RowError>) -> Vec<String> {
+    let (error, values): (Option<ErrorCode>, Vec<String>) = match metadata {
+        Ok(metadata) => {
             repo.license = Some(metadata.license.clone());
-            repo.row().into_iter().chain(metadata.values()).collect()
+            (None, metadata.values())
         }
-        Err(error) => {
-            repo.name = Some(error);
-            repo.values()
-                .into_iter()
-                .chain([String::new()])
-                .chain(ProjectMetadata::default().values())
-                .collect()
-        }
-    })
+        Err(e) => (
+            Some(e.code),
+            vec![String::new(); ProjectMetadata::COLUMNS.len()],
+        ),
+    };
+    repo.row()
+        .into_iter()
+        .chain([error_cell(error)])
+        .chain(values)
+        .collect()
 }
 
 /// Represents the metadata of a GitHub project.
@@ -401,30 +429,6 @@ struct ProjectMetadata {
     size: u64,
     /// The name of the license of the project, written in `repo_license`.
     license: String,
-}
-
-/// Default implementation for ProjectMetadata.
-/// Sets all the dates to 1970-01-01T00:00:00Z, the booleans to false, the numbers to 0 and the strings to empty.
-impl Default for ProjectMetadata {
-    fn default() -> Self {
-        Self {
-            language: String::new(),
-            created: 0,
-            pushed: 0,
-            updated: 0,
-            fork: false,
-            disabled: false,
-            archived: false,
-            stars: 0,
-            forks: 0,
-            issues: 0,
-            has_issues: false,
-            watchers_count: 0,
-            subscribers: 0,
-            size: 0,
-            license: String::new(),
-        }
-    }
 }
 
 impl ProjectMetadata {
@@ -602,13 +606,13 @@ mod tests {
                 "license": {"name": "MIT License"}
             }"#,
         )?;
-        let row: Vec<String> = project_row(repo(), Ok(json))?;
+        let row: Vec<String> = project_row(repo(), Ok(ProjectMetadata::parse_json(&json, ())?));
         assert_eq!(
             row.len(),
-            Repo::header().len() + ProjectMetadata::COLUMNS.len()
+            Repo::header().len() + 1 + ProjectMetadata::COLUMNS.len()
         );
         assert_eq!(
-            row[..7],
+            row[..8],
             [
                 "42",
                 "github",
@@ -616,6 +620,7 @@ mod tests {
                 "MIT License",
                 "",
                 "https://github.com/owner/repo",
+                "",
                 "Rust"
             ]
         );
@@ -624,9 +629,34 @@ mod tests {
 
     #[test]
     fn rows_of_failed_queries() -> Result<()> {
-        let row: Vec<String> = project_row(repo(), Err("http/2 404".to_string()))?;
-        // The name is replaced by the error, and the link is empty.
-        assert_eq!(row[..6], ["42", "github", "http/2 404", "", "", ""]);
+        let row: Vec<String> = project_row(repo(), Err(ErrorCode::Http(404).into()));
+        // The repository and its link are kept, the error is written, and the metadata are empty.
+        assert_eq!(
+            row[..7],
+            [
+                "42",
+                "github",
+                "owner/repo",
+                "",
+                "",
+                "https://github.com/owner/repo",
+                "E404"
+            ]
+        );
+        ensure!(row[7..].iter().all(String::is_empty));
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_sources_are_not_queried() -> Result<()> {
+        let local = Repo {
+            source: Source::Local,
+            ..repo()
+        };
+        let error = query(&Github::new(Vec::new()), &local)
+            .err()
+            .context("a local project is not queried")?;
+        assert_eq!(error.code, ErrorCode::UnsupportedSource);
         Ok(())
     }
 

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Columns `repo_id`, `source` (`github` or `local`) and `repo_name`, followed by a `url` linking to the repository on GitHub, at the start of the output of `ids`.
 - Repository columns (`repo_id`, `source`, `repo_name`, `repo_license`, `latest_commit`) and a `url` at the start of the output of `metadata`, copied from its input and completed with the license.
 - Repository columns and a `url` at the start of the output of `languages`, copied from its input.
-- Repository columns, copied from the input, then `pr_number` and a `url` linking to the pull request on GitHub, at the start of each row of `pr`. A repository that is not on GitHub gets an error row.
+- Repository columns, copied from the input, then `pr_number` and a `url` linking to the pull request on GitHub, at the start of each row of `pr`.
 - Repository columns and a `url` in both logs of `download`, copied from its input: every file keeps the repository it comes from, with its path inside the repository (`file`) and a link to it on GitHub.
 - `download` accepts repositories without a commit: it downloads their default branch, and reads the full SHA of their commit in the archive.
 - A `latest_commit` subcommand that pins repositories to the latest commit of their default branch, for `download` and the links of the following steps. It is optional, since `download` takes the default branch of repositories without a commit.
@@ -29,7 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `duplicate_files` reads file paths from the `local_path` column by default, instead of `name`.
 - `download` reads the directories of local repositories from `local_path` instead of `path`, and its logs write local paths in `local_path` instead of `path` and `name`.
 - `pr` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Its `file_path` column is renamed `local_discussion_path`, and values are quoted instead of being written as they are.
-- `download` does not download repositories whose `repo_name` is an error from an earlier step, such as `metadata`, and logs them as error rows.
+- `download` does not download repositories with an error code from an earlier step, such as `metadata`, and logs them as error rows.
+- `metadata`, `languages`, `latest_commit` and `pr` write an error code in a new `error` column, after `url`, for the rows they cannot process, instead of an error message in `repo_name`. These rows keep the name, the link and the values of the input, and the cells that could not be fetched are empty instead of having default values. Rows of the input with an error are copied without being queried again. Answers that cannot be read give an error row instead of stopping the command. A summary of the errors is printed at the end, and every error with `--debug`.
+- `filter_metadata` and `filter_languages` discard the rows with an error code, instead of the rows whose `repo_name` starts with `http/` or `error:`.
+- `pr` writes an error row for repositories whose pull requests cannot be fetched, instead of querying them again in the next run, and for pull requests that cannot be read, instead of a row of default values. A pull request whose discussion cannot be fetched gets an error code. Discussion files have an `error` column instead of the `error` comment type.
 - `parse` reads files from the `local_path` and `file` columns instead of `id` and `name`, such as the file log of `download`. In its outputs, `name` becomes `function_name` and `path` becomes `local_path`; the extracted function file moves to `local_function_path`, only written without `--count`. `position` is split into `line` and `column`, and `parse_error` into `parse_error_line` and `parse_error_column`, empty without error instead of `none`.
 
 ### Removed

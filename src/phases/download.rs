@@ -41,6 +41,7 @@ use zip::ZipArchive;
 
 use crate::utils::csv::*;
 use crate::utils::dataframes::has_column;
+use crate::utils::error::{error_field, ErrorCode};
 use crate::utils::fs::*;
 use crate::utils::github::zipball_commit;
 use crate::utils::regex::*;
@@ -207,6 +208,8 @@ struct Project {
     local_path: Option<String>,
     /// Repository of the project.
     repo: Repo,
+    /// Error of the row of the project in the input, if any. Such projects are not downloaded.
+    error: Option<ErrorCode>,
 }
 
 /// Entry point of the program
@@ -255,7 +258,7 @@ pub fn run(
             Some(Schema::from_iter(
                 RepoColumn::fields()
                     .into_iter()
-                    .chain([Field::new(LOCAL_PATH.into(), DataType::String)]),
+                    .chain([error_field(), Field::new(LOCAL_PATH.into(), DataType::String)]),
             )),
             None,
             renames,
@@ -331,6 +334,7 @@ pub fn run(
                 key,
                 local_path,
                 repo,
+                error: ErrorCode::from_csv_row(&input_file, idx)?,
             })
         })
         .take(match sub {
@@ -544,6 +548,7 @@ pub fn run(
                                         match download_repo(
                                             t.as_str(),
                                             project.repo,
+                                            project.error,
                                             &project_path,
                                             keyword_files,
                                             word_counter,
@@ -641,6 +646,7 @@ pub fn run(
 ///
 /// * `token` - The GitHub token to use for the request.
 /// * `repo` - The repository.
+/// * `input_error` - The error of the row of the repository in the input, if any. Such a repository is not downloaded.
 /// * `project_path` - The path to the directory where the repository is/will be downloaded.
 /// * `keywords_files` - The keyword files, mapping file extensions to languages and keywords.
 /// * `word_counter` - A matcher for counting words in a file.
@@ -676,6 +682,7 @@ pub fn run(
 fn download_repo(
     token: &str,
     mut repo: Repo,
+    input_error: Option<ErrorCode>,
     project_path: &str,
     keywords_files: &KeywordFiles,
     word_counter: &Matcher,
@@ -683,8 +690,11 @@ fn download_repo(
     delete: bool,
 ) -> Result<(ProjectRow, Vec<FileRow>)> {
     if download {
-        if let Some(error) = repo.error() {
-            warn!("Project {project_path} is not downloaded: an earlier step failed with {error}");
+        if let Some(code) = input_error {
+            warn!(
+                "Project {project_path} is not downloaded: an earlier step failed with {code} {}",
+                code.description()
+            );
             return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
         }
         if repo.source != Source::GitHub {
@@ -1116,7 +1126,7 @@ mod tests {
         let repo = Repo {
             id: None,
             source: Source::GitHub,
-            name: Some("http/2 404".to_string()),
+            name: Some("owner/repo".to_string()),
             license: None,
             commit: None,
         };
@@ -1125,6 +1135,7 @@ mod tests {
         let (row, files) = download_repo(
             "no token",
             repo,
+            Some(ErrorCode::Http(404)),
             project_path,
             &keyword_files,
             &Matcher::words_matcher(),
@@ -1134,7 +1145,15 @@ mod tests {
         let header: Vec<&str> = Repo::header();
         assert_eq!(
             row[..header.len() + 1],
-            ["", "github", "http/2 404", "", "", "", "error"]
+            [
+                "",
+                "github",
+                "owner/repo",
+                "",
+                "",
+                "https://github.com/owner/repo",
+                "error"
+            ]
         );
         ensure!(files.is_empty());
         ensure!(!Path::new(project_path).exists());

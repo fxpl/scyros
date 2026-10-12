@@ -4,7 +4,7 @@ The input file must be a valid CSV file with the IDs of the repositories (column
 
 Repositories are processed in random order using a reproducible seed. For each repository, the command queries the GitHub API for its language breakdown. Optionally, the output of a previous run with the same columns can be used as a cache to reuse earlier results.
 
-If a repository cannot be queried, for example because it was deleted or turned private, its row contains the error message in the repo_name column and its url is empty. The message is the HTTP status, such as 'http/2 404', or starts with 'error:' for other errors, such as network errors or repositories that are not on GitHub.
+If a repository cannot be queried, for example because it was deleted or turned private, its row has an error code in the 'error' column, such as E404, and an empty languages column. Rows of the input that already have an error are copied without being queried. At the end, the command prints how many rows have each code; --debug also prints every error with its details. The codes are explained by scyros explain.
 
 Results are written to a CSV file. By default, the output file name is the input file name with the suffix '.languages.csv'.
 
@@ -21,4 +21,5 @@ Output CSV format:
   * repo_license: repository license, copied from the input;
   * latest_commit: commit of the repository, copied from the input;
   * url: link to the repository on GitHub, at its commit if known;
+  * error: error code if the repository could not be queried, empty otherwise;
   * languages: semicolon-separated 'language:size' pairs.

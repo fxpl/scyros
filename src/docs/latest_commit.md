@@ -4,7 +4,7 @@ The input file must be a valid CSV file with the IDs of the repositories (column
 
 Repositories are processed in random order using a reproducible seed. For each repository, the command queries the GitHub API for the latest commit of its default branch, and writes it in the latest_commit column, replacing the commit of the input if any. This step is optional: download downloads repositories without a commit from their default branch.
 
-If a repository cannot be queried, for example because it was deleted, turned private or has no commit, its row contains the error message in the repo_name column and its url is empty. The message is the HTTP status, such as 'http/2 404', or starts with 'error:' for other errors, such as network errors or repositories that are not on GitHub. download does not download these repositories.
+If a repository cannot be queried, for example because it was deleted, turned private or has no commit, its row has an error code in the 'error' column, such as E404, and keeps the commit of the input, if any. Rows of the input that already have an error are copied without being queried. At the end, the command prints how many rows have each code; --debug also prints every error with its details. The codes are explained by scyros explain. download does not download these repositories.
 
 Results are written to a CSV file. By default, the output file name is the input file name with the suffix '.latest_commit.csv'.
 
@@ -20,4 +20,5 @@ Output CSV format:
   * repo_name: full repository name (owner/repository);
   * repo_license: repository license, copied from the input;
   * latest_commit: SHA of the latest commit of the default branch;
-  * url: link to the repository on GitHub, at its latest commit.
+  * url: link to the repository on GitHub, at its latest commit;
+  * error: error code if the repository could not be queried, empty otherwise.

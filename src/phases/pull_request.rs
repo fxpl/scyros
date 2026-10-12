@@ -22,13 +22,14 @@ use std::path::Path;
 
 use crate::utils::csv::*;
 use crate::utils::dataframes::{self, has_column, require_columns};
+use crate::utils::error::{error_cell, error_field, ErrorCode, ErrorSummary, RowError, ERROR};
 use crate::utils::fs::*;
 use crate::utils::github::*;
 use crate::utils::github_api::*;
 use crate::utils::json::*;
 use crate::utils::logger::{log_seed, Logger};
 use crate::utils::repo::{PullRequest, Repo, RepoColumn, Source, Unit};
-use anyhow::{bail, ensure, Context, Error, Result};
+use anyhow::{bail, ensure, Error, Result};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use indicatif::ProgressBar;
@@ -38,7 +39,7 @@ use polars::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
-use tracing::info;
+use tracing::{debug, info};
 
 use super::rename_arg;
 
@@ -160,7 +161,9 @@ pub fn run(
     let input_file: DataFrame = logger.run_task("Loading input file", || {
         let df: DataFrame = open_csv(
             input_path,
-            Some(Schema::from_iter(RepoColumn::fields())),
+            Some(Schema::from_iter(
+                RepoColumn::fields().into_iter().chain([error_field()]),
+            )),
             None,
             renames,
         )?;
@@ -188,10 +191,12 @@ pub fn run(
         Ok(())
     })?;
 
-    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<(u32, Repo)> {
+    // Each project comes with the error of its row in the input, if any.
+    let shuffled_rows = shuffled_idx.into_iter().map(|idx| -> Result<Project> {
         let repo: Repo = Repo::from_csv_row(&input_file, idx, infer_source)?;
+        let error: Option<ErrorCode> = ErrorCode::from_csv_row(&input_file, idx)?;
         match (repo.id, &repo.name) {
-            (Some(id), Some(_)) => Ok((id, repo)),
+            (Some(id), Some(_)) => Ok((id, repo, error)),
             _ => bail!("Row {idx} of the input file has no id or no full name"),
         }
     });
@@ -236,7 +241,9 @@ pub fn run(
         },
     )?;
 
-    output_file.write_header(header())?;
+    let header: Vec<&str> = header();
+    output_file.write_header(&header)?;
+    let mut errors = ErrorSummary::new(&header)?;
 
     let gh = Github::new(tokens);
 
@@ -267,51 +274,94 @@ pub fn run(
         if n == 0 {
             break;
         }
-        let (id, repo): (u32, Repo) = row?;
+        let (id, repo, input_error): Project = row?;
         if previous_results.contains(&id) {
             continue;
         }
-        if repo.source != Source::GitHub {
-            let error: String = repo.unsupported_source();
-            output_file.write_record(error_row(repo, error))?;
-        } else {
-            // PRs are fetched page by page (100 PRs per page).
-            // If they cannot be fetched, nothing is written and the project is queried again by the next run.
-            if let Ok(pages) = scrape_pages(
-                &gh,
-                &|per_page, page| {
-                    format!("https://api.github.com/repositories/{id}/pulls?state=all&per_page={per_page}&page={page}")
-                },
-                &|json| {
-                    let mut pr_metadata: PRMetadata =
-                        PRMetadata::parse_json(&json, (id, target.to_string()))?;
-                    scrape_pr_comments(&gh, id, &pr_metadata).unwrap_or_else(|_| {
-                        pr_metadata.local_discussion_path = String::new();
-                    });
-                    Ok(pr_metadata)
-                },
-            ) {
-                // The rows of a project are written once all its PRs are fetched.
-                let rows: Vec<Vec<String>> = pages
-                    .into_iter()
-                    .map(|pr| pr_row(&repo, &pr.unwrap_or_default()))
-                    .collect();
-                for row in rows {
-                    output_file.write_record(row)?;
+        // The rows of a project are written once all its pull requests are fetched.
+        let rows: Vec<Vec<String>> = match input_error {
+            // A project with an error in the input is copied with this error, without request.
+            Some(code) => vec![error_row(&repo, code)],
+            None => match pull_requests(&gh, id, &repo, target) {
+                Err(e) => {
+                    debug!("Repository {id}: {e}");
+                    vec![error_row(&repo, e.code)]
                 }
-            }
+                Ok(prs) => prs
+                    .into_iter()
+                    .map(|pr| -> Result<Vec<String>> {
+                        Ok(match pr {
+                            Err(e) => {
+                                debug!("A pull request of repository {id}: {e}");
+                                error_row(&repo, e.code)
+                            }
+                            Ok(mut pr) => {
+                                let error: Option<RowError> = scrape_pr_comments(&gh, id, &pr)?;
+                                if let Some(e) = &error {
+                                    debug!("Pull request {} of repository {id}: {e}", pr.pr_number);
+                                    pr.local_discussion_path = String::new();
+                                }
+                                pr_row(&repo, &pr, error.map(|e| e.code))
+                            }
+                        })
+                    })
+                    .collect::<Result<Vec<Vec<String>>>>()?,
+            },
+        };
+        for row in rows {
+            errors.add(&row)?;
+            output_file.write_record(row)?;
         }
         progress_bar.inc(1);
         n -= 1;
     }
     output_file.flush()?;
+    errors.log();
     Ok(())
 }
 
-/// Returns the header of the output: the columns of the pull requests, then their metadata.
+/// A project to query: its id, the project, and the error of its row in the input, if any.
+type Project = (u32, Repo, Option<ErrorCode>);
+
+/// Queries the pull requests of a project on GitHub.
+///
+/// # Arguments
+///
+/// * `gh` - The GitHub client.
+/// * `id` - The id of the project.
+/// * `repo` - The project.
+/// * `target` - The directory where the discussions of the pull requests are stored.
+///
+/// # Returns
+///
+/// The pull requests, each one possibly with the error of its answer, or why they could not be queried.
+fn pull_requests(
+    gh: &Github,
+    id: u32,
+    repo: &Repo,
+    target: &str,
+) -> Result<Vec<Result<PRMetadata, RowError>>, RowError> {
+    if repo.source != Source::GitHub {
+        return Err(RowError::new(
+            ErrorCode::UnsupportedSource,
+            format!("source {}", repo.source),
+        ));
+    }
+    // Pull requests are fetched page by page (100 pull requests per page).
+    scrape_pages(
+        gh,
+        &|per_page, page| {
+            format!("https://api.github.com/repositories/{id}/pulls?state=all&per_page={per_page}&page={page}")
+        },
+        &|json| PRMetadata::parse_json(&json, (id, target.to_string())),
+    )
+}
+
+/// Returns the header of the output: the columns of the pull requests, the error, then their metadata.
 fn header() -> Vec<&'static str> {
     PullRequest::header()
         .into_iter()
+        .chain([ERROR])
         .chain(PRMetadata::COLUMNS)
         .collect()
 }
@@ -322,28 +372,37 @@ fn header() -> Vec<&'static str> {
 ///
 /// * `repo` - The project of the pull request.
 /// * `pr` - The pull request.
-fn pr_row(repo: &Repo, pr: &PRMetadata) -> Vec<String> {
+/// * `error` - Why the discussion of the pull request could not be fetched, if it could not.
+fn pr_row(repo: &Repo, pr: &PRMetadata, error: Option<ErrorCode>) -> Vec<String> {
     PullRequest {
         repo,
         number: pr.pr_number,
     }
     .row()
     .into_iter()
+    .chain([error_cell(error)])
     .chain(pr.values())
     .collect()
 }
 
-/// Returns the row of a project that cannot be queried: its name is replaced by the error message, and the other columns are empty.
+/// Returns the row of a project, or of one of its pull requests, that could not be queried:
+/// the project, the error, and empty cells.
 ///
 /// # Arguments
 ///
 /// * `repo` - The project.
-/// * `error` - The error message.
-fn error_row(mut repo: Repo, error: String) -> Vec<String> {
-    repo.name = Some(error);
-    let mut row: Vec<String> = repo.values();
-    row.resize(header().len(), String::new());
-    row
+/// * `error` - Why it could not be queried.
+fn error_row(repo: &Repo, error: ErrorCode) -> Vec<String> {
+    repo.values()
+        .into_iter()
+        // Without pull request, there is no number nor link.
+        .chain(vec![
+            String::new();
+            PullRequest::header().len() - Repo::columns().len()
+        ])
+        .chain([error.to_string()])
+        .chain(vec![String::new(); PRMetadata::COLUMNS.len()])
+        .collect()
 }
 
 /// Represents the metadata of a GitHub pull request.
@@ -470,26 +529,26 @@ impl FromGitHub for PRMetadata {
 ///
 /// # Returns
 ///
-/// A vector containing the results of applying `func` to each item in the response, or an error if
-/// an error occurred during the requests.
+/// A vector containing the results of applying `func` to each item in the response, with an invalid answer error
+/// for the items it cannot process, or the error of the requests.
 fn scrape_pages<T>(
     gh: &Github,
     request: &dyn Fn(usize, usize) -> String,
     func: &dyn Fn(JsonValue) -> Result<T, Error>,
-) -> Result<Vec<Result<T, Error>>, Error> {
+) -> Result<Vec<Result<T, RowError>>, RowError> {
     let mut page: usize = 1;
     const PER_PAGE: usize = 100;
     let mut is_null: bool = false;
-    let mut items: Vec<Result<T, Error>> = Vec::new();
+    let mut items: Vec<Result<T, RowError>> = Vec::new();
     while !is_null {
-        let json: JsonValue = gh
-            .request(&request(PER_PAGE, page))
-            .with_context(|| format!("Error during GitHub request {}", &request(PER_PAGE, page)))?;
+        let json: JsonValue = gh.request(&request(PER_PAGE, page))?;
         {
             if json.is_empty() {
                 is_null = true;
             } else {
-                items.extend(json.members().map(|item| func(item.clone())));
+                items.extend(json.members().map(|item| {
+                    func(item.clone()).map_err(|e| RowError::new(ErrorCode::InvalidAnswer, e))
+                }));
                 if items.is_empty() {
                     is_null = true;
                 } else {
@@ -512,8 +571,6 @@ enum PRCommentType {
     Discussion,
     /// Pull request text
     Body,
-    /// Unknown type (because the pull request could not be fetched).
-    Error,
 }
 
 /// Represents a comment in a GitHub pull request.
@@ -533,16 +590,16 @@ struct PRComment {
     body: String,
 }
 
-impl ToCSV for PRComment {
-    type Key = ();
-
-    fn header() -> &'static [&'static str] {
-        &["id", "user", "user_id", "type", "created_at", "body"]
+impl PRComment {
+    /// Returns the header of a discussion file.
+    fn header() -> [&'static str; 7] {
+        ["id", ERROR, "user", "user_id", "type", "created_at", "body"]
     }
 
-    fn to_csv(&self, _key: Self::Key) -> String {
+    /// Returns the row of the comment in a discussion file.
+    fn to_csv(&self) -> String {
         format!(
-            "{},{},{},{},{},\"{}\"",
+            "{},,{},{},{},{},\"{}\"",
             self.id,
             self.user,
             self.user_id,
@@ -551,24 +608,29 @@ impl ToCSV for PRComment {
                 PRCommentType::Code => "code",
                 PRCommentType::Discussion => "discussion",
                 PRCommentType::Body => "body",
-                PRCommentType::Error => "error",
             },
             self.created_at,
             clean_string_to_csv(&self.body)
         )
     }
-}
 
-impl Default for PRComment {
-    fn default() -> Self {
-        Self {
-            id: -1,
-            user: String::new(),
-            user_id: 0,
-            comment_type: PRCommentType::Error,
-            created_at: 0,
-            body: String::new(),
-        }
+    /// Returns the row of a comment that could not be read: its error, and empty cells.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - Why the comment could not be read.
+    fn error_row(error: ErrorCode) -> String {
+        Self::header()
+            .iter()
+            .map(|column| {
+                if *column == ERROR {
+                    error.to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(",")
     }
 }
 
@@ -618,10 +680,11 @@ impl FromGitHub for PRComment {
 ///
 /// # Returns
 ///
-/// Unit if the comments were successfully scraped and saved, or an error message if an error occurred.
-fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<()> {
+/// Why the comments could not be fetched, in which case no file is written, or `None` if they were saved.
+/// Comments that cannot be read are saved as rows with an error code.
+/// Fails if the file cannot be written.
+fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<Option<RowError>> {
     let mut file_content: String = String::new();
-    let mut output_file: CSVFile = CSVFile::new(&pr.local_discussion_path, FileMode::Overwrite)?;
     writeln!(&mut file_content, "{}", PRComment::header().join(","))?;
 
     // Body of the PR as the first comment.
@@ -634,7 +697,7 @@ fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<()> 
         body: pr.body.clone(),
     };
 
-    writeln!(&mut file_content, "{}", pr_body.to_csv(()))?;
+    writeln!(&mut file_content, "{}", pr_body.to_csv())?;
 
     // To get all the comments, we need to scrap three different endpoints.
     for t in [
@@ -642,7 +705,7 @@ fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<()> 
         (PRCommentType::Code, "pulls", "comments"),
         (PRCommentType::Review, "pulls", "reviews"),
     ] {
-        for row_res in scrape_pages(
+        let comments = match scrape_pages(
             gh,
             &|per_page, page| {
                 format!(
@@ -650,19 +713,27 @@ fn scrape_pr_comments(gh: &Github, repo_id: u32, pr: &PRMetadata) -> Result<()> 
                     repo_id, t.1, pr.pr_number, t.2, per_page, page
                 )
             },
-            &|json| Ok(PRComment::parse_json(&json, t.0)?.to_csv(())),
-        )? {
-            writeln!(
-                &mut file_content,
-                "{}",
-                row_res.unwrap_or_else(|_| PRComment::default().to_csv(()))
-            )?;
+            &|json| Ok(PRComment::parse_json(&json, t.0)?.to_csv()),
+        ) {
+            Ok(comments) => comments,
+            Err(e) => return Ok(Some(e)),
+        };
+        for comment in comments {
+            let row: String = comment.unwrap_or_else(|e| {
+                debug!(
+                    "A comment of pull request {} of repository {repo_id}: {e}",
+                    pr.pr_number
+                );
+                PRComment::error_row(e.code)
+            });
+            writeln!(&mut file_content, "{row}")?;
         }
     }
 
+    let mut output_file: CSVFile = CSVFile::new(&pr.local_discussion_path, FileMode::Overwrite)?;
     write!(&mut output_file, "{file_content}")?;
     output_file.flush()?;
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -741,26 +812,42 @@ mod tests {
             state: "open".to_string(),
             ..Default::default()
         };
-        let row: Vec<String> = pr_row(&repo(Source::GitHub), &pr);
+        let row: Vec<String> = pr_row(&repo(Source::GitHub), &pr, None);
         assert_eq!(row.len(), header().len());
         assert_eq!(cell(&row, "repo_name"), "owner/repo");
         assert_eq!(cell(&row, "pr_number"), "3");
         assert_eq!(cell(&row, "url"), "https://github.com/owner/repo/pull/3");
+        assert_eq!(cell(&row, ERROR), "");
         assert_eq!(cell(&row, "user"), "someone");
         assert_eq!(cell(&row, "draft"), "1");
         assert_eq!(cell(&row, "state"), "open");
+
+        // A pull request whose discussion could not be fetched keeps its metadata.
+        let row: Vec<String> = pr_row(&repo(Source::GitHub), &pr, Some(ErrorCode::Network));
+        assert_eq!(cell(&row, ERROR), "E001");
+        assert_eq!(cell(&row, "user"), "someone");
     }
 
     #[test]
-    fn rows_of_projects_not_on_github() {
+    fn rows_of_projects_not_on_github() -> Result<()> {
         let local: Repo = repo(Source::Local);
-        let row: Vec<String> = error_row(local.clone(), local.unsupported_source());
+        let error: RowError = pull_requests(&Github::new(Vec::new()), 42, &local, "")
+            .expect_err("a local project is not queried");
+        assert_eq!(error.code, ErrorCode::UnsupportedSource);
+        let row: Vec<String> = error_row(&local, error.code);
         assert_eq!(row.len(), header().len());
         assert_eq!(cell(&row, "source"), "local");
-        assert_eq!(cell(&row, "repo_name"), "error: unsupported source local");
+        assert_eq!(cell(&row, "repo_name"), "owner/repo");
         assert_eq!(cell(&row, "pr_number"), "");
         assert_eq!(cell(&row, "url"), "");
+        assert_eq!(cell(&row, ERROR), "E010");
         assert_eq!(cell(&row, "state"), "");
+        Ok(())
+    }
+
+    #[test]
+    fn rows_of_unreadable_comments() {
+        assert_eq!(PRComment::error_row(ErrorCode::InvalidAnswer), ",E002,,,,,");
     }
 
     #[test]
