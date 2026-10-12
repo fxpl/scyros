@@ -1,0 +1,20 @@
+Error codes say why a step could not process a row: a repository, a file or a function. `scyros explain <CODE>` explains a code.
+
+Errors returned by GitHub have the code of their HTTP status, such as E404. The other codes start with E0.
+
+Codes:
+  * E001 network failure: a request got no answer from GitHub, for example because of the network. Running the step again retries the row.
+  * E002 invalid answer: GitHub answered, but the answer could not be read.
+  * E010 unsupported source: the repository is not on GitHub, so it cannot be queried or downloaded.
+  * E011 no commit: the default branch of the repository has no commit.
+  * E020 extraction failed: the archive of the repository could not be extracted.
+  * E030 parse error: the file or the function has a parse error, and was skipped because of the --failures policy of parse.
+  * E031 file too large: the file is too large to be parsed.
+  * E401 bad credentials: GitHub rejected the token.
+  * E403 forbidden: GitHub refused access to the repository, for example because it is blocked. Rate limits are not errors: they are waited out.
+  * E404 not found: the repository was deleted, turned private, or never existed.
+  * E409 empty repository: the repository has no content.
+  * E451 unavailable for legal reasons: the repository is blocked, for example after a DMCA takedown.
+  * E5xx server error: GitHub failed to answer, even after a few retries. The error is usually temporary: running the step again retries the row.
+
+Other HTTP statuses have the code of the status and the description 'HTTP error'.

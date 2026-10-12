@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `download` accepts repositories without a commit: it downloads their default branch, and reads the full SHA of their commit in the archive.
 - A `latest_commit` subcommand that pins repositories to the latest commit of their default branch, for `download` and the links of the following steps. It is optional, since `download` takes the default branch of repositories without a commit.
 - Repository columns in both outputs of `parse`, copied from its input, and a `url` linking to each file and to the first line of each function on GitHub.
+- Error codes, such as `E404` for a repository GitHub does not find, with an `explain` subcommand: `scyros explain E404` explains a code, and `scyros explain --help` lists them.
 - A `--infer-source` flag for `metadata`, `languages`, `latest_commit`, `pr`, `download` and `parse` to read inputs without a `source` column.
 - A `--rename OLD=NEW` flag for `duplicate_ids`, `forks`, `metadata`, `filter_metadata`, `languages`, `filter_languages`, `latest_commit`, `pr`, `duplicate_files`, `download` and `parse` to read a column of the input under another name. A missing input column is reported with the columns the command reads and how to rename them.
 

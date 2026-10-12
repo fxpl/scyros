@@ -16,8 +16,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use scyros::phases::renames;
 use scyros::phases::{
-    download, duplicate_files, duplicate_ids, filter_languages, filter_metadata, forks, ids,
-    languages, latest_commit, metadata, parse, pull_request,
+    download, duplicate_files, duplicate_ids, explain, filter_languages, filter_metadata, forks,
+    ids, languages, latest_commit, metadata, parse, pull_request,
 };
 use scyros::utils::logger::Logger;
 use tracing::{error, info};
@@ -38,6 +38,7 @@ fn cli() -> Command {
         .subcommand(download::cli())
         .subcommand(duplicate_files::cli())
         .subcommand(parse::cli())
+        .subcommand(explain::cli())
         // .subcommand(extract_benchmarks::cli())
         .arg(
             Arg::new("debug")
@@ -214,6 +215,8 @@ fn main() {
                                     &renames(cli_subargs),
                                     &logger,
                                 )
+                            } else if subcommand == explain::cli().get_name() {
+                                explain::run(cli_subargs.get_one::<String>("code").unwrap())
                             } else if subcommand == parse::cli().get_name() {
                                 parse::run(
                                     cli_subargs.get_one::<String>("input").unwrap(),
@@ -317,6 +320,8 @@ fn main() {
     });
 
     match res {
+        // explain only prints the explanation.
+        Ok(_) if cli_args.subcommand_name() == Some(explain::cli().get_name()) => {}
         Ok(_) => info!("Operation completed successfully."),
         Err(e) => {
             let msg = if cli_args.get_flag("debug") {

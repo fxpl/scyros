@@ -15,6 +15,7 @@
 pub mod bow;
 pub mod csv;
 pub mod dataframes;
+pub mod error;
 pub mod fs;
 pub mod github;
 pub mod github_api;

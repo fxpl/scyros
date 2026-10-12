@@ -16,6 +16,7 @@
 pub mod download;
 pub mod duplicate_files;
 pub mod duplicate_ids;
+pub mod explain;
 pub mod extract_benchmarks;
 pub mod filter_languages;
 pub mod filter_metadata;
