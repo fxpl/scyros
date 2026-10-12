@@ -6,6 +6,7 @@
 https://releases.rs/docs/1.95.0/
 )
 [![Crates.io](https://img.shields.io/crates/v/scyros.svg)](https://crates.io/crates/scyros)
+[![Docs](https://img.shields.io/badge/docs-scyros--mining.github.io-blue)](https://scyros-mining.github.io/docs.html)
 
 A framework to design sound, reproducible and scalable mining repositories studies on GitHub.
 
@@ -14,12 +15,12 @@ A framework to design sound, reproducible and scalable mining repositories studi
 - 🧪 **Reproducibility-first**: declarative configuration and deterministic execution to enable repeatable experiments.
 - 📈 **Scalable**: designed for large-scale repository mining studies on GitHub.
 - 🧱 **Soundness-focused**: encourages transparent, bias-aware, and methodologically explicit study design.
-- ⚙️ **Modular**: independent, reusable modules that can be composed into custom data-processing pipelines.
+- ⚙️ **Modular**: independent, reusable subcommands that can be composed into custom data-processing pipelines.
 
 ## Table of Contents
 
 - [Installation](#installation)
-- [Tutorial](#tutorial)
+- [Tutorial and Documentation](#tutorial-and-documentation)
 - [Usage](#usage)
 - [Authentication and Rate Limits](#authentication-and-rate-limits)
 - [Citing Scyros](#citing-scyros)
@@ -66,19 +67,19 @@ cargo build --release
 
 The binary is produced at `target/release/scyros`. You can optionally move it to a directory in your PATH for easier access.
 
-## Tutorial
+## Tutorial and Documentation
 
-If you'd like to see how to use Scyros in practice, check out the [interactive tutorial](https://github.com/fxpl/scyros-tutorial)!
+If you'd like to see how to use Scyros in practice, check out the [tutorial](https://scyros-mining.github.io/tutorial.html)! For the details of every subcommand, head to the [documentation](https://scyros-mining.github.io/docs.html).
 
 ## Usage
 
-To discover available commands and modules:
+To list the available subcommands:
 
 ```bash
 scyros --help
 ```
 
-Each module provides its own usage documentation. For example, to inspect the module used to sample random repositories from GitHub:
+Each subcommand provides its own usage documentation. For example, for the subcommand that samples random repositories from GitHub:
 
 ```bash
 scyros ids --help
@@ -86,7 +87,7 @@ scyros ids --help
 
 ## Authentication and Rate Limits
 
-Some modules interact with the GitHub API and require personal access tokens (PATs). Tokens can be created by following GitHub’s documentation: [https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token).
+Some subcommands interact with the GitHub API and require personal access tokens (PATs). Tokens can be created by following GitHub’s documentation: [https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token).
 
 ⚠️ Never commit or share your tokens publicly.
 
