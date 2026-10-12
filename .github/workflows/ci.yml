@@ -13,7 +13,7 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v4
@@ -35,6 +35,16 @@ jobs:
       env:
         RUST_BACKTRACE: 1
       run: cargo test --verbose -- --ignored
+    - name: Check that the tests leave no files
+      run: |
+          leftovers=$(git status --porcelain --ignored tests src)
+          if [ -n "$leftovers" ]; then
+            echo "::error::The tests left files in the repository:"
+            echo "$leftovers"
+            exit 1
+          fi
+    - name: Check the package
+      run: cargo publish --dry-run
     - name: Run Clippy
       run: |
           cargo clippy --message-format=json | jq -r '
