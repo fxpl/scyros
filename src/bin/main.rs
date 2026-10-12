@@ -219,6 +219,8 @@ fn main() {
                                     cli_subargs.get_flag("ignore-comments"),
                                     cli_subargs.get_flag("lambdas"),
                                     !cli_subargs.get_flag("count"),
+                                    cli_subargs.get_flag("infer-source"),
+                                    &renames(cli_subargs),
                                     &logger,
                                 )
                             }

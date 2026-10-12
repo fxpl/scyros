@@ -1,4 +1,4 @@
-Parses source files and extracts functions whose bodies contain at least one user-specified keyword. The input file must be a valid CSV file containing the columns 'id' and 'name', where 'id' identifies the repository and 'name' is the path to the source file. Other columns are ignored.
+Parses source files and extracts functions whose bodies contain at least one user-specified keyword. The input file must be a valid CSV file with the columns 'local_path', the local path to each source file, and 'file', its path inside its repository, such as the file log of download. The input must also have a 'source' column, unless --infer-source is used: files without a source are then on GitHub if they have a repository ID, and local otherwise. The other repository columns of the input ('repo_id', 'repo_name', 'repo_license' and 'latest_commit') are copied to both output files. Other columns are ignored. Columns of the input can be read under other names with --rename OLD=NEW, for example --rename path=local_path.
 
 The language of each file is given by its extension, as defined in the keyword JSON files. Supported languages are C, C++, C#, Fortran, Go, Java, Python, Scala, Typescript and Rust. Files in other languages are skipped with a warning.
 
@@ -21,6 +21,8 @@ For each retained function, the command writes the function source code to a sep
 
 The command writes two CSV files: one containing function-level statistics and one containing file-level parsing statistics. By default, these files are named by appending '.functions.csv' and '.function_logs.csv' to the input file name.
 
+Both files have a 'url' column with links to the files and to the first line of the functions on GitHub, at the commit of the repositories, or on their default branch without a commit. Links are empty for files that are not on GitHub.
+
 Parse errors are handled according to the policy selected with --failures:
   * ignore: the errors are ignored and the statistics are computed as if there was no error;
   * skip-file: no function is extracted from the file, and its row in the function logs has -1 for every statistic;
@@ -28,10 +30,13 @@ Parse errors are handled according to the policy selected with --failures:
   * abort: the run stops at the first file with a parse error.
 
 Output functions CSV format:
-  * id: repository ID
-  * path: path to the extracted function file
-  * name: function or method name
-  * position: starting line and column in the original source file
+  * repo_id, source, repo_name, repo_license, latest_commit: repository columns, copied from the input, empty when unknown
+  * local_path: local path to the source file
+  * file: path of the source file inside its repository
+  * function_name: function or method name
+  * line, column: starting line and column of the function in the source file
+  * url: link to the first line of the function on GitHub
+  * local_function_path: path to the extracted function file (not written with --count)
   * language: programming language
   * loc: number of lines in the function
   * words: number of words in the function
@@ -45,13 +50,15 @@ Output functions CSV format:
   * params: number of parameters
   * param_kw_match: number of parameters whose type matches a keyword
   * return_kw_match: whether the return type matches a keyword
-  * parse_error: position of the first parse error relative to the function, or none
+  * parse_error_line, parse_error_column: position of the first parse error relative to the function, empty without error
 
 Output function logs CSV format:
-  * id: repository ID
-  * name: source file path
+  * repo_id, source, repo_name, repo_license, latest_commit: repository columns, copied from the input, empty when unknown
+  * local_path: local path to the source file
+  * file: path of the source file inside its repository
+  * url: link to the file on GitHub
   * language: programming language
   * functions: number of functions found in the file
   * functions_with_kw: number of retained functions
   * ...: number of retained functions matching each keyword file
-  * parse_error: position of the first parse error in the file, none, or not-found
+  * parse_error_line, parse_error_column: position of the first parse error in the file, empty without error

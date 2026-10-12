@@ -1,2 +1,2 @@
-id,name,language
-0,tests/data/phases/parse/invalid.c,c
+repo_id,source,local_path,file,language
+0,local,tests/data/phases/parse/invalid.c,invalid.c,c

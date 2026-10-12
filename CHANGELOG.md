@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repository columns, copied from the input, then `pr_number` and a `url` linking to the pull request on GitHub, at the start of each row of `pr`. A repository that is not on GitHub gets an error row.
 - Repository columns and a `url` in both logs of `download`, copied from its input: every file keeps the repository it comes from, with its path inside the repository (`file`) and a link to it on GitHub.
 - `download` accepts repositories without a commit: it downloads their default branch, and reads their commit in the archive.
-- A `--infer-source` flag for `metadata`, `languages`, `pr` and `download` to read inputs without a `source` column.
-- A `--rename OLD=NEW` flag for `duplicate_ids`, `forks`, `metadata`, `filter_metadata`, `languages`, `filter_languages`, `pr`, `duplicate_files` and `download` to read a column of the input under another name. A missing input column is reported with the columns the command reads and how to rename them.
+- Repository columns in both outputs of `parse`, copied from its input, and a `url` linking to each file and to the first line of each function on GitHub.
+- A `--infer-source` flag for `metadata`, `languages`, `pr`, `download` and `parse` to read inputs without a `source` column.
+- A `--rename OLD=NEW` flag for `duplicate_ids`, `forks`, `metadata`, `filter_metadata`, `languages`, `filter_languages`, `pr`, `duplicate_files`, `download` and `parse` to read a column of the input under another name. A missing input column is reported with the columns the command reads and how to rename them.
 
 ### Changed
 
@@ -26,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `duplicate_files` reads file paths from the `local_path` column by default, instead of `name`.
 - `download` reads the directories of local repositories from `local_path` instead of `path`, and its logs write local paths in `local_path` instead of `path` and `name`.
 - `pr` reads the columns `repo_id` and `repo_name`: the `--ids` and `--names` flags are removed. Values are quoted instead of being written as they are.
+- `parse` reads files from the `local_path` and `file` columns instead of `id` and `name`, such as the file log of `download`. In its outputs, `name` becomes `function_name` and `path` becomes `local_path`; the extracted function file moves to `local_function_path`, only written without `--count`. `position` is split into `line` and `column`, and `parse_error` into `parse_error_line` and `parse_error_column`, empty without error instead of `none`.
 
 ### Removed
 

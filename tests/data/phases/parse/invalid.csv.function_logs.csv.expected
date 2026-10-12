@@ -1,2 +1,2 @@
-id,name,language,functions,functions_with_kw,tests/data/keywords/c_float.json,parse_error
-0,tests/data/phases/parse/invalid.c,c,1,1,1,1:25
+repo_id,source,repo_name,repo_license,latest_commit,local_path,file,url,language,functions,functions_with_kw,tests/data/keywords/c_float.json,parse_error_line,parse_error_column
+0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,,c,1,1,1,1,25

@@ -21,7 +21,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 use rand::SeedableRng;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use std::iter::FromIterator as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::vec;
@@ -29,12 +29,16 @@ use std::{collections::HashSet, path::Path, sync::Mutex};
 use tracing::{info, warn};
 use tree_sitter::{Language, Node, Parser, Tree};
 
+use crate::utils::dataframes::{has_column, require_columns};
 use crate::utils::fs::*;
 use crate::utils::regex::*;
+use crate::utils::repo::{Function, RepoColumn, RepoFile, Unit, FILE, LOCAL_PATH};
 use crate::utils::{
     csv::*,
     logger::{log_output_file, log_seed, Logger},
 };
+
+use super::rename_arg;
 
 /// Command line arguments parsing.
 pub fn cli() -> Command {
@@ -47,8 +51,9 @@ pub fn cli() -> Command {
                 .short('i')
                 .long("input")
                 .value_name("INPUT_FILE.csv")
-                .help("Path to the input csv file to use. It must be a valid CSV file with a column 'id' containing the id of the project \
-                       and a column 'name' containing the path to the file. The language of a file is given by its extension. Other columns are ignored.")
+                .help("Path to the input csv file to use. It must be a valid CSV file with a column 'local_path' containing the paths to the files \
+                       and a column 'file' containing their paths inside their repositories, such as the file log of download. \
+                       The repository columns are copied to the output files. The language of a file is given by its extension. Other columns are ignored.")
                 .required(true)
         )
         .arg(
@@ -162,16 +167,31 @@ pub fn cli() -> Command {
                 .help("Compute statistics on the functions without writing the functions to files.") 
                 .action(ArgAction::SetTrue)
         )
+        .arg(
+            Arg::new("infer-source")
+                .long("infer-source")
+                .help("Infer the source of the repositories without one: github if they have an id, local otherwise. \
+                       Without this flag, a file without a source is an error.")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(rename_arg())
 }
 
 type OutputRow = Vec<String>;
 type LogRow = Vec<String>;
 
+/// Column with the local path of the extracted code of a function, written when the functions are extracted.
+const LOCAL_FUNCTION_PATH: &str = "local_function_path";
+/// Column with the line of the first parse error, relative to the function or to the file. Empty without parse error.
+const PARSE_ERROR_LINE: &str = "parse_error_line";
+/// Column with the column of the first parse error, relative to the function or to the file. Empty without parse error.
+const PARSE_ERROR_COLUMN: &str = "parse_error_column";
+
 /// Entry point of the program
 ///
 /// # Arguments
 ///
-/// * `input_path` - Path to the input csv file to use.
+/// * `input_path` - Path to the input csv file to use. It has the columns `local_path` and `file`, and the repository columns.
 /// * `output_path` - Path to the output csv file storing the functions statistics.
 /// * `logs_path` - Path to the output csv file storing the files statistics.
 /// * `keywords_file_paths` - Paths to the files containing the list of extensions and keywords to use.
@@ -188,6 +208,8 @@ type LogRow = Vec<String>;
 /// * `ignore_comments` - Whether to ignore comments when extracting functions.
 /// * `lambdas` - Whether to extract lambda functions as well.
 /// * `write_out` - Whether to write the extracted functions to files. If false, only the statistics are computed and written to the output file.
+/// * `infer_source` - Whether to infer the source of the repositories without one (see [`Repo::from_csv_row`](crate::utils::repo::Repo::from_csv_row)).
+/// * `renames` - Columns of the input read under other names.
 /// * `logger` - The logger to use to display information about the progress of the program.
 pub fn run(
     input_path: &str,
@@ -203,6 +225,8 @@ pub fn run(
     ignore_comments: bool,
     lambdas: bool,
     write_out: bool,
+    infer_source: bool,
+    renames: &[(String, String)],
     logger: &Logger,
 ) -> Result<()> {
     let supported_languages: HashSet<&'static str> = vec![
@@ -246,13 +270,19 @@ pub fn run(
 
     let mut input_file = open_csv(
         input_path,
-        Some(Schema::from_iter(vec![
-            Field::new("id".into(), DataType::UInt32),
-            Field::new("name".into(), DataType::String),
-        ])),
-        Some(vec!["id", "name"]),
-        &[],
+        Some(Schema::from_iter(RepoColumn::fields().into_iter().chain([
+            Field::new(LOCAL_PATH.into(), DataType::String),
+            Field::new(FILE.into(), DataType::String),
+        ]))),
+        None,
+        renames,
     )?;
+    require_columns(&input_file, input_path, &[LOCAL_PATH, FILE])?;
+    ensure!(
+        infer_source || has_column(&input_file, RepoColumn::Source.name()),
+        "{input_path} has no column source. Add it, read another column as source with \
+         --rename OLD=source, or infer the sources with --infer-source."
+    );
 
     let n_files_before = input_file.height();
 
@@ -263,7 +293,7 @@ pub fn run(
 
     // Keep only the files written in the selected languages
     let name_mask: BooleanChunked = input_file
-        .column("name")?
+        .column(LOCAL_PATH)?
         .str()?
         .iter()
         .map(|opt_name| {
@@ -297,13 +327,9 @@ pub fn run(
         Ok(())
     })?;
 
-    let shuffled_rows = shuffled_idx.into_iter().map(|idx| {
-        let row = input_file.get_row(idx).unwrap().0;
-        match (row[0].clone(), row[1].clone()) {
-            (AnyValue::UInt32(id), AnyValue::String(path)) => Ok((id, path.to_string())),
-            _ => Err(idx),
-        }
-    });
+    let shuffled_rows = shuffled_idx
+        .into_iter()
+        .map(|idx| RepoFile::from_csv_row(&input_file, idx, infer_source));
 
     let word_counter: Matcher = Matcher::words_matcher();
 
@@ -311,7 +337,10 @@ pub fn run(
     let mut output_file = CSVFile::new(output_path, FileMode::Overwrite)?;
 
     // Write the header.
-    let output_prefix = ["id", "path", "name", "position", "language", "loc", "words"];
+    let output_prefix = Function::header()
+        .into_iter()
+        .chain(write_out.then_some(LOCAL_FUNCTION_PATH))
+        .chain(["language", "loc", "words"]);
     let output_suffix = [
         "loop_statements",
         "loop_nestings",
@@ -322,10 +351,10 @@ pub fn run(
         "params",
         "param_kw_match",
         "return_kw_match",
-        "parse_error",
+        PARSE_ERROR_LINE,
+        PARSE_ERROR_COLUMN,
     ];
     let output_header = output_prefix
-        .iter()
         .map(|s| s.to_string())
         .chain(keyword_files.paths.iter().cloned())
         .chain(output_suffix.iter().map(|s| s.to_string()));
@@ -334,12 +363,14 @@ pub fn run(
     let mut logs_file = CSVFile::new(logs_path, FileMode::Overwrite)?;
 
     // Write the header.
-    let logs_prefix = ["id", "name", "language", "functions", "functions_with_kw"];
+    let logs_prefix =
+        RepoFile::header()
+            .into_iter()
+            .chain(["language", "functions", "functions_with_kw"]);
     let logs_header = logs_prefix
-        .iter()
         .map(|s| s.to_string())
         .chain(keyword_files.paths.iter().cloned())
-        .chain(std::iter::once("parse_error".to_string()));
+        .chain([PARSE_ERROR_LINE, PARSE_ERROR_COLUMN].map(|s| s.to_string()));
     logs_file.write_header(logs_header)?;
 
     let iter = Mutex::new(shuffled_rows.into_iter());
@@ -360,18 +391,16 @@ pub fn run(
                 // Download the repositories until the iterator is empty.
                 loop {
                     // Lock the repository iterator and retrieve the next item.
-                    let next_item: Option<Result<(u32, String), usize>> =
-                        if failed.load(Ordering::Relaxed) {
-                            None
-                        } else {
-                            iter.lock().unwrap().next()
-                        };
+                    let next_item: Option<Result<RepoFile>> = if failed.load(Ordering::Relaxed) {
+                        None
+                    } else {
+                        iter.lock().unwrap().next()
+                    };
 
                     match next_item {
                         Some(row) => match row {
-                            Ok((project_id, file_name)) => match analyze_file(
-                                project_id,
-                                &file_name,
+                            Ok(file) => match analyze_file(
+                                &file,
                                 &keyword_files,
                                 fail_policy,
                                 ignore_comments,
@@ -388,10 +417,9 @@ pub fn run(
                                     break;
                                 }
                             },
-                            Err(row_nr) => {
+                            Err(e) => {
                                 failed.store(true, Ordering::Relaxed);
-                                let _ =
-                                    my_tx.send(Some(Err(anyhow!("Could not parse row {row_nr}"))));
+                                let _ = my_tx.send(Some(Err(e)));
                                 break;
                             }
                         },
@@ -447,9 +475,7 @@ pub fn run(
 ///
 /// # Arguments
 ///
-/// * `project_id` - The id of the project to which the file belongs.
-/// * `path` - The path to the file to analyze.
-/// * `language` - The language of the file.
+/// * `file` - The file to analyze.
 /// * `keywords_files` - The files containing the list of keywords to search for in the functions.
 /// * `fail_policy` - The policy to apply when a parse error is encountered.
 /// * `ignore_comments` - Whether to ignore comments when extracting functions, in addition to ignoring them during keyword matching.
@@ -469,8 +495,7 @@ pub fn run(
 /// * The maximum conditional nesting level.
 ///
 fn analyze_file(
-    project_id: u32,
-    path: &str,
+    file: &RepoFile,
     keywords_files: &KeywordFiles,
     fail_policy: &str,
     ignore_comments: bool,
@@ -478,6 +503,7 @@ fn analyze_file(
     write_out: bool,
     word_counter: &Matcher,
 ) -> Result<(Vec<OutputRow>, Option<LogRow>)> {
+    let path: &str = &file.local_path;
     let language = keywords_files.file_language(path).with_context(|| {
         format!("Could not find the language for file {path} in the keywords files")
     })?;
@@ -505,11 +531,10 @@ fn analyze_file(
                 Ok((
                     Vec::new(),
                     Some(file_error_row(
-                        project_id,
-                        path,
+                        file,
                         &language,
                         keywords_files,
-                        &position_to_string(find_first_error_position(&tree.root_node())),
+                        find_first_error_position(&tree.root_node()),
                     )),
                 ))
             } else if file_has_parse_error && fail_policy == "abort" {
@@ -518,9 +543,8 @@ fn analyze_file(
                 let root: Node<'_> = tree.root_node();
                 let (output, total_functions, functions_with_kw, functions_with_specific_kw) =
                     extract_functions(
-                        project_id,
+                        file,
                         &root,
-                        path,
                         &language,
                         &grammar,
                         &source_code,
@@ -533,23 +557,23 @@ fn analyze_file(
                         &mut parser,
                     )?;
 
-                let error_position: String = if file_has_parse_error {
-                    position_to_string(find_first_error_position(&root))
+                let error_position: Option<(usize, usize)> = if file_has_parse_error {
+                    find_first_error_position(&root)
                 } else {
-                    "none".to_string()
+                    None
                 };
 
-                let log_row: LogRow = vec![
-                    project_id.to_string(),
-                    path.to_string(),
-                    language.to_string(),
-                    total_functions.to_string(),
-                    functions_with_kw.to_string(),
-                ]
-                .into_iter()
-                .chain(functions_with_specific_kw.iter().map(|x| x.to_string()))
-                .chain(std::iter::once(error_position))
-                .collect();
+                let log_row: LogRow = file
+                    .row()
+                    .into_iter()
+                    .chain([
+                        language.to_string(),
+                        total_functions.to_string(),
+                        functions_with_kw.to_string(),
+                    ])
+                    .chain(functions_with_specific_kw.iter().map(|x| x.to_string()))
+                    .chain(error_cells(error_position))
+                    .collect();
 
                 Ok((output, Some(log_row)))
             }
@@ -558,65 +582,75 @@ fn analyze_file(
         // If the file is too large, return an error row
         Err(_) => Ok((
             Vec::new(),
-            Some(file_error_row(
-                project_id,
-                path,
-                &language,
-                keywords_files,
-                "none",
-            )),
+            Some(file_error_row(file, &language, keywords_files, None)),
         )),
     }
 }
 
+/// Returns the log row of a file skipped because of a parse error or of its size, with -1 for every statistic.
+///
+/// # Arguments
+///
+/// * `file` - The file.
+/// * `language` - The language of the file.
+/// * `keyword_files` - The keyword files.
+/// * `parse_error` - The position of the first parse error in the file, if any.
 fn file_error_row(
-    project_id: u32,
-    path: &str,
+    file: &RepoFile,
     language: &str,
     keyword_files: &KeywordFiles,
-    parse_error: &str,
+    parse_error: Option<(usize, usize)>,
 ) -> LogRow {
-    vec![
-        project_id.to_string(),
-        path.to_string(),
-        language.to_string(),
-        "-1".to_string(),
-        "-1".to_string(),
-    ]
-    .into_iter()
-    .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
-    .chain(std::iter::once(parse_error.to_string()))
-    .collect()
+    file.row()
+        .into_iter()
+        .chain([language.to_string(), "-1".to_string(), "-1".to_string()])
+        .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
+        .chain(error_cells(parse_error))
+        .collect()
 }
 
 /// Returns the statistics row of a function skipped because of a parse error, with -1 for every statistic.
+/// The function is not extracted, so its `local_function_path` is empty.
+///
+/// # Arguments
+///
+/// * `function` - The function.
+/// * `write_out` - Whether the functions are extracted to files.
+/// * `language` - The language of the function.
+/// * `keyword_files` - The keyword files.
+/// * `parse_error` - The position of the first parse error, relative to the function.
 fn function_error_row(
-    project_id: u32,
-    file_path: &str,
-    name: String,
-    position: (usize, usize),
+    function: &Function,
+    write_out: bool,
     language: &str,
     keyword_files: &KeywordFiles,
-    parse_error: String,
+    parse_error: Option<(usize, usize)>,
 ) -> OutputRow {
     const STATISTICS_AFTER_KEYWORDS: usize = 9;
-    vec![
-        project_id.to_string(),
-        file_path.to_string(),
-        name,
-        position_to_string(Some(position)),
-        language.to_string(),
-        "-1".to_string(),
-        "-1".to_string(),
-    ]
-    .into_iter()
-    .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
-    .chain(std::iter::repeat_n(
-        "-1".to_string(),
-        STATISTICS_AFTER_KEYWORDS,
-    ))
-    .chain(std::iter::once(parse_error))
-    .collect()
+    function
+        .row()
+        .into_iter()
+        .chain(write_out.then(String::new))
+        .chain([language.to_string(), "-1".to_string(), "-1".to_string()])
+        .chain(keyword_files.paths.iter().map(|_| "-1".to_string()))
+        .chain(std::iter::repeat_n(
+            "-1".to_string(),
+            STATISTICS_AFTER_KEYWORDS,
+        ))
+        .chain(error_cells(parse_error))
+        .collect()
+}
+
+/// Returns the cells of the position of a parse error: its line and its column, or empty cells without error.
+///
+/// # Arguments
+///
+/// * `position` - The line and the column of the parse error, if any.
+fn error_cells(position: Option<(usize, usize)>) -> [String; 2] {
+    match position {
+        Some((line, column)) => [line.to_string(), column.to_string()],
+        None => [String::new(), String::new()],
+    }
 }
 
 /// Returns the name of a function, without its parameters and whitespace. Anonymous functions have no name.
@@ -649,15 +683,18 @@ fn function_name(function: &Node, grammar: &Grammar, source: &[u8]) -> String {
 ///
 /// * `function` - The node of the function.
 /// * `function_position` - The line and column where the function starts in the file.
-fn relative_error_position(function: &Node, function_position: (usize, usize)) -> String {
-    position_to_string(find_first_error_position(function).map(|(row, col)| {
+fn relative_error_position(
+    function: &Node,
+    function_position: (usize, usize),
+) -> Option<(usize, usize)> {
+    find_first_error_position(function).map(|(row, col)| {
         let error_row = row - function_position.0 + 1;
         if row == function_position.0 {
             (error_row, col - function_position.1 + 1)
         } else {
             (error_row, col)
         }
-    }))
+    })
 }
 
 /// Extracts the functions from a subtree of a source file and writes them to individual files
@@ -667,9 +704,8 @@ fn relative_error_position(function: &Node, function_position: (usize, usize)) -
 ///
 /// # Arguments
 ///
-/// * project_id - The id of the project to which the file belongs.
+/// * `file` - The file the functions are extracted from.
 /// * `root` - The root node of the subtree.
-/// * `file_path` - The path to the file where the functions are extracted from.
 /// * `language` - The language of the source file.
 /// * `grammar` - The grammar of the language.
 /// * `source` - The source code of the source file.
@@ -686,9 +722,8 @@ fn relative_error_position(function: &Node, function_position: (usize, usize)) -
 /// A tuple containing the statistics of the functions in the file and the function number after processing the file node
 ///
 fn extract_functions(
-    project_id: u32,
+    file: &RepoFile,
     root: &Node,
-    file_path: &str,
     language: &str,
     grammar: &Grammar,
     source: &[u8],
@@ -700,6 +735,7 @@ fn extract_functions(
     word_counter: &Matcher,
     parser: &mut Parser,
 ) -> Result<(Vec<OutputRow>, usize, usize, Vec<usize>)> {
+    let file_path: &str = &file.local_path;
     let target_folder = format!("{file_path}.functions");
 
     // Initializes the builder to store the statistics of the functions in the file
@@ -725,11 +761,15 @@ fn extract_functions(
             if language == "java" && find_fields(&node, "body").is_empty() {
                 continue;
             } else if has_error && fail_policy == "skip-function" {
+                let function = Function {
+                    file,
+                    name: function_name(&node, grammar, source),
+                    line: function_position.0,
+                    column: function_position.1,
+                };
                 rows.push(function_error_row(
-                    project_id,
-                    file_path,
-                    function_name(&node, grammar, source),
-                    function_position,
+                    &function,
+                    write_out,
                     language,
                     keyword_files,
                     relative_error_position(&node, function_position),
@@ -739,10 +779,10 @@ fn extract_functions(
                 // Function source code
                 let function_source_code: &[u8] = node_source_code(&node, source);
 
-                let error_position: String = if has_error {
+                let error_position: Option<(usize, usize)> = if has_error {
                     relative_error_position(&node, function_position)
                 } else {
-                    "none".to_string()
+                    None
                 };
 
                 // Fetch the code of the function and remove comments from it
@@ -766,17 +806,15 @@ fn extract_functions(
                     keyword_files.count_matches_in_text(language, function_code);
 
                 if matches.iter().any(|x| *x > 0) {
-                    let function_path: String = if write_out {
+                    let function_path: Option<String> = write_out.then(|| {
                         Path::new(&target_folder)
                             .join(format!("{}-{}", function_position.0, function_position.1))
                             .to_string_lossy()
                             .into_owned()
-                    } else {
-                        file_path.to_string()
-                    };
-                    if write_out {
+                    });
+                    if let Some(function_path) = &function_path {
                         std::fs::write(
-                            &function_path,
+                            function_path,
                             if ignore_comments {
                                 function_code_with_strings
                             } else {
@@ -828,32 +866,37 @@ fn extract_functions(
                         None => 0,
                     };
 
-                    let row: OutputRow = vec![
-                        project_id.to_string(),
-                        function_path,
+                    let function = Function {
+                        file,
                         name,
-                        position_to_string(Some(function_position)),
-                        language.to_string(),
-                        count_text_lines(function_code_with_strings).to_string(),
-                        word_counter
-                            .count_matches_in_text(function_code_with_strings)
-                            .to_string(),
-                    ]
-                    .into_iter()
-                    .chain(matches.iter().map(|m| m.to_string()))
-                    .chain([
-                        loops.to_string(),
-                        loop_nesting.to_string(),
-                        conditionals.to_string(),
-                        conditional_nesting.to_string(),
-                        calls.to_string(),
-                        calls_nesting.to_string(),
-                        n_param.to_string(),
-                        param_match.to_string(),
-                        return_type_match.to_string(),
-                        error_position,
-                    ])
-                    .collect();
+                        line: function_position.0,
+                        column: function_position.1,
+                    };
+                    let row: OutputRow = function
+                        .row()
+                        .into_iter()
+                        .chain(function_path)
+                        .chain([
+                            language.to_string(),
+                            count_text_lines(function_code_with_strings).to_string(),
+                            word_counter
+                                .count_matches_in_text(function_code_with_strings)
+                                .to_string(),
+                        ])
+                        .chain(matches.iter().map(|m| m.to_string()))
+                        .chain([
+                            loops.to_string(),
+                            loop_nesting.to_string(),
+                            conditionals.to_string(),
+                            conditional_nesting.to_string(),
+                            calls.to_string(),
+                            calls_nesting.to_string(),
+                            n_param.to_string(),
+                            param_match.to_string(),
+                            return_type_match.to_string(),
+                        ])
+                        .chain(error_cells(error_position))
+                        .collect();
                     rows.push(row);
                     functions_with_kw += 1;
                     for (i, m) in matches.iter().enumerate() {
@@ -1430,13 +1473,6 @@ fn find_first_error_position(root: &Node) -> Option<(usize, usize)> {
     find_first_error_node(root).map(|n| (n.start_position().row + 1, n.start_position().column + 1))
 }
 
-fn position_to_string(position: Option<(usize, usize)>) -> String {
-    match position {
-        Some((row, col)) => format!("{row}:{col}"),
-        None => "not-found".to_string(),
-    }
-}
-
 fn find_fields<'a>(root: &Node<'a>, field: &str) -> Vec<Node<'a>> {
     let mut res: Vec<Node<'a>> = Vec::new();
     let mut ids: HashSet<usize> = HashSet::new();
@@ -1576,12 +1612,13 @@ fn remove_kind_from_source(source: &[u8], root: &Node, kinds: &HashSet<&str>) ->
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::Path;
 
     use crate::utils::dataframes;
-    use crate::utils::dataframes::*;
     use crate::utils::fs::*;
     use crate::utils::logger::test_logger;
+    use crate::utils::repo::{COLUMN, FUNCTION_NAME, LINE, URL};
     use anyhow::ensure;
     use polars::prelude::SortMultipleOptions;
 
@@ -1598,11 +1635,7 @@ mod tests {
         should_pass: bool,
     ) -> Result<()> {
         let input_df = open_csv(input_file_path, None, None, &[])?;
-        ensure!(
-            has_column(&input_df, "name"),
-            "Input dataframe must have a 'name' column"
-        );
-        let input_df: Vec<&str> = dataframes::str(&input_df, "name")?;
+        let input_df: Vec<&str> = dataframes::str(&input_df, LOCAL_PATH)?;
 
         let output_file_path = format!("{input_file_path}.functions.csv");
         delete_file(&output_file_path, true)?;
@@ -1631,17 +1664,13 @@ mod tests {
                 ignore_comments,
                 lambdas,
                 write_out,
+                false,
+                &[],
                 test_logger(),
             )?;
 
             let logs_df = open_csv(&logs_file_path, None, None, &[])?;
-            ensure!(
-                has_column(&logs_df, "name"),
-                "Logs dataframe must have a 'name' column"
-            );
-            let sorted_logs_df = logs_df
-                .sort(vec!["name"], SortMultipleOptions::new())
-                .unwrap();
+            let sorted_logs_df = logs_df.sort(vec![LOCAL_PATH], SortMultipleOptions::new())?;
 
             let expected_logs_df = open_csv(
                 &format!("{input_file_path}.function_logs.csv.expected"),
@@ -1649,34 +1678,22 @@ mod tests {
                 None,
                 &[],
             )?;
-            ensure!(
-                has_column(&expected_logs_df, "name"),
-                "Expected logs dataframe must have a 'name' column"
-            );
-            let sorted_expected_logs_df = expected_logs_df
-                .sort(vec!["name"], SortMultipleOptions::new())
-                .unwrap();
+            let sorted_expected_logs_df =
+                expected_logs_df.sort(vec![LOCAL_PATH], SortMultipleOptions::new())?;
             assert_eq!(sorted_expected_logs_df, sorted_logs_df);
 
             let output_df = open_csv(&output_file_path, None, None, &[])?;
-            ensure!(
-                has_column(&output_df, "path"),
-                "Output dataframe must have a 'path' column"
-            );
 
             if write_out {
-                let sorted_output_df = output_df.sort(vec!["path"], SortMultipleOptions::new())?;
+                let sorted_output_df =
+                    output_df.sort(vec![LOCAL_FUNCTION_PATH], SortMultipleOptions::new())?;
                 let expected_df =
                     open_csv(&format!("{output_file_path}.expected"), None, None, &[])?;
-                ensure!(
-                    has_column(&expected_df, "path"),
-                    "Expected dataframe must have a 'path' column"
-                );
                 let sorted_expected_df =
-                    expected_df.sort(vec!["path"], SortMultipleOptions::new())?;
+                    expected_df.sort(vec![LOCAL_FUNCTION_PATH], SortMultipleOptions::new())?;
                 assert_eq!(sorted_expected_df, sorted_output_df);
 
-                for path in dataframes::str(&sorted_output_df, "path")? {
+                for path in dataframes::str(&sorted_output_df, LOCAL_FUNCTION_PATH)? {
                     let path = Path::new(path);
                     ensure!(path.exists(), "Parsed file not found: {}", path.display());
                     let expected_path_name = format!(
@@ -1698,19 +1715,15 @@ mod tests {
                 }
             } else {
                 let sorted_output_df =
-                    output_df.sort(vec!["path", "name"], SortMultipleOptions::new())?;
+                    output_df.sort(vec![LOCAL_PATH, LINE, COLUMN], SortMultipleOptions::new())?;
                 let expected_df = open_csv(
                     &format!("{output_file_path}.count.expected"),
                     None,
                     None,
                     &[],
                 )?;
-                ensure!(
-                    has_column(&expected_df, "path"),
-                    "Expected dataframe must have a 'path' column"
-                );
                 let sorted_expected_df =
-                    expected_df.sort(vec!["path", "name"], SortMultipleOptions::new())?;
+                    expected_df.sort(vec![LOCAL_PATH, LINE, COLUMN], SortMultipleOptions::new())?;
                 assert_eq!(sorted_expected_df, sorted_output_df);
             }
         } else {
@@ -1728,6 +1741,8 @@ mod tests {
                 ignore_comments,
                 lambdas,
                 write_out,
+                false,
+                &[],
                 test_logger()
             )
             .is_err());
@@ -1777,6 +1792,17 @@ mod tests {
         keywords: &[&str],
         fail_policy: &str,
     ) -> Result<(String, String)> {
+        parse_with_options(input_file_path, keywords, fail_policy, false, &[])
+    }
+
+    /// Same as [`parse_with_policy`], with the options reading the repository columns.
+    fn parse_with_options(
+        input_file_path: &str,
+        keywords: &[&str],
+        fail_policy: &str,
+        infer_source: bool,
+        renames: &[(String, String)],
+    ) -> Result<(String, String)> {
         let output_path = format!("{input_file_path}.{fail_policy}.functions.csv");
         let logs_path = format!("{input_file_path}.{fail_policy}.function_logs.csv");
         let result = run(
@@ -1793,6 +1819,8 @@ mod tests {
             false,
             false,
             false,
+            infer_source,
+            renames,
             test_logger(),
         )
         .and_then(|_| {
@@ -1816,7 +1844,7 @@ mod tests {
         assert_eq!(functions.lines().count(), 1);
         assert_eq!(
             logs.lines().nth(1),
-            Some("0,tests/data/phases/parse/invalid.c,c,-1,-1,-1,1:25")
+            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,,c,-1,-1,-1,1,25")
         );
         Ok(())
     }
@@ -1830,11 +1858,11 @@ mod tests {
         )?;
         assert_eq!(
             functions.lines().nth(1),
-            Some("0,tests/data/phases/parse/invalid.c,main,1:5,c,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1:21")
+            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,main,1,5,,c,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,21")
         );
         assert_eq!(
             logs.lines().nth(1),
-            Some("0,tests/data/phases/parse/invalid.c,c,1,0,0,1:25")
+            Some("0,local,,,,tests/data/phases/parse/invalid.c,invalid.c,,c,1,0,0,1,25")
         );
         Ok(())
     }
@@ -1854,7 +1882,7 @@ mod tests {
         let input_file_path = format!("{TEST_DATA}/unsupported_language.csv");
         write_file(
             &input_file_path,
-            b"id,name\n0,tests/data/phases/parse/invalid.c\n1,tests/data/phases/parse/header.h\n",
+            b"repo_id,source,local_path,file\n0,local,tests/data/phases/parse/invalid.c,invalid.c\n1,local,tests/data/phases/parse/header.h,header.h\n",
         )?;
         let result = parse_with_policy(
             &input_file_path,
@@ -1865,6 +1893,106 @@ mod tests {
         let (_, logs) = result?;
         assert_eq!(logs.lines().count(), 2);
         ensure!(logs.contains("invalid.c"));
+        Ok(())
+    }
+
+    /// Returns the rows of a CSV text, each one mapping the columns to the cells.
+    fn records(csv: &str) -> Result<Vec<HashMap<String, String>>> {
+        let mut reader = ::csv::Reader::from_reader(csv.as_bytes());
+        let header = reader.headers()?.clone();
+        reader
+            .records()
+            .map(|record| {
+                Ok(header
+                    .iter()
+                    .map(str::to_string)
+                    .zip(record?.iter().map(str::to_string))
+                    .collect())
+            })
+            .collect()
+    }
+
+    /// Returns the row whose column has a value.
+    fn find<'a>(
+        rows: &'a [HashMap<String, String>],
+        column: &str,
+        value: &str,
+    ) -> Result<&'a HashMap<String, String>> {
+        rows.iter()
+            .find(|row| row[column] == value)
+            .with_context(|| format!("No row with {column} {value}"))
+    }
+
+    #[test]
+    fn github_files_have_links() -> Result<()> {
+        let input_file_path = format!("{TEST_DATA}/github.csv");
+        write_file(
+            &input_file_path,
+            b"repo_id,source,repo_name,repo_license,latest_commit,local_path,file\n\
+              7,github,owner/repo,mit,abc1234,tests/data/phases/parse/weird.go,src/weird.go\n\
+              8,github,owner/other,,,tests/data/phases/parse/several_functions.go,several_functions.go\n",
+        )?;
+        let result = parse_with_policy(
+            &input_file_path,
+            &["tests/data/keywords/fp_types.json"],
+            "ignore",
+        );
+        delete_file(&input_file_path, false)?;
+        let (functions, logs) = result?;
+        let functions = records(&functions)?;
+        let logs = records(&logs)?;
+
+        // With a commit, the links point to the commit
+        let function = find(&functions, FUNCTION_NAME, "polarToCartesian")?;
+        assert_eq!(
+            function[URL],
+            "https://github.com/owner/repo/blob/abc1234/src/weird.go#L9"
+        );
+        assert_eq!((&*function[LINE], &*function[COLUMN]), ("9", "1"));
+        assert_eq!(function[RepoColumn::RepoLicense.name()], "mit");
+        assert_eq!(
+            find(&logs, FILE, "src/weird.go")?[URL],
+            "https://github.com/owner/repo/blob/abc1234/src/weird.go"
+        );
+
+        // Without a commit, the links point to the default branch
+        assert_eq!(
+            find(&functions, FUNCTION_NAME, "sumFloats")?[URL],
+            "https://github.com/owner/other/blob/HEAD/several_functions.go#L18"
+        );
+        assert_eq!(
+            find(&logs, FILE, "several_functions.go")?[URL],
+            "https://github.com/owner/other/blob/HEAD/several_functions.go"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_is_required_unless_inferred() -> Result<()> {
+        let input_file_path = format!("{TEST_DATA}/no_source.csv");
+        write_file(
+            &input_file_path,
+            b"id,repo_name,path,file\n7,owner/repo,tests/data/phases/parse/weird.go,weird.go\n",
+        )?;
+        let keywords = ["tests/data/keywords/fp_types.json"];
+        let renames = [
+            ("id".to_string(), RepoColumn::RepoId.name().to_string()),
+            ("path".to_string(), LOCAL_PATH.to_string()),
+        ];
+        let without_inference =
+            parse_with_options(&input_file_path, &keywords, "ignore", false, &renames);
+        let with_inference =
+            parse_with_options(&input_file_path, &keywords, "ignore", true, &renames);
+        delete_file(&input_file_path, false)?;
+
+        ensure!(without_inference.is_err());
+        let functions = records(&with_inference?.0)?;
+        let function = find(&functions, FUNCTION_NAME, "polarToCartesian")?;
+        assert_eq!(function[RepoColumn::Source.name()], "github");
+        assert_eq!(
+            function[URL],
+            "https://github.com/owner/repo/blob/HEAD/weird.go#L9"
+        );
         Ok(())
     }
 

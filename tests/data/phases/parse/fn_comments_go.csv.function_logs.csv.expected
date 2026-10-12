@@ -1,2 +1,2 @@
-id,name,language,functions,functions_with_kw,tests/data/keywords/fp_types.json,tests/data/keywords/fp_transcendental.json,tests/data/keywords/fp_others.json,parse_error
-0,tests/data/phases/parse/fn_comments.go,go,2,2,2,0,2,none
+repo_id,source,repo_name,repo_license,latest_commit,local_path,file,url,language,functions,functions_with_kw,tests/data/keywords/fp_types.json,tests/data/keywords/fp_transcendental.json,tests/data/keywords/fp_others.json,parse_error_line,parse_error_column
+0,local,,,,tests/data/phases/parse/fn_comments.go,fn_comments.go,,go,2,2,2,0,2,,
