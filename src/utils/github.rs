@@ -138,16 +138,28 @@ pub fn github_url<'a>(segments: impl IntoIterator<Item = &'a str>) -> String {
     url.into()
 }
 
-/// Returns the commit in the name of the root folder of a GitHub zip archive.
-/// The name is `<owner>-<repository>-<commit>`, with the first 7 characters of the commit.
-/// Returns `None` for other names.
+/// Returns whether a folder looks like the root folder of a GitHub zip archive.
+/// Its name is `<owner>-<repository>-<commit>`, with the first 7 characters of the commit.
 ///
 /// # Arguments
 ///
 /// * `folder` - Name of the folder.
-pub fn zipball_root_commit(folder: &str) -> Option<&str> {
-    let (_, commit) = folder.rsplit_once('-')?;
-    (commit.len() >= 7 && commit.chars().all(|c| c.is_ascii_hexdigit())).then_some(commit)
+pub fn is_zipball_root(folder: &str) -> bool {
+    folder.rsplit_once('-').is_some_and(|(_, commit)| {
+        commit.len() >= 7 && commit.chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+/// Returns the commit of a GitHub zip archive: GitHub writes its full SHA in the comment of the archive.
+/// Returns `None` for other comments.
+///
+/// # Arguments
+///
+/// * `comment` - Comment of the archive.
+pub fn zipball_commit(comment: &[u8]) -> Option<String> {
+    let commit: &str = std::str::from_utf8(comment).ok()?.trim();
+    (!commit.is_empty() && commit.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| commit.to_string())
 }
 
 #[cfg(test)]
@@ -167,13 +179,20 @@ mod tests {
 
     #[test]
     fn zipball_roots() {
+        assert!(is_zipball_root("francesco-scrapper-recent-id-2-38d21aa"));
+        assert!(!is_zipball_root("src"));
+        assert!(!is_zipball_root("my-lib"));
+        assert!(!is_zipball_root("release-1234"));
+    }
+
+    #[test]
+    fn zipball_commits() {
         assert_eq!(
-            zipball_root_commit("francesco-scrapper-recent-id-2-38d21aa"),
-            Some("38d21aa")
+            zipball_commit(b"7fd1a60b01f91b314f59955a4e4d4e80d8edf11d").as_deref(),
+            Some("7fd1a60b01f91b314f59955a4e4d4e80d8edf11d")
         );
-        assert_eq!(zipball_root_commit("src"), None);
-        assert_eq!(zipball_root_commit("my-lib"), None);
-        assert_eq!(zipball_root_commit("release-1234"), None);
+        assert_eq!(zipball_commit(b""), None);
+        assert_eq!(zipball_commit(b"made by hand"), None);
     }
 
     #[test]

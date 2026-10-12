@@ -20,7 +20,7 @@ use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
-use super::github::{github_url, zipball_root_commit};
+use super::github::{github_url, is_zipball_root};
 use super::github_api::{HTTP_ERROR_PREFIX, OTHER_ERROR_PREFIX};
 
 /// Column with the local path of a repository or a file.
@@ -312,10 +312,7 @@ impl RepoFile {
             .components()
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .collect();
-        if repo.source == Source::GitHub
-            && parts.len() > 1
-            && zipball_root_commit(&parts[0]).is_some()
-        {
+        if repo.source == Source::GitHub && parts.len() > 1 && is_zipball_root(&parts[0]) {
             parts.remove(0);
         }
         ensure!(!parts.is_empty(), not_in_repo());

@@ -42,7 +42,7 @@ use zip::ZipArchive;
 use crate::utils::csv::*;
 use crate::utils::dataframes::has_column;
 use crate::utils::fs::*;
-use crate::utils::github::zipball_root_commit;
+use crate::utils::github::zipball_commit;
 use crate::utils::regex::*;
 use crate::utils::repo::{Repo, RepoColumn, RepoFile, Source, Unit, LOCAL_PATH};
 
@@ -626,7 +626,7 @@ pub fn run(
 /// Downloads a GitHub repository and filters the files according to the provided extensions and keywords.
 /// Specifically, the following steps are executed:
 /// * Download the repository as a zip archive, at its commit if it is known and from its default branch otherwise. (Only if `download` is set).
-/// * Unzip the archive, and find the commit in the name of its root folder if it was not known. (Only if `download` is set).
+/// * Unzip the archive, and read its commit in the comment of the archive if it was not known. (Only if `download` is set).
 /// * Remove the zip archive. (Only if `download` is set).
 /// * Remove all files that do not end with one of the provided extensions. (If delete is false, this step is skipped).
 /// * Remove all symbolic links. (If delete is false, this step is skipped).
@@ -732,15 +732,21 @@ fn download_repo(
         let extracted = ZipArchive::new(
             File::open(&zip_path).with_context(|| format!("Failed to open archive {zip_path}"))?,
         )
-        .and_then(|mut archive| archive.extract(Path::new(project_path)));
+        .and_then(|mut archive| {
+            let commit: Option<String> = zipball_commit(archive.comment());
+            archive.extract(Path::new(project_path)).map(|()| commit)
+        });
         delete_file(&zip_path, true)?;
-        if let Err(e) = extracted {
-            warn!("Could not extract repository {id}: {e}");
-            delete_dir(project_path, true)?;
-            return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
-        }
+        let commit: Option<String> = match extracted {
+            Ok(commit) => commit,
+            Err(e) => {
+                warn!("Could not extract repository {id}: {e}");
+                delete_dir(project_path, true)?;
+                return Ok((error_row(&repo, keywords_files.len()), Vec::new()));
+            }
+        };
         if repo.commit.is_none() {
-            repo.commit = zipball_commit(project_path);
+            repo.commit = commit;
         }
     }
 
@@ -865,20 +871,6 @@ fn download_repo(
     project_row.extend(dir_matches.iter().map(|m| m.to_string()));
 
     Ok((project_row, file_rows))
-}
-
-/// Returns the commit of a repository extracted from a GitHub zip archive, read in the name of the root folder of the archive.
-///
-/// # Arguments
-///
-/// * `project_path` - The directory where the archive was extracted.
-fn zipball_commit(project_path: &str) -> Option<String> {
-    let mut entries = std::fs::read_dir(project_path).ok()?;
-    let root = entries.next()?.ok()?;
-    if entries.next().is_some() {
-        return None;
-    }
-    zipball_root_commit(root.file_name().to_str()?).map(str::to_string)
 }
 
 /// Downloads the zip archive of a repository to a file.
@@ -1147,17 +1139,6 @@ mod tests {
         ensure!(files.is_empty());
         ensure!(!Path::new(project_path).exists());
         Ok(())
-    }
-
-    #[test]
-    fn commit_from_zipball_root_folder() -> Result<()> {
-        let dir = "target/tests/zipball_commit";
-        delete_dir(dir, true)?;
-        create_dir(format!("{dir}/owner-repo-38d21aa/src"))?;
-        assert_eq!(zipball_commit(dir).as_deref(), Some("38d21aa"));
-        create_dir(format!("{dir}/other"))?;
-        assert_eq!(zipball_commit(dir), None);
-        delete_dir(dir, false)
     }
 
     /// Runs download on a copy of the local test repository, and returns the files left in the copy.
